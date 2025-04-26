@@ -1,0 +1,3 @@
+#ignore my local api_key file
+.env
+api_keys.py
