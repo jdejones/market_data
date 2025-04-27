@@ -18,7 +18,7 @@ import market_data.watchlists_locations as wl
 import inspect
 import importlib
 import sys
-from api_keys import seeking_alpha_api_key
+from market_data.api_keys import seeking_alpha_api_key
 
 @dataclass
 class Technical_Score_Calculator:

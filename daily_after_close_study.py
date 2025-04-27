@@ -14,7 +14,7 @@ if __name__ == "__main__":
     
     #hadv == high average dollar volume
     hadv = make_watchlist(hadv)
-    symbols = {k: SymbolData(k, v) for k,v in api_import(hadv[:500]).items()}
+    symbols = {k: SymbolData(k, v) for k,v in api_import(hadv[:50]).items()}
     for symbol in tqdm(symbols, desc='Adding technicals'):        
         run_pipeline(symbols[symbol].df)
     wf.run_all(symbols)

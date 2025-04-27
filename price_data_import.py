@@ -10,8 +10,8 @@ from polygon.stocks import StocksClient
 @retry_on_read_timeout(max_retries=3)
 def api_import(
     wl: list[str], 
-    from_date: int|datetime = 0, 
-    to_date: datetime = datetime.today(), 
+    from_date: int|datetime.datetime = 0, 
+    to_date: datetime = datetime.datetime.today(), 
     transfer: dict[str, pd.DataFrame] = None
     ) -> dict[str, pd.DataFrame]:
     client = StocksClient(api_key=polygon_api_key)
