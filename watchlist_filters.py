@@ -958,7 +958,7 @@ def price_above_high(symbols=None, save=True):
             for sym in price_above_high_results:
                 f.write(sym + '\n')
 
-#! Refactor incomplete. Needs regime identification functions.
+
 def regime_watchlists(symbols):
     bull_bo_252 = []
     bear_bo_252 = []
@@ -999,7 +999,7 @@ def regime_watchlists(symbols):
     bull_act_vol_rg = []
     bear_act_vol_rg = []
     neutral_act_vol_rg = []
-    active_volatile_quadrant1 = []
+    active_volatile_quadrant1 = open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\active_volatile_quadrant1.txt", "r").read().splitlines()
     for sym in symbols:
         try:
             if symbols[sym].df.bo_252.iloc[-1] > 0:
@@ -1517,7 +1517,7 @@ def run_all(symbols):
     mod.tenets(symbols)
     mod.atrs_from(symbols)
     #Technical score
-    tsc = mod.Technical_Score_Calulator()
+    tsc = mod.Technical_Score_Calculator()
     tsc.technical_score_calculator(symbols)
     tsc.ts_elevated()
     tsc.ts_depressed()

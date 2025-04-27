@@ -10,6 +10,7 @@ if __name__ == "__main__":
     import market_data.watchlist_filters as wf
     import market_data.watchlists_locations as wl
     import market_data.seeking_alpha as sa
+    import market_data.regimes as rg
     
     #hadv == high average dollar volume
     hadv = make_watchlist(hadv)
