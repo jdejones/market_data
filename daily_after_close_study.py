@@ -2,7 +2,15 @@ if __name__ == "__main__":
     import warnings
     # Suppress all warnings
     warnings.filterwarnings('ignore')
-    from market_data.Symbol_Data import SymbolData
+    #I added the try/except block as a quick fix to avoid conflicts with the
+    #interactive interpreter and the github repo. There should be a
+    #cleaner way to do this.
+    try:
+        from market_data.Symbol_Data import SymbolData
+    except ModuleNotFoundError:
+        import sys
+        sys.path.insert(0, r"C:\Users\jdejo\Market_Data_Processing")
+        from market_data.Symbol_Data import SymbolData
     from market_data.price_data_import import *
     from market_data.add_technicals import *
     from market_data.watchlists_locations import make_watchlist, hadv
