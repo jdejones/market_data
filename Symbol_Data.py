@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-import pandas as pd
+# import pandas as pd
+from market_data import pd
 
 @dataclass(slots=True)
 class SymbolData:

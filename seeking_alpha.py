@@ -3,10 +3,8 @@ import json
 import os
 import logging
 from datetime import datetime, timedelta
-import pandas as pd
-from tqdm import tqdm
 from market_data.api_keys import seeking_alpha_api_key
-import market_data.fundamentals as fu
+from market_data import fu, pd
 import sys
 
 

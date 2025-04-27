@@ -2,8 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools  import partial
 from typing     import Callable, Dict, Any, List
-import pandas as pd
-from datetime import datetime
+from market_data import pd, datetime
 
 
 

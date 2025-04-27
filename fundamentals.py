@@ -2,19 +2,10 @@
 The next functions that I should work on are those that access the SEC API.
 """
 
-
-
-import pandas as pd
-import os
+from market_data import pd, json, os, datetime, np, yf, plt
 # from audioop import reverse
-import yfinance as yf
-import pandas as pd
 pd.options.display.max_columns = 150
-import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-import json
-import datetime
 from typing import Dict, List, Tuple, Any
     
 

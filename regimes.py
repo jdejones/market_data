@@ -1,4 +1,4 @@
-import numpy as np
+from market_data import np, pd, plt
 from scipy.signal import find_peaks
 
 

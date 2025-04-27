@@ -1,5 +1,5 @@
+from market_data import requests
 from functools import wraps
-import requests
 
 def retry_on_read_timeout(max_retries=3):
     """

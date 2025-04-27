@@ -1,10 +1,8 @@
 from market_data.decorators import retry_on_read_timeout
 from functools import wraps
 from market_data.api_keys import polygon_api_key
-from datetime import datetime
-import pandas as pd
+from market_data import pd, datetime, tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
 from sqlalchemy import create_engine
 from polygon.stocks import StocksClient
 
