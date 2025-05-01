@@ -1514,7 +1514,7 @@ def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, ale
     fanned_up_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\fanned_up_all.txt").readlines()]
     fanned_up_stored_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\mid_long_term_fanned_up.txt").readlines()]
     syms = episodic_pivots_results + fanned_up_results + fanned_up_stored_results
-    with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\"+ma+"dma_pullback.txt") as f:
+    with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\\"+ma+"dma_pullback.txt") as f:
         for line in f:
             ma_pullback_alerts.append(line.replace('\n', ''))
     if len(ma_pullback_alerts) > 0:
