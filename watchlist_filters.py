@@ -663,7 +663,7 @@ def finviz_high_short_interest():
         for item in finviz_high_short_interest_results:
             f.write(item + '\n')
 
-#! Refactor incomplete. Needs sector/inustry functions.
+#! Refactor incomplete. Needs sector/inustry functions. This may be easier to refactor when I'm writing objects to execute trade protocols.
 def general_long_save(no_of_results=20):
     general_long_results = []
     def general_long(self, list_length, include_ind_tss=True):
