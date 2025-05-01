@@ -239,7 +239,7 @@ class Technical_Score_Calculator:
 
 #Run the trend_fanned script
 #@staticmethod
-def fanned_up(symbols, save=False):
+def fanned_up(symbols, save=True):
     #from Fundamental_Analysis import Fundamentals_Analyzer
     def symbol_removal():
         try:
@@ -271,7 +271,7 @@ def fanned_up(symbols, save=False):
     # foo = Fundamentals_Analyzer()
     # foo.load_data()
     # foo.get_sym_sector_industry_saved()
-    fu.get_sym_sector_industry_saved()
+    # fu.get_sym_sector_industry_saved()
     for sym in fanned:
         try:
             if fu.sectors_industries[sym]['sector'] == 'Basic Materials':
@@ -314,6 +314,9 @@ def fanned_up(symbols, save=False):
             continue
     fanned_up_results = fanned
     if save == True:
+        with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\Fanned_up_all.txt", "w") as f:
+            for item in fanned:
+                f.writelines(item + "\n")
         with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\Fanned_Basic_Materials.txt", "w") as f:
             for item in BM:
                 f.writelines(item + "\n")
@@ -347,6 +350,26 @@ def fanned_up(symbols, save=False):
         with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\Fanned_Utilities.txt", "w") as f:
             for item in U:
                 f.writelines(item + "\n")
+
+def mid_to_long_term_fanned_up(symbols):
+    def symbol_removal():
+        try:
+            for sym in symbols:
+                if len(symbols[sym].df) < 4:
+                    del symbols[sym].df
+                else:
+                    continue
+        except:
+            symbol_removal()
+    symbol_removal()
+    fanned=[]
+    for a,b in symbols.items():
+        b = b.df
+        if (b.iloc[-1]['20DMA'] > b.iloc[-1]['50DMA'] > b.iloc[-1]['200DMA']):
+            fanned.append(a)
+    with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\mid_long_term_fanned_up.txt", "w") as f:
+        for sym in fanned:
+            f.write(sym + '\n')
 
 #Run the long list systematic script
 #@staticmethod
@@ -1477,6 +1500,40 @@ def ma_overlap_short(symbols):
         for sym in overlap50_short:
             f.write(sym + '\n')
 
+def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, alert_keep_threshold: float=1):
+    ma_pullback_alerts_10 = []
+    ma_pullback_alerts_20 = []
+    ma_pullback_alerts_50 = []
+    if ma == '10':
+        ma_pullback_alerts = ma_pullback_alerts_10
+    elif ma =='20':
+        ma_pullback_alerts = ma_pullback_alerts_20
+    elif ma == '50':
+        ma_pullback_alerts = ma_pullback_alerts_50
+    episodic_pivots_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\episodic_pivots.txt").readlines()]
+    fanned_up_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\fanned_up_all.txt").readlines()]
+    fanned_up_stored_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\mid_long_term_fanned_up.txt").readlines()]
+    syms = episodic_pivots_results + fanned_up_results + fanned_up_stored_results
+    with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\"+ma+"dma_pullback.txt") as f:
+        for line in f:
+            ma_pullback_alerts.append(line.replace('\n', ''))
+    if len(ma_pullback_alerts) > 0:
+        for sym in ma_pullback_alerts:
+            try:
+                if -1 > symbols[sym].df['ATRs_from_'+ma+'DMA'].iloc[-1] > alert_keep_threshold:
+                    ma_pullback_alerts.remove(sym)
+            except:
+                print(ma_pullback.__name__, sym, sep=': ')
+                continue
+    for sym in syms:
+        if (sym in symbols) and (-0.5 < symbols[sym].df['ATRs_from_'+ma+'DMA'].iloc[-1] < alert_pass_threshold):
+            ma_pullback_alerts.append(sym)
+    ma_pullback_alerts = list(set(ma_pullback_alerts))
+    with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\\"+ma+"dma_pullback.txt", "w") as f:
+        for sym in ma_pullback_alerts:
+            f.write(sym + '\n')
+
+
 def run_all(symbols):
     """
     Manually invoke each filter function in this module in sequence.
@@ -1485,6 +1542,7 @@ def run_all(symbols):
     mod = sys.modules['market_data.watchlist_filters']
     # Trend-based watchlists
     mod.fanned_up(symbols, save=True)
+    mid_to_long_term_fanned_up(symbols)
     mod.technical_long_list_systematic(symbols, save=True)
     mod.technical_short_list_systematic(symbols, save=True)
     mod.regime_watchlists(symbols)
@@ -1495,6 +1553,9 @@ def run_all(symbols):
     mod.active_volatile(symbols)
     mod.ma_overlap_long(symbols)
     mod.ma_overlap_short(symbols)
+    mod.ma_pullback(symbols, ma='10')
+    mod.ma_pullback(symbols, ma='20')
+    mod.ma_pullback(symbols, ma='50')
     # Relative strength and earnings
     mod.relative_strength(symbols)
     mod.relative_weakness(symbols)
