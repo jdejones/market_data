@@ -1,4 +1,4 @@
-from market_data import np, pd, plt
+from market_data import np, pd, plt, datetime
 from scipy.signal import find_peaks
 
 
@@ -29,6 +29,11 @@ class Regimes:
         self._swg = None
         self.hh_ll = None
         self.hh_ll_dt = None
+    
+    def run_all_combos(self):
+        self.regime_breakout_combo()
+        self.regime_ma_combo()
+        self.floor_ceiling_combo()
     
     def graph_regime_combo(ticker,df,_c,rg,lo,hi,slo,shi,clg,flr,rg_ch,
                         ma_st,ma_mt,ma_lt,lt_lo,lt_hi,st_lo,st_hi):
@@ -615,7 +620,7 @@ class Regimes:
             if (type(s_lo_ix) != str) and (type(s_hi_ix) != str):
                 s_lo_ix = s_lo_ix.strftime('%Y-%m-%d')
                 s_hi_ix = s_hi_ix.strftime('%Y-%m-%d')
-            swing_max_ix = max([datetime.strptime(s_lo_ix, '%Y-%m-%d'), datetime.strptime(s_hi_ix, '%Y-%m-%d')]).strftime('%Y-%m-%d')#The line above was returning an error because of the types of arguments. This line may have solved the problem.
+            swing_max_ix = max([datetime.datetime.strptime(s_lo_ix, '%Y-%m-%d'), datetime.datetime.strptime(s_hi_ix, '%Y-%m-%d')]).strftime('%Y-%m-%d')#The line above was returning an error because of the types of arguments. This line may have solved the problem.
 
             ### CLASSIC CEILING DISCOVERY
             if (ceiling_found == False):   

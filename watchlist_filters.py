@@ -1533,7 +1533,6 @@ def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, ale
         for sym in ma_pullback_alerts:
             f.write(sym + '\n')
 
-
 def run_all(symbols):
     """
     Manually invoke each filter function in this module in sequence.

@@ -230,7 +230,7 @@ def atrs_traded(df):
     df['H-L'] = df['High'] - df['Low']
     df['H-Cp'] = abs(df['High'] - df['Close'].shift(1))
     df['L-Cp'] = abs(df['Low'] - df['Close'].shift(1)) 
-    df['ATR_traded'] = df[['H-L', 'H-Cp', 'L-Cp']].max(axis=1) / df['ATR_14']
+    df['ATRs_Traded'] = df[['H-L', 'H-Cp', 'L-Cp']].max(axis=1) / df['ATR_14']
 
 def bollinger_bands(df, base: pd.Series, window: int=20, std: int=2, rbd: bool=True):
     ma_series = df[base].rolling(window=window).mean()
@@ -303,7 +303,7 @@ pipeline = [
     Step(percent_change, kwargs={'base': 'Close'}, needs=['Close'], adds=['Percent_Change']),
     Step(atrs_traded_ex_gap, needs=['Close', 'Open', 'ATR_14'], adds=['ATRs Traded_ex_gap']),
     Step(relative_atr, needs=['ATR_14'], adds=['Relative_ATR']),
-    Step(atrs_traded, needs=['High', 'Low', 'Close'], adds=['H-L', 'H-Cp', 'L-Cp', 'ATR_traded']),
+    Step(atrs_traded, needs=['High', 'Low', 'Close'], adds=['H-L', 'H-Cp', 'L-Cp', 'ATRs_Traded']),
     Step(bollinger_bands, kwargs={'base': 'Close', 'window': 20, 'std': 2, 'rbd': True}, needs=['Close', 'ATR_14'], adds=['u_band', 'l_band', 'relative_band_dist'])
 ]
 

@@ -18,7 +18,7 @@ def api_import(
     if transfer == None:
         data_dict = {}
     else:
-        data_dict = transfer
+        data_dict = {k:v for k,v in transfer.items() if k in wl}
         wl = [sym for sym in wl if sym not in transfer]
     for sym in tqdm(wl, desc='Importing Price Data'):
         try:

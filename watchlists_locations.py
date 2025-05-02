@@ -3,16 +3,14 @@ def make_watchlist(file_path: str) -> list[str]:
     with open(file_path, 'r') as f:
         return [line.strip() for line in f.readlines()]
 
+
+
+
 hadv = "E:\Market Research\Studies\Sector Studies\Watchlists\High_AvgDV.txt"
 
 
 
-
-
-
-
-
-#I'm not sure if I need these.
+#Systematic/Technicals watchlists locations
 systematic_watchlists_root = r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists"
 accumulation = systematic_watchlists_root + r"\accumulation.txt"
 
@@ -157,3 +155,14 @@ uptrend = systematic_watchlists_root + r"\uptrend.txt"
 uptrend_accumulation = systematic_watchlists_root + r"\uptrend_accumulation.txt"
 
 uptrend_retracement = systematic_watchlists_root + r"\uptrend_retracement.txt"
+
+
+#ETF watchlists locations
+iwm = r"E:\Market Research\Studies\Sector Studies\Watchlists\IWM_Symbols.txt"
+
+mdy = r"E:\Market Research\Studies\Sector Studies\Watchlists\MDY_Symbols.txt"
+
+sp500 = r"E:\Market Research\Studies\Sector Studies\Watchlists\SPY_Symbols.txt"
+
+etfs = r"E:\Market Research\Studies\Sector Studies\Watchlists\ETFs.txt"
+

@@ -1,7 +1,7 @@
 import yfinance as yf
 from market_data.price_data_import import api_import
 from market_data.add_technicals import RSI
-from market_data import pd, sa
+from market_data import pd, sa, fu, np, datetime
 
 
 
@@ -121,3 +121,100 @@ def create_index(symbols, level='sector'):
         final_dict[k] = indexer(v)
     return final_dict
 
+
+def condition_statistics(sym, lookback=2000):
+    #Set conditions
+    conditions = {
+    'dma_5over10': (symbols[sym].df['5DMA'][-lookback:] > symbols[sym].df['10DMA'][-lookback:]) & (symbols[sym].df['5DMA'][-lookback:].shift(1) < symbols[sym].df['10DMA'][-lookback:].shift(1)),
+    'dma_5over20': (symbols[sym].df['5DMA'][-lookback:] > symbols[sym].df['20DMA'][-lookback:]) & (symbols[sym].df['5DMA'][-lookback:].shift(1) < symbols[sym].df['20DMA'][-lookback:].shift(1)),
+    'dma_10over20': (symbols[sym].df['10DMA'][-lookback:] > symbols[sym].df['20DMA'][-lookback:]) & (symbols[sym].df['10DMA'][-lookback:].shift(1) < symbols[sym].df['20DMA'][-lookback:].shift(1)),
+    'dma_20over50': (symbols[sym].df['20DMA'][-lookback:] > symbols[sym].df['50DMA'][-lookback:]) & (symbols[sym].df['20DMA'][-lookback:].shift(1) < symbols[sym].df['50DMA'][-lookback:].shift(1)),
+    'dma_50over200': (symbols[sym].df['50DMA'][-lookback:] > symbols[sym].df['200DMA'][-lookback:]) & (symbols[sym].df['50DMA'][-lookback:].shift(1) < symbols[sym].df['200DMA'][-lookback:].shift(1)),
+    'atr_over_signal': (symbols[sym].df['ATR_14'][-lookback:] > symbols[sym].df['ATR_14_signal'][-lookback:]) & (symbols[sym].df['ATR_14'][-lookback:].shift(1) < symbols[sym].df['ATR_14_signal'][-lookback:].shift(1)),
+    'di_over_di': (symbols[sym].df['+DI'][-lookback:] > symbols[sym].df['-DI'][-lookback:]) & (symbols[sym].df['+DI'][-lookback:].shift(1) < symbols[sym].df['-DI'][-lookback:].shift(1)),
+    'rsi_over_signal': (symbols[sym].df['RSI_14'][-lookback:] > symbols[sym].df['RSI_14_signal'][-lookback:]) & (symbols[sym].df['RSI_14'][-lookback:].shift(1) < symbols[sym].df['RSI_14_signal'][-lookback:].shift(1)),
+    'stoch_over_signal': (symbols[sym].df['%k'][-lookback:] > symbols[sym].df['%d'][-lookback:]) & (symbols[sym].df['%k'][-lookback:].shift(1) < symbols[sym].df['%d'][-lookback:].shift(1)),
+    'adx_over_signal': (symbols[sym].df['ADX'][-lookback:] > symbols[sym].df['ADX_signal'][-lookback:]) & (symbols[sym].df['ADX'][-lookback:].shift(1) < symbols[sym].df['ADX_signal'][-lookback:].shift(1)),
+    'close_overuband': (symbols[sym].df['Close'][-lookback:] > symbols[sym].df['u_band'][-lookback:]) & (symbols[sym].df['Close'][-lookback:].shift(1) < symbols[sym].df['u_band'][-lookback:].shift(1)),
+    'close_underlband': (symbols[sym].df['Close'][-lookback:] > symbols[sym].df['l_band'][-lookback:]) & (symbols[sym].df['Close'][-lookback:].shift(1) < symbols[sym].df['l_band'][-lookback:].shift(1))
+    }#TODO Need to add MACD indicators
+    for name, condition in conditions.items():
+        symbols[sym].df[name] = np.nan
+        symbols[sym].df[name][-lookback:].loc[condition] = 1
+
+    #n signals
+    num_signals = {signal: len(symbols[sym].df.loc[pd.notnull(symbols[sym].df[signal])]) for signal in conditions}
+
+
+    #Returns over time
+    returns = {}
+    for condition in conditions:
+        returns[condition] = {}
+        indicies = symbols[sym].df[condition].loc[pd.notnull(symbols[sym].df[condition])].index[-lookback:]#Type Index
+        for idx in indicies:
+            index = indicies.get_loc(idx)
+            df = symbols[sym].df[-lookback:]
+            close = df.Close.loc[idx]
+            if (index + 5 < len(indicies)) and (df.index.get_loc(idx) + 20):# or (len(indicies) <= 5):
+                close_plus5 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 5]].max()
+                if close_plus5 == close:
+                    close_plus5 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 5]].min()
+            else:
+                close_plus5 = df.Close.loc[idx:].max()
+                if close_plus5 == close:
+                    close_plus5 = df.Close.loc[idx:].min()
+            if (index + 10 < len(indicies)) and (df.index.get_loc(idx) + 20):# or (len(indicies) <= 10):
+                close_plus10 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 10]].max()
+                if close_plus10 == close:
+                    close_plus10 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 10]].min()
+            else:
+                close_plus10 = df.Close.loc[idx:].max()
+                if close_plus10 == close:
+                    close_plus10 = df.Close.loc[idx:].min()
+            if (index + 20 < len(indicies)) and (df.index.get_loc(idx) + 20):# or (len(indicies) <= 20):#Check if there enough indicies remaining and check if the number of indicies to call is <= the total number if indicies.
+                close_plus20 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 20]].max()
+                if close_plus20 == close:
+                    close_plus20 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 20]].min()
+            else:
+                close_plus20 = df.Close.loc[idx:].max()
+                if close_plus20 == close:
+                    close_plus20 = df.Close.loc[idx:].min()
+            if '5days' in list(returns[condition].keys()):
+                returns[condition]['5days'].append(((close_plus5 - close) / close) * 100)
+            else:
+                returns[condition]['5days'] = [(((close_plus5 - close) / close) * 100)]
+            if '10days' in list(returns[condition].keys()):
+                returns[condition]['10days'].append(((close_plus10 - close) / close) * 100)
+            else:
+                returns[condition]['10days'] = [(((close_plus10 - close) / close) * 100)]
+            if '20days' in list(returns[condition].keys()):
+                returns[condition]['20days'].append(((close_plus20 - close) / close) * 100)
+            else:
+                returns[condition]['20days'] = [(((close_plus20 - close) / close) * 100)]
+
+
+
+    #Descriptive Statistics
+    mean_returns = {}
+    for condition in conditions:
+        mean_returns[condition] = {}
+        for days in returns[condition]:
+            mean_returns[condition][days] = sum([val for val in returns[condition][days]]) / len([val for val in returns[condition][days]])
+    return {'num_signals': num_signals, 'returns': returns, 'mean_returns': mean_returns}
+
+def perf_since_earnings(symbols, earnings_season_start=None, sort=True):
+    if earnings_season_start == None:
+        raise ValueError('Earnings season start date must be specified')
+    perf_since_earnings_dict = {}
+    for sym in symbols:
+        try:
+            earnings_date = datetime.datetime.strptime(sa.earnings_dict[sym]['revenue_actual']['0'][0]['effectivedate'].split('T')[0], '%Y-%m-%d')
+            if earnings_date > datetime.datetime.strptime(earnings_season_start, '%Y-%m-%d'):
+                perf_since_earnings_dict[sym] = ((symbols[sym].df.iloc[-1]['Close'] - symbols[sym].df.loc[earnings_date.strftime('%Y-%m-%d')]['Close']) / symbols[sym].df.loc[earnings_date.strftime('%Y-%m-%d')]['Close']) * 100
+        except Exception as e:
+            #TODO print(sym, e, sep=': ') update error handling
+            continue
+    if sort == True:
+        return sorted(perf_since_earnings_dict.items(), key=lambda x: x[1])
+    else:
+        return perf_since_earnings_dict
