@@ -1,7 +1,9 @@
 import yfinance as yf
 from market_data.price_data_import import api_import
 from market_data.add_technicals import RSI
-from market_data import pd, sa, fu, np, datetime
+from market_data.watchlist_filters import Technical_Score_Calculator
+import market_data.fundamentals as fu
+from market_data import pd, sa, fu, np, datetime, re
 
 
 
@@ -94,10 +96,10 @@ def create_index(symbols, level='sector'):
         return final_ohlc_df
     # if self.watchlista == None:
     #     raise TypeError('sector_industry_studies.watchlista is NoneType')
-    # if self.fundamentals_analyzer == None:
+    # if fu == None:
     #     self.fundamentals()
-    # self.fundamentals_analyzer.get_sym_sector_industry(lst)
-    # sec_ind_dict_ori = self.fundamentals_analyzer.sector_industry_dict_saved
+    # fu.get_sym_sector_industry(lst)
+    # sec_ind_dict_ori = fu.sector_industry_dict_saved
     sec_ind_dict_ori = fu.get_sym_sector_industry(list(symbols.keys()))
     sec_ind_dict_new = {}
     for k, v in sec_ind_dict_ori.items():
@@ -122,7 +124,7 @@ def create_index(symbols, level='sector'):
     return final_dict
 
 
-def condition_statistics(sym, lookback=2000):
+def condition_statistics(sym:str, symbols:dict, lookback:int=2000):
     #Set conditions
     conditions = {
     'dma_5over10': (symbols[sym].df['5DMA'][-lookback:] > symbols[sym].df['10DMA'][-lookback:]) & (symbols[sym].df['5DMA'][-lookback:].shift(1) < symbols[sym].df['10DMA'][-lookback:].shift(1)),
@@ -218,3 +220,118 @@ def perf_since_earnings(symbols, earnings_season_start=None, sort=True):
         return sorted(perf_since_earnings_dict.items(), key=lambda x: x[1])
     else:
         return perf_since_earnings_dict
+
+def sec_ind_activity_by_tss_plots(tsc: Technical_Score_Calculator):
+    for col in tsc.df_byrvol_positive.columns:
+        try:
+            fu.watchlist_composition([item[0] for item in tsc.df_byrvol_positive[col].dropna()], level='sector', name=f'Positive TSS-{col}')
+        except ValueError as ve:
+            if len(tsc.df_byrvol_positive[col].dropna()) == 0:
+                print(f'df_byrvol_positive[{col}] is empty')
+            else:
+                raise ValueError(ve)
+    for col in tsc.df_byrvol_positive.columns:
+        try:
+            fu.watchlist_composition([item[0] for item in tsc.df_byrvol_positive[col].dropna()], level='industry', name=f'Positive TSS-{col}')
+        except ValueError as ve:
+            if len(tsc.df_byrvol_positive[col].dropna()) == 0:
+                print(f'df_byrvol_positive[{col}] is empty')
+            else:
+                raise ValueError(ve)
+    for col in tsc.df_byrvol_negative.columns:
+        try:
+            fu.watchlist_composition([item[0] for item in tsc.df_byrvol_negative[col].dropna()], level='sector', name=f'Negative TSS-{col}')
+        except ValueError as ve:
+            if len(tsc.df_byrvol_negative[col].dropna()) == 0:
+                print(f'df_byrvol_positive[{col}] is empty')
+            else:
+                raise ValueError(ve)
+    for col in tsc.df_byrvol_positive.columns:
+        try:
+            fu.watchlist_composition([item[0] for item in tsc.df_byrvol_positive[col].dropna()], level='industry', name=f'Negative TSS-{col}')
+        except ValueError as ve:
+            if len(tsc.df_byrvol_negative[col].dropna()) == 0:
+                print(f'df_byrvol_positive[{col}] is empty')
+            else:
+                raise ValueError(ve)
+            
+def relationship_to_indicator(symbols: dict, secondary_indicator: str, primary_indicator='Close') -> float:
+    total_symbols = len(symbols)
+    syms_above_indicator = 0
+    for sym,v in symbols.items():
+        try:
+            if symbols[sym].df[primary_indicator].iloc[-1] > symbols[sym].df[secondary_indicator].iloc[-1]:
+                syms_above_indicator += 1
+        except KeyError as ke:
+            #TODO print(sym, ke) update error handling
+            continue
+    return (syms_above_indicator / total_symbols) * 100
+
+def primary_statistics(**watchlist: dict):
+    # !Symbols from IWM are not returning AVWAP data. Some of the symbols look like datetime
+    # !objects. It's only IWM. I'm concerned that if I change something in watchlista 
+    # !only for this situation it could break my code.
+    # TODO Some columns may require creating additional functions. They may be identified in the
+    # TODO next line.
+    # TODO Columns to add: % Elevated RVol
+    vwaps = []
+    for v in watchlist.values():
+        for sym,df in v.items():
+            columns = v[sym].df.columns
+            break
+    for item in columns:
+        if len(re.findall('VWAP ', item)):
+            if len(item) > 4:
+                vwaps.append(item)
+    for v in watchlist.values():
+        columns=['% Above 5DMA', '% Above 10DMA', '% Above 20DMA', '% Above 50DMA', '% Above 200DMA',
+                    '% Above '+vwaps[0], '% Above '+vwaps[1], '% Above '+vwaps[2], '% Above '+vwaps[3]]
+    df = pd.DataFrame(columns=columns)
+    for k,v in watchlist.items():
+        df2 = (pd.DataFrame({'% Above 5DMA': relationship_to_indicator(v, secondary_indicator='5DMA'),
+                            '% Above 10DMA': relationship_to_indicator(v, secondary_indicator='10DMA'),
+                            '% Above 20DMA': relationship_to_indicator(v, secondary_indicator='20DMA'),
+                            '% Above 50DMA': relationship_to_indicator(v, secondary_indicator='50DMA'),
+                            '% Above 200DMA': relationship_to_indicator(v, secondary_indicator='200DMA'),
+                            '% Above '+vwaps[0]: relationship_to_indicator(v, secondary_indicator=vwaps[0]),
+                            '% Above '+vwaps[1]: relationship_to_indicator(v, secondary_indicator=vwaps[1]),
+                            '% Above '+vwaps[2]: relationship_to_indicator(v, secondary_indicator=vwaps[2]),
+                            '% Above '+vwaps[3]: relationship_to_indicator(v, secondary_indicator=vwaps[3])},
+                        index=[k]))
+        df = pd.concat([df, df2], names=columns)
+    return df
+
+def secondary_statistics(**watchlist):
+    # TODO Explode watchlist to a dictionary. The keys will be the name of the watchlist whose data is on
+    # TODO the row with the index named after it.
+    columns=['% Expanding ATR', '+DI>-DI', '+MACD 5-10', '+MACD 10-20', '+MACD 20-50', '+MACD 50-200']
+    df = pd.DataFrame(columns=columns)
+    for k,v in watchlist.items():
+        df2 = (pd.DataFrame({'% Expanding ATR': relationship_to_indicator(v, primary_indicator='TR', secondary_indicator='ATR_14'),
+                            '+DI>-DI': relationship_to_indicator(v, primary_indicator='+DI', secondary_indicator='-DI'),
+                            '+MACD 5-10': relationship_to_indicator(v, primary_indicator='5DMA', secondary_indicator='10DMA'),
+                            '+MACD 10-20': relationship_to_indicator(v, primary_indicator='10DMA', secondary_indicator='20DMA'),
+                            '+MACD 20-50': relationship_to_indicator(v, primary_indicator='20DMA', secondary_indicator='50DMA'),
+                            '+MACD 50-200': relationship_to_indicator(v, primary_indicator='50DMA', secondary_indicator='200DMA')},
+                        index=[k]))
+        df = pd.concat([df, df2], names=columns)
+    return df
+
+def close_over_vwap_ratio(symbols: dict) -> int:
+    count = [0,0]
+    for sym in symbols:
+        try:
+            close_over_vwap = bool(symbols[sym].df.iloc[-1].Close > symbols[sym].df.iloc[-1].VWAP)
+            if close_over_vwap == True:
+                count[0] += 1
+                count[1] += 1
+            else:
+                count[1] += 1
+        except KeyError as ke:
+            if ke == sym:
+                continue
+    if count[1] == 0:
+        return 0.0
+    else:
+        ratio = (count[0]/count[1]) * 100
+        return ratio

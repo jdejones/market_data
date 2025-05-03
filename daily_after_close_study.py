@@ -21,7 +21,8 @@ if __name__ == "__main__":
     import market_data.regimes as rg
     import market_data.support_functions as sf
     import market_data.fundamentals as fu
-    import market_data.episodic_pivots as ep
+    from market_data.episodic_pivots import Episodic_Pivots
+    from market_data import operator, np
     
     #hadv == high average dollar volume
     hadv = make_watchlist(hadv)
@@ -68,7 +69,7 @@ if __name__ == "__main__":
     r_etfs.run_all_combos()
     
     #Stock Stats
-    stock_stats = {sym: sf.condition_statistics(sym) for sym in tqdm(symbols, desc='Calculating Stock Stats')}
+    stock_stats = {sym: sf.condition_statistics(sym, symbols) for sym in tqdm(symbols, desc='Calculating Stock Stats')}
     
     sector_close_vwap_count = {sector: [0, 0] for sector in sec}
     industry_close_vwap_count = {industry: [0, 0] for industry in ind}
@@ -103,6 +104,7 @@ if __name__ == "__main__":
 
     #Episodic Pivots
     #!There are errors in the durations functions.
+    ep = Episodic_Pivots(symbols)
     ep.load_all()
     ep_curdur = {}
     for sym in tqdm(ep.current_duration_dict, desc=f'Episodic Pivots Current Duration'):
@@ -117,7 +119,7 @@ if __name__ == "__main__":
             ep_rr[sym] = [ep.reward_risk_dict[sym], int(fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0])]
         except Exception as e:
             #TODO print(sym, e, sep=': ') update error handling
-            continue    
+            continue
 
 
 
@@ -139,9 +141,9 @@ if __name__ == "__main__":
                         elevated_rvol = False
                 days_elevated_rvol[sym] = n
             n = 0
-            if symbols[sym].df['ATRs_traded'].iloc[-1] > 1:
+            if symbols[sym].df['ATRs_Traded'].iloc[-1] > 1:
                 atrs_traded = True
-                atrs_traded_rev = symbols[sym].df['ATRs_traded'].iloc[::-1]
+                atrs_traded_rev = symbols[sym].df['ATRs_Traded'].iloc[::-1]
                 while atrs_traded:
                     if atrs_traded_rev[n] > 1:
                         n+=1
@@ -170,20 +172,118 @@ if __name__ == "__main__":
             results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'].str.replace('%', '')
             results_finvizsearch[f'{col}(%)'] = pd.to_numeric(results_finvizsearch[f'{col}(%)'], errors='coerce')
             results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'] / 100
-    top_rstren = [item[0] for item in rel_stren if (item[1] > 70) and (hadv.saved_dict[item[0]]['Relative ATR'].iloc[-1] > 4)]
-    top_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] > 50) and (hadv.saved_dict[item[0]]['Relative ATR'].iloc[-1] > 4)]
-    top_perfearn = [item[0] for item in perf_since_earnings if (item[1] > 30) and (hadv.saved_dict[item[0]]['Relative ATR'].iloc[-1] > 4)]
+    top_rstren = [item[0] for item in rel_stren if (item[1] > 70) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
+    top_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] > 50) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
+    top_perfearn = [item[0] for item in perf_since_earnings if (item[1] > 30) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     long_list = top_rstren + top_prevperfearn + top_perfearn
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\long_list.txt", "w") as f:
         for sym in long_list:
             f.write(sym + '\n')
 
-    bottom_rweak = [item[0] for item in rel_stren if (item[1] < 30) and (hadv.saved_dict[item[0]]['Relative ATR'].iloc[-1] > 4)]
-    bottom_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] < -30) and (hadv.saved_dict[item[0]]['Relative ATR'].iloc[-1] > 4)]
-    bottom_perfearn = [item[0] for item in perf_since_earnings if (item[1] < -20) and (hadv.saved_dict[item[0]]['Relative ATR'].iloc[-1] > 4)]
+    bottom_rweak = [item[0] for item in rel_stren if (item[1] < 30) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
+    bottom_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] < -30) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
+    bottom_perfearn = [item[0] for item in perf_since_earnings if (item[1] < -20) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     short_list = bottom_rweak + bottom_prevperfearn + bottom_perfearn
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\short_list.txt", "w") as f:
         for sym in short_list:
             f.write(sym + '\n')
     shortable = [sym.replace('\n', '') for sym in open(r"E:\Market Research\Studies\Sector Studies\Watchlists\shortable.txt").readlines()]
     hist_short_int = pd.read_csv(r"E:\Market Research\Dataset\Fundamental Data\historic_short_interest.txt")
+
+    tsc = Technical_Score_Calculator()
+    tsc.technical_score_calculator(symbols)
+    tsc_sec = Technical_Score_Calculator()
+    tsc_sec.technical_score_calculator(sec)
+    tsc_ind = Technical_Score_Calculator()
+    tsc_ind.technical_score_calculator(ind)
+    #TODO I believe the following are printing symbols that are not passing the liquidity filter.
+    #TODO Add error handling for illiquid symbols.
+    sector_member_mappings = {sector: fu.sector_industry_member_search(sector, level='sector') for sector in sec}
+    industry_member_mappings = {industry: fu.sector_industry_member_search(industry, level='industry') for industry in ind}
+    #It may be more pythonic to use the following dictionary comprehension.
+    #The python kernel crashed before I would test the following dictionary comprehensions.
+    #These could be added directory to the line tha prints sector/industry close over vwap
+    # close_over_vwap_dict = {sector: close_over_vwap_ratio({sym: symbols[sym]}) for sector in sector_member_mappings for sym in sector_member_mappings[sector]}
+    # close_over_vwap_dict = {industry: close_over_vwap_ratio({sym: symbols[sym]}) for industry in industry_member_mappings for sym in industry_member_mappings[industry]}
+    def close_over_vwap_dict(mapping):
+        fas = {}
+        for sector in mapping:
+            #A dictionary mapping all symbols in an industry to their symbols data
+            temp = {}
+            try:
+                for sym in mapping[sector]:
+                    try:
+                        if len(symbols[sym].df) == 0:
+                            temp[sym] = symbols[sym]
+                        else:
+                            temp.update({sym: symbols[sym]})
+                    except Exception as e:
+                        print('2', sym, e, sep=': ')
+                        continue
+            except Exception as e:
+                print('1', sym, e, sep=': ')
+                continue
+            fas[sector] = sf.close_over_vwap_ratio(temp)    
+        return fas
+    from IPython.display import display, HTML
+    from pprint import pprint
+    print('\ndf_byrvol_positive dataframe descriptive statistics.',
+          tsc.positive_sent_dict_stats,
+          '\n50 rows of the top performing symbols by relative volume',
+          tsc.df_byrvol_positive[:50],
+          '\ndf_byrvol_negative dataframe descriptive statistics.',
+          tsc.negative_sent_dict_stats,
+          '\n50 rows of under performing symbols by relative volume',
+          tsc.df_byrvol_negative[:50],
+          sf.sec_ind_activity_by_tss_plots(tsc),
+          '\nTop Performing Sectors by Relative Volume',
+          tsc_sec.df_byrvol_positive,
+          #display(HTML(hadv_sec.df_byrvol_positive.to_html())),
+          '\nUnder Performing Sectors by Relative Volume',
+          tsc_sec.df_byrvol_negative,
+          #display(HTML(hadv_sec.df_byrvol_negative.to_html())),
+          '\nTop Performing Industries by Relative Volume',
+          tsc_ind.df_byrvol_positive,
+          #display(HTML(hadv_ind.df_byrvol_positive.to_html())),
+          '\nUnder Performing Industries by Relative Volume',
+          tsc_ind.df_byrvol_negative,
+          #display(HTML(hadv_ind.df_byrvol_negative.to_html())),
+          sf.primary_statistics(hadv=symbols, sp500=sp500, mdy=mdy, iwm=iwm),#I will add IWM back when I figure out why it isn't working.
+          sf.secondary_statistics(hadv=symbols, sp500=sp500, mdy=mdy, iwm=iwm),
+          '\nSP500 Close Over VWAP Ratio',
+          sf.close_over_vwap_ratio(sp500),
+          '\nMDY Close Over VWAP Ratio',
+          sf.close_over_vwap_ratio(mdy),
+          '\nIWM Close Over VWAP Ratio',
+          sf.close_over_vwap_ratio(iwm),
+          '\nSector Close Over VWAP Ratio',
+          sorted(close_over_vwap_dict(sector_member_mappings).items(), key=lambda x: x[1]),
+          '\nIndustry Close Over VWAP Ratio',
+          sorted(close_over_vwap_dict(industry_member_mappings).items(), key=lambda x: x[1]),
+          '\nEpisodic Pivots Reward Risk',
+          sorted(ep_rr.items(), key=lambda x: x[1][1])[::-1],
+          '\nEpisodic Pivots Current Duration',
+          sorted(ep_curdur.items(),key=operator.itemgetter(1,0))[::-1],
+          '\nRelative Strength',
+          rel_stren[-40:][::-1],
+          '\nRelative Weakness',
+          rel_stren[:40],
+          '\nTop Performers Since Previous Earnings Season Start',
+          prev_perf_since_earnings[-100:][::-1],
+          '\nUnderperformers Since Previous Earnings Season Start',
+          prev_perf_since_earnings[:50],
+          '\nTop Performers Since Earnings Season Start',
+          perf_since_earnings[-100:][::-1],          
+          '\nUnderperformers Since Earnings Season Start',
+          perf_since_earnings[:50],
+          '\nDays With Elevated RVol',
+          sorted(days_elevated_rvol.items(), key=lambda x: x[1], reverse=True),
+          '\nDays With Consecutive Range Expansion',
+          sorted(days_range_expansion.items(), key=lambda x: x[1], reverse=True),
+          '\nDollar Volume Over Market Cap All',
+          dv_cap.tail(30),
+          '\nDollar Volume Over Market Cap hadv',
+          dv_cap.loc[dv_cap.Ticker.isin(symbols)][-30:],
+          '\nEuclidean Distance YTD Perf and DV/Cap',
+          perf_dvcap_dist.sort_values('perf_dvcap_dist').tail(30), sep='\n')
+

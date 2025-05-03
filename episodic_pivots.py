@@ -2,7 +2,7 @@
 Code for processing episodic pivots.
 """
 
-from market_data import datetime
+from market_data import datetime, np, tqdm, pd
 import market_data.seeking_alpha as sa
 from watchlists_locations import make_watchlist, episodic_pivots
 
@@ -21,7 +21,7 @@ class Episodic_Pivots:
     
 
     def load_all(self):
-        for sym in self.symbols:
+        for sym in tqdm(self.symbols, desc='Loading Episodic Pivots'):
             self.episodic_pivot_finder(sym)
         self.drawdown()
         self.returns()
@@ -115,7 +115,7 @@ class Episodic_Pivots:
             try:
                 self.current_duration_dict[sym] = self.duration_dict[sym][list(self.duration_dict[sym].keys())[-1]]
             except Exception as e:
-                #TODO print(sym, e) update error handling
+                print(sym, e)# update error handling
                 continue
     
     def risk_reward(self, risk_level='low'):

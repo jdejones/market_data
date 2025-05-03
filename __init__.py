@@ -10,6 +10,8 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import requests
+import re
+import operator
 
 #Local imports
 from . import fundamentals as fu

@@ -179,7 +179,7 @@ def watchlist_composition(lst, level='sector', chart_type='barh', name=str(None)
 #The following is a draft of a function that will add symbols and their respective
 #sector and industry from yfinance.
 #@staticmethod
-def sector_industry_database_add( lst, by='ticker'):
+def sector_industry_database_add(lst, by='ticker'):
     with open(r"E:\Market Research\Dataset\Fundamental Data\symbol_sector_industry.txt", "r") as f:
         symbol_sector_industry = eval(f.read())
     with open(r"E:\Market Research\Dataset\Fundamental Data\symbol_sector_industry_backup.txt", "w") as f:
@@ -218,7 +218,7 @@ def sector_industry_database_add( lst, by='ticker'):
 #I want to make a function that will assign the appropriate sector/industry with an
 #input of symbols.
 #@staticmethod
-def get_sym_sector_industry( lst, save=True):
+def get_sym_sector_industry(lst, save=True):
     with open(r"E:\Market Research\Dataset\Fundamental Data\symbol_sector_industry.txt", "r") as f:
         symbol_sector_industry = eval(f.read())
     sector_industry_dict = {}
@@ -254,7 +254,7 @@ def get_sym_by_sector_industry(dic, sector_industry, level='Sector'):
             print(k)
 
 #@staticmethod
-def sym_by_level( level_name, watchlist, level='industry'):
+def sym_by_level(level_name, watchlist, level='industry'):
     """sym_by_level returns a list of symbols obtained from the input
     watchlist belonging to the specified Sector or Industry."""
     level_members = []
@@ -269,7 +269,7 @@ def sym_by_level( level_name, watchlist, level='industry'):
     return level_members
 
 #@staticmethod
-def sector_industry_member_search( sector_industry_name, level='industry'):
+def sector_industry_member_search(sector_industry_name, level='industry'):
     level_members = []
     with open(r"E:\Market Research\Dataset\Fundamental Data\symbol_sector_industry.txt", "r") as f:
         symbol_sector_industry = eval(f.read())
@@ -323,7 +323,7 @@ def extremes_tsc_quant(Watchlista_watchlist, SA_watchlist, elevated=True, std=2,
 #The following function produces a dataframe of specified length
 #with the symbol and quant score of symbols with the highest 
 #seeking alpha quant rating.
-def top_quant( watchlist, length=20):
+def top_quant(watchlist, length=20):
     return sa_fundamental_data[['Symbol', 'quantRating']].loc[
     sa_fundamental_data['Symbol'].isin(watchlist.symbols)
     ].replace('-', 0).sort_values('quantRating', ascending=False)[:length]
@@ -331,7 +331,7 @@ def top_quant( watchlist, length=20):
 #This function takes in a string and returns a dataframe with the
 #symbol from the string and the quant score from the hadv or
 #specified watchlist.
-def quant_from_string( string, sort_ascending=False):
+def quant_from_string(string, sort_ascending=False):
     boo = string.split('\n')
     return sa_fundamental_data[['Symbol', 'quantRating']].loc[
         sa_fundamental_data['Symbol'].isin(boo)].replace(
