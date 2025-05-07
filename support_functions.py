@@ -4,8 +4,8 @@ from market_data.add_technicals import RSI
 from market_data.watchlist_filters import Technical_Score_Calculator
 import market_data.fundamentals as fu
 from market_data import pd, sa, fu, np, datetime, re
-
-
+from market_data.Symbol_Data import SymbolData
+import market_data.watchlists_locations as wl
 
 
 
@@ -54,6 +54,7 @@ def create_index(symbols, level='sector'):
         #     sa.key_data_load()
         # if sa.key_data == None:
         #     sa.load_all()
+        all_symbols_list = wl.make_watchlist(wl.all_symbols)
         for sym in dict_of_frames.keys():
             try:#!The seeking alpha api is returning empty responses for a few symbols key data resulting in key errrors for subscripts of sa.key_data
                 dict_of_frames[sym] = dict_of_frames[sym].assign(cap_open = dict_of_frames[sym]['Open'] * sa.key_data[sym]['data'][0]['attributes']['shares'],
@@ -61,6 +62,9 @@ def create_index(symbols, level='sector'):
                     cap_low = dict_of_frames[sym]['Low'] * sa.key_data[sym]['data'][0]['attributes']['shares'],
                     cap_close = dict_of_frames[sym]['Close'] * sa.key_data[sym]['data'][0]['attributes']['shares'])
             except KeyError as ke:
+                #! Handles symbols that do not have data in sa.key_data. I could resolve this by using share data from sec-api.io.
+                if sym in all_symbols_list:
+                    continue
                 #TODO print(sym, 'key error:\n', ke) update error handling
                 continue
             except TypeError as te:
@@ -79,7 +83,10 @@ def create_index(symbols, level='sector'):
                 boo_close = pd.concat([boo_close, dict_of_frames[sym]['cap_close']], axis=1)
                 boo_volume = pd.concat([boo_volume, dict_of_frames[sym]['Volume']], axis=1)
             except KeyError:
-                print(sym)
+                #! Handles symbols that do not have data in sa.key_data. I could resolve this by using share data from sec-api.io.
+                if sym in all_symbols_list:
+                    continue
+                # print(sym)
                 continue
         boo_open = boo_open.sort_index()
         boo_high = boo_high.sort_index()
@@ -335,3 +342,178 @@ def close_over_vwap_ratio(symbols: dict) -> int:
     else:
         ratio = (count[0]/count[1]) * 100
         return ratio
+
+
+
+def trend_bias(symbol: SymbolData):
+    
+    #Variables
+    long_term_low = str(symbol.df.Lo3.loc[symbol.df.Lo3.notnull()].index[-1]).split(' ')[0]
+    long_term_high = str(symbol.df.Hi3.loc[symbol.df.Hi3.notnull()].index[-1]).split(' ')[0]
+    mid_term_low = str(symbol.df.Lo2.loc[symbol.df.Lo2.notnull()].index[-1]).split(' ')[0]
+    mid_term_high = str(symbol.df.Hi2.loc[symbol.df.Hi2.notnull()].index[-1]).split(' ')[0]
+    short_term_low = str(symbol.df.Lo1.loc[symbol.df.Lo1.notnull()].index[-1]).split(' ')[0]
+    short_term_high = str(symbol.df.Hi1.loc[symbol.df.Hi1.notnull()].index[-1]).split(' ')[0]
+    most_recent_close = symbol.df.Close.iloc[-1]
+    
+    #If then logic
+    if datetime.datetime.strptime(long_term_low, "%Y-%m-%d") > datetime.datetime.strptime(long_term_high, "%Y-%m-%d"):
+        long_term_bias = 'bullish'
+    else:
+        long_term_bias = 'bearish'
+    if datetime.datetime.strptime(mid_term_low, "%Y-%m-%d") > datetime.datetime.strptime(mid_term_high, "%Y-%m-%d"):
+        mid_term_bias = 'bullish'
+    else:
+        mid_term_bias = 'bearish'
+    if mid_term_bias == 'bullish':
+        if datetime.datetime.strptime(short_term_low, "%Y-%m-%d") > datetime.datetime.strptime(short_term_high, "%Y-%m-%d"):
+            if (most_recent_close > symbol.df.loc[short_term_low].Low) & (most_recent_close < symbol.df.loc[short_term_high].High):
+                short_term_bias = 'testing'
+            elif (most_recent_close < symbol.df.loc[short_term_low].Low):
+                short_term_bias = 'retracement'
+            elif (most_recent_close > symbol.df.loc[short_term_high].High):
+                short_term_bias = 'continuation'
+        elif datetime.datetime.strptime(short_term_low, "%Y-%m-%d") < datetime.datetime.strptime(short_term_high, "%Y-%m-%d"):
+            if (most_recent_close > symbol.df.loc[short_term_low].Low) & (most_recent_close < symbol.df.loc[short_term_high].High):
+                short_term_bias = 'retracement'
+            elif (most_recent_close > symbol.df.loc[short_term_high].High):
+                short_term_bias = 'continuation'
+            elif (most_recent_close < symbol.df.loc[short_term_low].Low):
+                short_term_bias = 'correction'
+    elif mid_term_bias == 'bearish':
+        if datetime.datetime.strptime(short_term_low, "%Y-%m-%d") < datetime.datetime.strptime(short_term_high, "%Y-%m-%d"):
+            if (most_recent_close > symbol.df.loc[short_term_low].Low) & (most_recent_close < symbol.df.loc[short_term_high].High):
+                short_term_bias = 'testing'
+            elif (most_recent_close < symbol.df.loc[short_term_low].Low):
+                short_term_bias = 'continuation'
+            elif (most_recent_close > symbol.df.loc[short_term_high].High):
+                short_term_bias = 'retracement'
+        elif datetime.datetime.strptime(short_term_low, "%Y-%m-%d") > datetime.datetime.strptime(short_term_high, "%Y-%m-%d"):
+            if (most_recent_close > symbol.df.loc[short_term_low].Low) & (most_recent_close < symbol.df.loc[short_term_high].High):
+                short_term_bias = 'retracement'
+            elif (most_recent_close < symbol.df.loc[short_term_low].Low):
+                short_term_bias = 'continuation'
+            elif (most_recent_close > symbol.df.loc[short_term_high].High):
+                short_term_bias = 'correction'
+    return (long_term_bias, mid_term_bias, short_term_bias)
+
+def watchlist_suggestions(tb):
+    #* THere is also a stock suggestions function that could be added here. I'm not adding it now because the suggestions
+    #* are conditions need to be improved and it is consistently returning errors. It may be worth revisiting later.
+    """These watchlist suggestions represent the first watchlists to review. They are not intended to be
+    comprehensive.
+    They are suggested by the current start of the market trend and are not forward looking in that they 
+    do not account for probablistic changes in the current trend.
+    Returns:
+        List: Keys of the watchlists dictionary named after the watchlists that are suggested.
+    """
+    
+    if tb[0] == 'bullish':
+        if tb[1] == 'bullish':
+            if tb[2] == 'testing':
+                watchlists = {'relative_strength_results': wl.make_watchlist(wl.relative_strength_tc2000_favorites),
+                                'high_quant_results': wl.make_watchlist(wl.high_quant),
+                                'uptrend_retracement_results': wl.make_watchlist(wl.uptrend_retracement_results)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'continuation':
+                watchlists = {'relative_strength_results': wl.make_watchlist(wl.relative_strength_tc2000_favorites),
+                                'high_quant_results': wl.make_watchlist(wl.high_quant)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'retracement':
+                watchlists = {'relative_strength_results': wl.make_watchlist(wl.relative_strength_tc2000_favorites),
+                                'high_quant_results': wl.make_watchlist(wl.high_quant)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'correction':
+                watchlists = {'uptrend_retracement_results': wl.make_watchlist(wl.uptrend_retracement),
+                                'uptrend_accumulation': wl.make_watchlist(wl.uptrend_accumulation),
+                                'uptrend': wl.make_watchlist(wl.uptrend),
+                                'accumulation': wl.make_watchlist(wl.accumulation)
+                                }
+                return list(watchlists.keys())
+        elif tb[1] == 'bearish':
+            if tb[2] == 'testing':
+                watchlists = {'relative_weakness_results': wl.make_watchlist(wl.relative_weakness_tc2000_favorites),
+                                'downtrend_retracement': wl.make_watchlist(wl.downtrend_retracement),
+                                'distribution': wl.make_watchlist(wl.distribution),
+                                'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution)
+                                }
+                return (list(watchlists.keys()))
+            elif tb[2] == 'continuation':
+                watchlists = {'relative_strength_results': wl.make_watchlist(wl.relative_strength_tc2000_favorites),
+                                'distribution': wl.make_watchlist(wl.distribution),
+                                'distribution_breakdown': wl.make_watchlist(wl.distribution_breakdown),
+                                'downtrend': wl.make_watchlist(wl.downtrend)                        
+                                }
+                return (list(watchlists.keys()))
+            elif tb[2] == 'retracement':
+                watchlists = {'seller_capitulation': wl.make_watchlist(wl.seller_capitulation),
+                                'downtrend_retracement': wl.make_watchlist(wl.downtrend_retracement),
+                                'downtrend':  wl.make_watchlist(wl.downtrend),
+                                'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution)
+                                }
+                return (list(watchlists.keys()))
+            elif tb[2] == 'correction':
+                watchlists = {'relative_strength_results': wl.make_watchlist(wl.relative_strength_tc2000_favorites),
+                                'high_quant_results': wl.make_watchlist(wl.high_quant),
+                                'uptrend_accumulation': wl.make_watchlist(wl.uptrend_accumulation),
+                                'accumulation_breakout': wl.make_watchlist(wl.accumulation_breakout),
+                                'uptrend': wl.make_watchlist(wl.uptrend),
+                                'accumulation': wl.make_watchlist(wl.accumulation)
+                                }
+                return (list(watchlists.keys()))
+    elif tb[0] == 'bearish':
+        if tb[1] == 'bullish':
+            if tb[2] == 'testing':
+                watchlists = {'distribution': wl.make_watchlist(wl.distribution),
+                                'downtrend_retracement': wl.make_watchlist(wl.downtrend_retracement),
+                                'distribution_breakdown': wl.make_watchlist(wl.distribution_breakdown),
+                                'downtrend': wl.make_watchlist(wl.downtrend),
+                                'seller_capitulation': wl.make_watchlist(wl.seller_capitulation),
+                                'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'continuation':
+                watchlists = {'relative_strength_results': wl.make_watchlist(wl.relative_strength_tc2000_favorites),
+                                'high_quant_results': wl.make_watchlist(wl.high_quant),
+                                'accumulation_breakout': wl.make_watchlist(wl.accumulation_breakout),
+                                'uptrend_accumulation': wl.make_watchlist(wl.uptrend_accumulation)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'retracement':
+                watchlists = {'seller_capitulation': wl.make_watchlist(wl.seller_capitulation),
+                                'distribution': wl.make_watchlist(wl.distribution),
+                                'distribution_breakdown': wl.make_watchlist(wl.distribution_breakdown)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'correction':
+                watchlists = {'downtrend': wl.make_watchlist(wl.downtrend),
+                                'distribution_breakdown': wl.make_watchlist(wl.distribution_breakdown),
+                                'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution)
+                                }
+                return list(watchlists.keys())
+        elif tb[1] == 'bearish':
+            if tb[2] == 'testing':
+                watchlists = {'downtrend': wl.make_watchlist(wl.downtrend),
+                                'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution),
+                                'distribution_breakdown': wl.make_watchlist(wl.distribution_breakdown),
+                                'relative_weakness_results': wl.make_watchlist(wl.relative_weakness_results)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'continuation':
+                watchlists = {'downtrend': wl.make_watchlist(wl.downtrend),
+                                'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution),
+                                'relative_weakness_results': wl.make_watchlist(wl.relative_weakness_results)
+                                }
+                return list(watchlists.keys())
+            elif tb[2] == 'retracement':
+                watchlists = {'seller_capitulation': wl.make_watchlist(wl.seller_capitulation),
+                                'downtrend': wl.make_watchlist(wl.downtrend),
+                                'downtrend_retracement': wl.make_watchlist(wl.downtrend_retracement),
+                                'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution)
+                                }
+                return list(watchlists.keys())
+
+

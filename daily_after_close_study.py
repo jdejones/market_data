@@ -207,6 +207,7 @@ if __name__ == "__main__":
     # close_over_vwap_dict = {industry: close_over_vwap_ratio({sym: symbols[sym]}) for industry in industry_member_mappings for sym in industry_member_mappings[industry]}
     def close_over_vwap_dict(mapping):
         fas = {}
+        all_symbols_list = wl.make_watchlist(wl.all_symbols)
         for sector in mapping:
             #A dictionary mapping all symbols in an industry to their symbols data
             temp = {}
@@ -217,11 +218,14 @@ if __name__ == "__main__":
                             temp[sym] = symbols[sym]
                         else:
                             temp.update({sym: symbols[sym]})
+                    except KeyError as ke:
+                        if sym in all_symbols_list:
+                            continue
                     except Exception as e:
-                        print('2', sym, e, sep=': ')
+                        print(close_over_vwap_dict.__name__, sym, e, sep=': ')
                         continue
             except Exception as e:
-                print('1', sym, e, sep=': ')
+                print(close_over_vwap_dict.__name__, sym, e, sep=': ')
                 continue
             fas[sector] = sf.close_over_vwap_ratio(temp)    
         return fas
@@ -287,3 +291,11 @@ if __name__ == "__main__":
           '\nEuclidean Distance YTD Perf and DV/Cap',
           perf_dvcap_dist.sort_values('perf_dvcap_dist').tail(30), sep='\n')
 
+    print('\nSPY Trend Bias')
+    tb = sf.trend_bias(etfs['SPY'])
+    tb
+    print('\nSuggested Watchlists')
+    sf.watchlist_suggestions(tb)
+    # Revert to default settings
+    warnings.filterwarnings('default')
+    pd.options.mode.chained_assignment = 'warn'

@@ -1512,17 +1512,20 @@ def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, ale
         ma_pullback_alerts = ma_pullback_alerts_50
     episodic_pivots_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\episodic_pivots.txt").readlines()]
     fanned_up_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\fanned_up_all.txt").readlines()]
-    fanned_up_stored_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\mid_long_term_fanned_up.txt").readlines()]
-    syms = episodic_pivots_results + fanned_up_results + fanned_up_stored_results
+    mid_long_term_fanned_up_results = [item.replace('\n', '') for item in open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\mid_long_term_fanned_up.txt").readlines()]
+    syms = episodic_pivots_results + fanned_up_results + mid_long_term_fanned_up_results
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\\"+ma+"dma_pullback.txt") as f:
         for line in f:
             ma_pullback_alerts.append(line.replace('\n', ''))
     if len(ma_pullback_alerts) > 0:
+        all_symbols_list = wl.make_watchlist(wl.all_symbols)
         for sym in ma_pullback_alerts:
             try:
                 if -1 > symbols[sym].df['ATRs_from_'+ma+'DMA'].iloc[-1] > alert_keep_threshold:
                     ma_pullback_alerts.remove(sym)
-            except:
+            except KeyError as ke:
+                if sym in all_symbols_list:#Continue if symbol is filter out by liquidity filter.
+                    continue
                 print(ma_pullback.__name__, sym, sep=': ')
                 continue
     for sym in syms:

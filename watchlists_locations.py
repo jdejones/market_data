@@ -8,7 +8,7 @@ def make_watchlist(file_path: str) -> list[str]:
 
 hadv = "E:\Market Research\Studies\Sector Studies\Watchlists\High_AvgDV.txt"
 
-
+all_symbols = "E:\Market Research\Studies\Sector Studies\Watchlists\\all_symbols.txt"
 
 #Systematic/Technicals watchlists locations
 systematic_watchlists_root = r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists"

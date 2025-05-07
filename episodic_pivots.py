@@ -95,7 +95,7 @@ class Episodic_Pivots:
             self.duration_dict[sym] = {}
             for date in self.ep_dict[sym]:
                 try:
-                    self.duration_dict[sym].update({date: (datetime.datetime.today() - datetime.datetime.strptime(self.ep_dict[sym][date].index[0], '%Y-%m-%d')).days})
+                    self.duration_dict[sym].update({date: (datetime.datetime.strptime(str(self.ep_dict[sym][date].index[-1]).split(' ')[0], '%Y-%m-%d') - datetime.datetime.strptime(str(self.ep_dict[sym][date].index[0]).split(' ')[0], '%Y-%m-%d')).days})
                 except Exception as e:
                     #TODO print(sym, e) update error handling
                     continue
@@ -114,6 +114,11 @@ class Episodic_Pivots:
         for sym in self.episodic_pivots_results:
             try:
                 self.current_duration_dict[sym] = self.duration_dict[sym][list(self.duration_dict[sym].keys())[-1]]
+            except IndexError:
+                if len(self.duration_dict[sym].keys()) == 0:
+                    continue
+                else:
+                    print(self.current_duration.__name__, sym, e, sep='-')
             except Exception as e:
                 print(sym, e)# update error handling
                 continue
