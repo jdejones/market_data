@@ -289,13 +289,13 @@ if __name__ == "__main__":
           '\nDollar Volume Over Market Cap hadv',
           dv_cap.loc[dv_cap.Ticker.isin(symbols)][-30:],
           '\nEuclidean Distance YTD Perf and DV/Cap',
-          perf_dvcap_dist.sort_values('perf_dvcap_dist').tail(30), sep='\n')
+          perf_dvcap_dist.sort_values('perf_dvcap_dist').tail(30),
+          '\nSPY Trend Bias',
+          sf.trend_bias(etfs['SPY']), 
+          '\nSuggested Watchlists',
+          sf.watchlist_suggestions(sf.trend_bias(etfs['SPY'])),
+          sep='\n')
 
-    print('\nSPY Trend Bias')
-    tb = sf.trend_bias(etfs['SPY'])
-    tb
-    print('\nSuggested Watchlists')
-    sf.watchlist_suggestions(tb)
     # Revert to default settings
     warnings.filterwarnings('default')
     pd.options.mode.chained_assignment = 'warn'
