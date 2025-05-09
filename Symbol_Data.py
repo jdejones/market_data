@@ -27,3 +27,13 @@ class SymbolData:
 
 # usage
 # sma20 = symbols["AAPL"].close.rolling(20).mean()
+
+
+@dataclass(slots=True)
+class Intraday_SymbolData:
+    symbol: str
+    df: pd.DataFrame
+    sector: str | None = None
+    market_cap: float | None = None
+    rvol_df: pd.Series | None = None
+    daily_loi: dict[str, float] | None = None

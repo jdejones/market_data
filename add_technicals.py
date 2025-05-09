@@ -232,8 +232,11 @@ def atrs_traded(df):
     df['L-Cp'] = abs(df['Low'] - df['Close'].shift(1)) 
     df['ATRs_Traded'] = df[['H-L', 'H-Cp', 'L-Cp']].max(axis=1) / df['ATR_14']
 
-def bollinger_bands(df, base: pd.Series, window: int=20, std: int=2, rbd: bool=True):
-    ma_series = df[base].rolling(window=window).mean()
+def bollinger_bands(df, base: pd.Series, window: int=20, std: int=2, rbd: bool=True, ema: bool=False):
+    if ema:
+        ma_series = df[base].ewm(span=window, adjust=False).mean()
+    else:
+        ma_series = df[base].rolling(window=window).mean()
     rolling_std = df[base].rolling(window=window).std()
     df[f'u_band'] = ma_series + (std * rolling_std)
     df[f'l_band'] = ma_series - (std * rolling_std)
@@ -319,6 +322,28 @@ pipeline.append(
     Step(add_avwap_by_offset, kwargs={'offset': datetime.datetime(datetime.datetime.today().year, 1, 1).strftime('%Y-%m-%d')}, needs=['Close', 'Volume'], adds=[f'ATRs_from_VWAP_{datetime.datetime(datetime.datetime.today().year, 1, 1).strftime('%Y-%m-%d')}'])
 )
 
+#* Does not distinguish between days. I could add a pipline that will.
+intraday_pipeline = [
+    Step(EMA, kwargs={'base': 'Close', 'target': 'ema5', 'period': 5}, needs=['Close'], adds=['ema5']),
+    Step(EMA, kwargs={'base': 'Close', 'target': 'ema9', 'period': 9}, needs=['Close'], adds=['ema9']),
+    Step(EMA, kwargs={'base': 'Close', 'target': 'ema20', 'period': 20}, needs=['Close'], adds=['ema20']),
+    Step(ATR, kwargs={'period': 14}, needs=['High', 'Low', 'Close'], adds=['ATR_14']),
+    Step(atrs_traded, needs=['High', 'Low', 'Close'], adds=['H-L', 'H-Cp', 'L-Cp', 'ATRs_Traded']),
+    Step(bollinger_bands, kwargs={'base': 'Close', 'window': 20, 'std': 2, 'rbd': True, 'ema': True}, needs=['Close', 'ATR_14'], adds=['u_band', 'l_band', 'relative_band_dist']),
+    Step(MACD, kwargs={'base': 'Close', 'short_period': 5, 'long_period': 9, 'ma_type': 'exponential'}, needs=['Close'], adds=['ema5', 'ema9', 'eMACD59']),
+    Step(EMA, kwargs={'base': 'eMACD59', 'target': 'eMACD59_signal', 'period': 9}, needs=['eMACD59'], adds=['eMACD59_signal']),
+    Step(diff_from_signal, kwargs={'base': 'eMACD59', 'signal': 'eMACD59_signal'}, needs=['eMACD59', 'eMACD59_signal'], adds=['eMACD59_diff']),
+    Step(relative_diff_from_signal, kwargs={'base': 'eMACD59_diff', 'target':'macd'}, needs=['eMACD59_diff', 'ATR_14'], adds=['relative_macd59_diff']),
+    Step(MACD, kwargs={'base': 'Close', 'short_period': 5, 'long_period': 20, 'ma_type': 'exponential'}, needs=['Close'], adds=['ema5', 'ema20', 'eMACD520']),
+    Step(EMA, kwargs={'base': 'eMACD520', 'target': 'eMACD520_signal', 'period': 9}, needs=['eMACD520'], adds=['eMACD520_signal']),
+    Step(diff_from_signal, kwargs={'base': 'eMACD520', 'signal': 'eMACD520_signal'}, needs=['eMACD520', 'eMACD520_signal'], adds=['eMACD520_diff']),
+    Step(relative_diff_from_signal, kwargs={'base': 'eMACD520_diff', 'target':'macd'}, needs=['eMACD520_diff', 'ATR_14'], adds=['relative_macd520_diff']),
+    Step(MACD, kwargs={'base': 'Close', 'short_period': 9, 'long_period': 20, 'ma_type': 'exponential'}, needs=['Close'], adds=['ema9', 'ema20', 'eMACD920']),
+    Step(EMA, kwargs={'base': 'eMACD920', 'target': 'eMACD920_signal', 'period': 9}, needs=['eMACD920'], adds=['eMACD920_signal']),
+    Step(diff_from_signal, kwargs={'base': 'eMACD920', 'signal': 'eMACD920_signal'}, needs=['eMACD920', 'eMACD920_signal'], adds=['eMACD920_diff']),
+    Step(relative_diff_from_signal, kwargs={'base': 'eMACD920_diff', 'target':'macd'}, needs=['eMACD920_diff', 'ATR_14'], adds=['relative_macd920_diff']),
+]
+
 
 def run_pipeline(df: pd.DataFrame, steps: List[Step] = pipeline) -> pd.DataFrame:
     #*I commented out some original code to modify the dataframe in place.
@@ -333,3 +358,10 @@ def _add_technicals_worker(item: tuple[str, pd.DataFrame]) -> tuple[str, pd.Data
     symbol, df = item
     run_pipeline(df)
     return symbol, df
+
+def _add_intraday_technicals_worker(item: tuple[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
+    symbol, df = item
+    run_pipeline(df, steps=intraday_pipeline)
+    return symbol, df
+
+

@@ -76,24 +76,27 @@ def intraday_import(wl: list[str], from_date: int|str|datetime.datetime = 0,
                     resample: str = False,
                     timespan: str = 'second',
                     multiplier: int = 10,
-                    limit: int = 50000) -> dict[str, pd.DataFrame]:
+                    limit: int = 50000,
+                    offset_dates: dict[str, list[int|str|datetime.datetime,int|str|datetime.datetime]] = None) -> dict[str, pd.DataFrame]:
     client = StocksClient(api_key=polygon_api_key)
     data_dict = {}
     
     @sleep_and_retry
     @limits(calls=CALLS, period=PERIOD)
-    def _fetch_ohlcv(sym: str):
-        raw = client.get_aggregate_bars(symbol=sym, multiplier=multiplier, 
-                                        timespan=timespan, from_date=from_date, 
-                                        limit=limit,to_date=to_date)
+    def _fetch_ohlcv(sym: str, offset_dates: list[int|str|datetime.datetime,int|str|datetime.datetime] = None):
+        if offset_dates:
+            raw = client.get_aggregate_bars(symbol=sym, multiplier=multiplier, 
+                                            timespan=timespan, from_date=offset_dates[0], 
+                                            limit=limit,to_date=offset_dates[1])
+        else:
+            raw = client.get_aggregate_bars(symbol=sym, multiplier=multiplier, 
+                                            timespan=timespan, from_date=from_date, 
+                                            limit=limit,to_date=to_date)
         if 'next_url' in list(raw.keys()):
             all_results = raw['results']
             # Follow pagination if there’s a next_url
             while raw.get('next_url'):
                 next_url = raw['next_url']
-                # next_url already has the apiKey query-param
-                # resp = requests.get(f'https://api.polygon.io{next_url}')
-                # resp.raise_for_status()
                 url = next_url if next_url.startswith('http') else f'https://api.polygon.io{next_url}'
                 resp = requests.get(url, params={'apiKey': polygon_api_key})                
                 raw = resp.json()
@@ -102,9 +105,9 @@ def intraday_import(wl: list[str], from_date: int|str|datetime.datetime = 0,
         else:
             return raw['results']
     
-    def _process(sym: str):
+    def _process(sym: str, offset_dates: list[int|str|datetime.datetime,int|str|datetime.datetime] = None):
         """Fetch + turn into a DataFrame."""
-        price_data = _fetch_ohlcv(sym)
+        price_data = _fetch_ohlcv(sym, offset_dates=offset_dates)
         df = pd.DataFrame(price_data)
         # …your existing timestamp + rename logic here…
         df['t'] = pd.to_datetime(df['t'], unit='ms')
@@ -129,18 +132,32 @@ def intraday_import(wl: list[str], from_date: int|str|datetime.datetime = 0,
                                             'High': 'max', 'Low': 'min'})
         return sym, df
 
-    max_workers = min(20, len(wl))   #* Can be tuned.
-    with ThreadPoolExecutor(max_workers=max_workers) as exe:
-        futures = {exe.submit(_process, sym): sym for sym in wl}
-        for future in tqdm(as_completed(futures),
-                           total=len(futures),
-                           desc='Importing Price Data'):
-            sym = futures[future]
-            try:
-                sym, df = future.result()
-                data_dict[sym] = df
-            except Exception as e:
-                print(f"{sym}: {e}")
+    if offset_dates:
+        max_workers = min(20, len(wl))   #* Can be tuned.
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            futures = {exe.submit(_process, sym, offset_dates=offset_dates[sym]): sym for sym in wl}
+            for future in tqdm(as_completed(futures),
+                            total=len(futures),
+                            desc='Importing Price Data'):
+                sym = futures[future]
+                try:
+                    sym, df = future.result()
+                    data_dict[sym] = df
+                except Exception as e:
+                    print(f"{sym}: {e}")        
+    else:
+        max_workers = min(20, len(wl))   #* Can be tuned.
+        with ThreadPoolExecutor(max_workers=max_workers) as exe:
+            futures = {exe.submit(_process, sym): sym for sym in wl}
+            for future in tqdm(as_completed(futures),
+                            total=len(futures),
+                            desc='Importing Price Data'):
+                sym = futures[future]
+                try:
+                    sym, df = future.result()
+                    data_dict[sym] = df
+                except Exception as e:
+                    print(f"{sym}: {e}")
 
     return data_dict
 
