@@ -328,3 +328,8 @@ def run_pipeline(df: pd.DataFrame, steps: List[Step] = pipeline) -> pd.DataFrame
         # out = step(df)         # dataclass is callable
         step(df)
     # return out
+
+def _add_technicals_worker(item: tuple[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
+    symbol, df = item
+    run_pipeline(df)
+    return symbol, df

@@ -1,4 +1,4 @@
-from market_data import np, pd, plt, datetime
+from market_data import np, pd, plt, datetime, ThreadPoolExecutor, as_completed
 from scipy.signal import find_peaks
 
 
@@ -184,72 +184,139 @@ class Regimes:
         self.hh_ll = None
         self.hh_ll_dt = None
 
+    # helper to do one symbol for breakout combo
+    def _process_regime_breakout_symbol(self, sym):
+        df = self.symbols[sym].df
+        self.regime_breakout(df)
+        self.turtle_trader(df)
+        self.turtle_trader(df, slow=20, fast=10)
+        self.turtle_trader(df, slow=10, fast=5)
+
+    # helper to do one symbol for MA combo
+    def _process_regime_ma_symbol(self, sym):
+        df = self.symbols[sym].df
+        self.regime_sma(df)
+        self.regime_ema(df)
+        self.regime_ema(df, st=20, lt=50)
+        self.regime_ema(df, st=10, lt=20)
+        self.regime_macross(df)
+        self.regime_macross(df, ma=[10,20,50])
+        self.regime_triple_moving_average(df)
+
+    # helper to do one symbol for floor/ceiling combo
+    def _process_floor_ceiling_symbol(self, sym):
+        df = self.symbols[sym].df
+        self.reset_variables()
+        self.lower_upper_OHLC(df)
+        self.regime_args(df)
+        self.historical_swings(df)
+        self.regime_floor_ceiling(df)
+
     def regime_breakout_combo(self, single_symbol=False, symbol=None, watchlist=None):
-        if watchlist == None:
+        # if watchlist == None:
+        #     watchlist = self.symbols.keys()
+        # if single_symbol == False:
+        #     for sym in watchlist:
+        #         try:
+        #             self.regime_breakout(self.symbols[sym].df)
+        #             self.turtle_trader(self.symbols[sym].df)
+        #             self.turtle_trader(self.symbols[sym].df, slow=20, fast=10)
+        #             self.turtle_trader(self.symbols[sym].df, slow=10, fast=5)
+        #         except Exception as e:
+        #             print(self.regime_breakout_combo.__name__, sym, e, sep=': ')
+        #             #TODO print(self.regime_breakout_combo.__name__, '\n', sym, e) update error handling
+        #             continue
+        # else:
+        #     self.regime_breakout(self.symbols[symbol].df)
+        #     self.turtle_trader(self.symbols[symbol].df)
+        #     self.turtle_trader(self.symbols[symbol].df, slow=20, fast=10)
+        #     self.turtle_trader(self.symbols[symbol].df, slow=10, fast=5)
+        if watchlist is None:
             watchlist = self.symbols.keys()
-        if single_symbol == False:
-            for sym in watchlist:
-                try:
-                    self.regime_breakout(self.symbols[sym].df)
-                    self.turtle_trader(self.symbols[sym].df)
-                    self.turtle_trader(self.symbols[sym].df, slow=20, fast=10)
-                    self.turtle_trader(self.symbols[sym].df, slow=10, fast=5)
-                except Exception as e:
-                    print(self.regime_breakout_combo.__name__, sym, e, sep=': ')
-                    #TODO print(self.regime_breakout_combo.__name__, '\n', sym, e) update error handling
-                    continue
+        if not single_symbol:
+            with ThreadPoolExecutor() as executor:
+                futures = {executor.submit(self._process_regime_breakout_symbol, sym): sym for sym in watchlist}
+                for future in as_completed(futures):
+                    sym = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(self.regime_breakout_combo.__name__, sym, e, sep=': ')
         else:
-            self.regime_breakout(self.symbols[symbol].df)
-            self.turtle_trader(self.symbols[symbol].df)
-            self.turtle_trader(self.symbols[symbol].df, slow=20, fast=10)
-            self.turtle_trader(self.symbols[symbol].df, slow=10, fast=5)
+            self._process_regime_breakout_symbol(symbol)        
 
     def regime_ma_combo(self, single_symbol=False, symbol=None, watchlist=None):
-        if watchlist == None:
+        # if watchlist == None:
+        #     watchlist = self.symbols.keys()
+        # if single_symbol == False:
+        #     for sym in watchlist:
+        #         try:
+        #             self.regime_sma(self.symbols[sym].df)
+        #             self.regime_ema(self.symbols[sym].df)
+        #             self.regime_ema(self.symbols[sym].df, st=20, lt=50)
+        #             self.regime_ema(self.symbols[sym].df, st=10, lt=20)
+        #             self.regime_macross(self.symbols[sym].df)
+        #             self.regime_macross(self.symbols[sym].df, ma=[10,20,50])
+        #             self.regime_triple_moving_average(self.symbols[sym].df)
+        #         except Exception as e:
+        #             print(self.regime_ma_combo.__name__, sym, e, sep=': ')
+        #             #TODO print(self.regime_ma_combo.__name__, '\n', sym, e) update error handling
+        #             continue
+        # else:
+        #     self.regime_sma(self.symbols[symbol].df)
+        #     self.regime_ema(self.symbols[symbol].df)
+        #     self.regime_ema(self.symbols[symbol].df, st=20, lt=50)
+        #     self.regime_ema(self.symbols[symbol].df, st=10, lt=20)
+        #     self.regime_macross(self.symbols[symbol].df)
+        #     self.regime_macross(self.symbols[symbol].df, ma=[10,20,50])
+        #     self.regime_triple_moving_average(self.symbols[symbol].df)       
+        if watchlist is None:
             watchlist = self.symbols.keys()
-        if single_symbol == False:
-            for sym in watchlist:
-                try:
-                    self.regime_sma(self.symbols[sym].df)
-                    self.regime_ema(self.symbols[sym].df)
-                    self.regime_ema(self.symbols[sym].df, st=20, lt=50)
-                    self.regime_ema(self.symbols[sym].df, st=10, lt=20)
-                    self.regime_macross(self.symbols[sym].df)
-                    self.regime_macross(self.symbols[sym].df, ma=[10,20,50])
-                    self.regime_triple_moving_average(self.symbols[sym].df)
-                except Exception as e:
-                    print(self.regime_ma_combo.__name__, sym, e, sep=': ')
-                    #TODO print(self.regime_ma_combo.__name__, '\n', sym, e) update error handling
-                    continue
+        if not single_symbol:
+            with ThreadPoolExecutor() as executor:
+                futures = {executor.submit(self._process_regime_ma_symbol, sym): sym for sym in watchlist}
+                for future in as_completed(futures):
+                    sym = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(self.regime_ma_combo.__name__, sym, e, sep=': ')
         else:
-            self.regime_sma(self.symbols[symbol].df)
-            self.regime_ema(self.symbols[symbol].df)
-            self.regime_ema(self.symbols[symbol].df, st=20, lt=50)
-            self.regime_ema(self.symbols[symbol].df, st=10, lt=20)
-            self.regime_macross(self.symbols[symbol].df)
-            self.regime_macross(self.symbols[symbol].df, ma=[10,20,50])
-            self.regime_triple_moving_average(self.symbols[symbol].df)            
+            self._process_regime_ma_symbol(symbol)             
 
     def floor_ceiling_combo(self, single_symbol=False, symbol=None, watchlist=None):
-        if watchlist == None:
+        # if watchlist == None:
+        #     watchlist = self.symbols.keys()
+        # if single_symbol == False:
+        #     for sym in watchlist:
+        #         try:
+        #             self.reset_variables()
+        #             self.lower_upper_OHLC(self.symbols[sym].df)
+        #             self.regime_args(self.symbols[sym].df)
+        #             self.historical_swings(self.symbols[sym].df)
+        #             self.regime_floor_ceiling(self.symbols[sym].df)
+        #         except Exception as e:
+        #             print(self.floor_ceiling_combo.__name__, sym, e, sep=': ')
+        #             #TODO print(sym, e) update error handling
+        #             continue
+        # else:
+        #     self.lower_upper_OHLC(self.symbols[sym].df)
+        #     self.regime_args(self.symbols[sym].df)
+        #     self.historical_swings(self.symbols[sym].df)
+        #     self.regime_floor_ceiling(self.symbols[sym].df)   
+        if watchlist is None:
             watchlist = self.symbols.keys()
-        if single_symbol == False:
-            for sym in watchlist:
-                try:
-                    self.reset_variables()
-                    self.lower_upper_OHLC(self.symbols[sym].df)
-                    self.regime_args(self.symbols[sym].df)
-                    self.historical_swings(self.symbols[sym].df)
-                    self.regime_floor_ceiling(self.symbols[sym].df)
-                except Exception as e:
-                    print(self.floor_ceiling_combo.__name__, sym, e, sep=': ')
-                    #TODO print(sym, e) update error handling
-                    continue
+        if not single_symbol:
+            with ThreadPoolExecutor() as executor:
+                futures = {executor.submit(self._process_floor_ceiling_symbol, sym): sym for sym in watchlist}
+                for future in as_completed(futures):
+                    sym = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(self.floor_ceiling_combo.__name__, sym, e, sep=': ')
         else:
-            self.lower_upper_OHLC(self.symbols[sym].df)
-            self.regime_args(self.symbols[sym].df)
-            self.historical_swings(self.symbols[sym].df)
-            self.regime_floor_ceiling(self.symbols[sym].df)     
+            self._process_floor_ceiling_symbol(symbol)
 
     #Does not require utility functions, can be used as is.
     def regime_breakout(self, df ,_h= 'High',_l= 'Low', window=252):

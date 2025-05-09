@@ -13,6 +13,7 @@ if __name__ == "__main__":
         from market_data.Symbol_Data import SymbolData
     from market_data.price_data_import import *
     from market_data.add_technicals import *
+    from market_data.add_technicals import _add_technicals_worker
     from market_data.watchlists_locations import make_watchlist, hadv, sp500, iwm, mdy, etfs
     from market_data.watchlist_filters import Technical_Score_Calculator
     import market_data.watchlist_filters as wf
@@ -22,22 +23,38 @@ if __name__ == "__main__":
     import market_data.support_functions as sf
     import market_data.fundamentals as fu
     from market_data.episodic_pivots import Episodic_Pivots
-    from market_data import operator, np
+    from market_data import operator, np, ProcessPoolExecutor, as_completed
     
+    #*Import price data.
     #hadv == high average dollar volume
     hadv = make_watchlist(hadv)
-    symbols = {k: SymbolData(k, v) for k,v in api_import(hadv).items()}
-    for symbol in tqdm(symbols, desc='Adding technicals'):        
-        run_pipeline(symbols[symbol].df)
+    data = api_import(hadv)
+    symbols = {k: SymbolData(k, v) for k,v in data.items()}
+    
+    #*Add technicals.
+    items = [(sd.symbol, sd.df) for sd in symbols.values()]
+    # Tune the number of workers and chunk size
+    num_workers = 8  # adjust as needed
+    chunksize = 7    # adjust chunk size as needed
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        for symbol, df in tqdm(
+            executor.map(_add_technicals_worker, items, chunksize=chunksize),
+            total=len(items),
+            desc="Adding technicals"
+        ):
+            # re‐attach the processed DataFrame back to SymbolData
+            symbols[symbol].df = df
+    
+    #TODO Add concurrency for regimes               
     r = rg.Regimes(symbols)
     r.run_all_combos()
-    #TODO Correct the errors in ma_pullback.
     wf.run_all(symbols)
 
     #Sector and industry indices
-    #TODO Correct the errors resulting in several printed symbols.
+    #TODO Add concurrency for sector and industry indices instantiation.
     sec = {k: SymbolData(k,v) for k,v in sf.create_index(symbols).items()}
     ind = {k: SymbolData(k,v) for k,v in sf.create_index(symbols, level='industry').items()}
+    #TODO Add concurrency for sector and industry indices technicals.
     for symbol in tqdm(sec, desc='Adding technicals'):
         run_pipeline(sec[symbol].df)
     for symbol in tqdm(ind, desc='Adding technicals'):
@@ -69,7 +86,16 @@ if __name__ == "__main__":
     r_etfs.run_all_combos()
     
     #Stock Stats
-    stock_stats = {sym: sf.condition_statistics(sym, symbols) for sym in tqdm(symbols, desc='Calculating Stock Stats')}
+    stock_stats = {}
+    symbols_list = list(symbols.keys())
+    dfs         = [symbols[sym].df for sym in symbols_list]
+    with ProcessPoolExecutor(max_workers=5) as executor:
+        for sym, stats in tqdm(
+            zip(symbols_list, executor.map(sf.condition_statistics, dfs, chunksize=1)),
+            total=len(symbols_list),
+            desc="Calculating Stock Stats"
+        ):
+            stock_stats[sym] = stats
     
     sector_close_vwap_count = {sector: [0, 0] for sector in sec}
     industry_close_vwap_count = {industry: [0, 0] for industry in ind}
@@ -103,10 +129,10 @@ if __name__ == "__main__":
     industry_close_vwap_ratio = {industry: (industry_close_vwap_count[industry][0]/industry_close_vwap_count[industry][1]) * 100 for industry in ind}
 
     #Episodic Pivots
-    #!There are errors in the durations functions.
     ep = Episodic_Pivots(symbols)
     ep.load_all()
     ep_curdur = {}
+    #TODO Add concurrency for to compute the following two loops in parallel?
     for sym in tqdm(ep.current_duration_dict, desc=f'Episodic Pivots Current Duration'):
         try:
             ep_curdur[sym] = [ep.current_duration_dict[sym], fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0]]

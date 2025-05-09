@@ -1,11 +1,14 @@
 from market_data.decorators import retry_on_read_timeout
 from functools import wraps
 from market_data.api_keys import polygon_api_key
-from market_data import pd, datetime, tqdm
+from market_data import pd, datetime, tqdm, limits, sleep_and_retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy import create_engine
 from polygon.stocks import StocksClient
 
+# at most 75 calls per 1 second window
+CALLS = 75
+PERIOD = 1
 
 @retry_on_read_timeout(max_retries=3)
 def api_import(
@@ -20,21 +23,50 @@ def api_import(
     else:
         data_dict = {k:v for k,v in transfer.items() if k in wl}
         wl = [sym for sym in wl if sym not in transfer]
-    for sym in tqdm(wl, desc='Importing Price Data'):
-        try:
-            ohlcv_raw = client.get_aggregate_bars(symbol=sym, from_date=from_date, to_date=to_date)
-            ohlcv_df = pd.DataFrame(ohlcv_raw['results'])
-            ohlcv_df['t'] = pd.to_datetime(ohlcv_df['t'], unit='ms')
-            ohlcv_df.index = ohlcv_df['t'].dt.tz_localize('UTC').dt.tz_convert('US/Eastern')
-            ohlcv_df.index = ohlcv_df.index.map(lambda x: x.strftime('%Y-%m-%d'))
-            ohlcv_df.index = pd.to_datetime(ohlcv_df.index)
-            ohlcv_df.index.name = 'Date'
-            ohlcv_df = ohlcv_df.rename(columns={'v': 'Volume', 'vw': 'VWAP', 'o': 'Open', 'c': 'Close', 'h': 'High', 'l': 'Low',})
-            ohlcv_df = ohlcv_df.drop(['t', 'n'], axis=1)
-            data_dict[sym] = ohlcv_df
-        except KeyError as ke:
-            if ke == 'results':
-                print(sym, ke, sep=': ')
+
+    @sleep_and_retry
+    @limits(calls=CALLS, period=PERIOD)
+    def _fetch_ohlcv(sym: str):
+        """Function to make api requests with rate limits."""
+        raw = client.get_aggregate_bars(symbol=sym, from_date=from_date, to_date=to_date)
+        return raw['results']
+
+    def _process(sym: str):
+        """Fetch + turn into a DataFrame."""
+        price_data = _fetch_ohlcv(sym)
+        df = pd.DataFrame(price_data)
+        # …your existing timestamp + rename logic here…
+        df['t'] = pd.to_datetime(df['t'], unit='ms')
+        df.index = (df['t']
+                    .dt.tz_localize('UTC')
+                    .dt.tz_convert('US/Eastern')
+                    .map(lambda x: x.strftime('%Y-%m-%d')))
+        df.index = pd.to_datetime(df.index)
+        df.index.name = 'Date'
+        df = df.rename(columns={
+            'v': 'Volume',
+            'vw': 'VWAP',
+            'o': 'Open',
+            'c': 'Close',
+            'h': 'High',
+            'l': 'Low',
+        }).drop(['t','n'], axis=1)
+        return sym, df
+    
+    
+    max_workers = min(20, len(wl))   #* Can be tuned.
+    with ThreadPoolExecutor(max_workers=max_workers) as exe:
+        futures = {exe.submit(_process, sym): sym for sym in wl}
+        for future in tqdm(as_completed(futures),
+                           total=len(futures),
+                           desc='Importing Price Data'):
+            sym = futures[future]
+            try:
+                sym, df = future.result()
+                data_dict[sym] = df
+            except Exception as e:
+                print(f"{sym}: {e}")
+
     return data_dict
 
 

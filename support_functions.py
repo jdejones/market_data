@@ -131,38 +131,38 @@ def create_index(symbols, level='sector'):
     return final_dict
 
 
-def condition_statistics(sym:str, symbols:dict, lookback:int=2000):
+def condition_statistics(df: pd.DataFrame, lookback:int=2000):
     #Set conditions
     conditions = {
-    'dma_5over10': (symbols[sym].df['5DMA'][-lookback:] > symbols[sym].df['10DMA'][-lookback:]) & (symbols[sym].df['5DMA'][-lookback:].shift(1) < symbols[sym].df['10DMA'][-lookback:].shift(1)),
-    'dma_5over20': (symbols[sym].df['5DMA'][-lookback:] > symbols[sym].df['20DMA'][-lookback:]) & (symbols[sym].df['5DMA'][-lookback:].shift(1) < symbols[sym].df['20DMA'][-lookback:].shift(1)),
-    'dma_10over20': (symbols[sym].df['10DMA'][-lookback:] > symbols[sym].df['20DMA'][-lookback:]) & (symbols[sym].df['10DMA'][-lookback:].shift(1) < symbols[sym].df['20DMA'][-lookback:].shift(1)),
-    'dma_20over50': (symbols[sym].df['20DMA'][-lookback:] > symbols[sym].df['50DMA'][-lookback:]) & (symbols[sym].df['20DMA'][-lookback:].shift(1) < symbols[sym].df['50DMA'][-lookback:].shift(1)),
-    'dma_50over200': (symbols[sym].df['50DMA'][-lookback:] > symbols[sym].df['200DMA'][-lookback:]) & (symbols[sym].df['50DMA'][-lookback:].shift(1) < symbols[sym].df['200DMA'][-lookback:].shift(1)),
-    'atr_over_signal': (symbols[sym].df['ATR_14'][-lookback:] > symbols[sym].df['ATR_14_signal'][-lookback:]) & (symbols[sym].df['ATR_14'][-lookback:].shift(1) < symbols[sym].df['ATR_14_signal'][-lookback:].shift(1)),
-    'di_over_di': (symbols[sym].df['+DI'][-lookback:] > symbols[sym].df['-DI'][-lookback:]) & (symbols[sym].df['+DI'][-lookback:].shift(1) < symbols[sym].df['-DI'][-lookback:].shift(1)),
-    'rsi_over_signal': (symbols[sym].df['RSI_14'][-lookback:] > symbols[sym].df['RSI_14_signal'][-lookback:]) & (symbols[sym].df['RSI_14'][-lookback:].shift(1) < symbols[sym].df['RSI_14_signal'][-lookback:].shift(1)),
-    'stoch_over_signal': (symbols[sym].df['%k'][-lookback:] > symbols[sym].df['%d'][-lookback:]) & (symbols[sym].df['%k'][-lookback:].shift(1) < symbols[sym].df['%d'][-lookback:].shift(1)),
-    'adx_over_signal': (symbols[sym].df['ADX'][-lookback:] > symbols[sym].df['ADX_signal'][-lookback:]) & (symbols[sym].df['ADX'][-lookback:].shift(1) < symbols[sym].df['ADX_signal'][-lookback:].shift(1)),
-    'close_overuband': (symbols[sym].df['Close'][-lookback:] > symbols[sym].df['u_band'][-lookback:]) & (symbols[sym].df['Close'][-lookback:].shift(1) < symbols[sym].df['u_band'][-lookback:].shift(1)),
-    'close_underlband': (symbols[sym].df['Close'][-lookback:] > symbols[sym].df['l_band'][-lookback:]) & (symbols[sym].df['Close'][-lookback:].shift(1) < symbols[sym].df['l_band'][-lookback:].shift(1))
+    'dma_5over10': (df['5DMA'][-lookback:] > df['10DMA'][-lookback:]) & (df['5DMA'][-lookback:].shift(1) < df['10DMA'][-lookback:].shift(1)),
+    'dma_5over20': (df['5DMA'][-lookback:] > df['20DMA'][-lookback:]) & (df['5DMA'][-lookback:].shift(1) < df['20DMA'][-lookback:].shift(1)),
+    'dma_10over20': (df['10DMA'][-lookback:] > df['20DMA'][-lookback:]) & (df['10DMA'][-lookback:].shift(1) < df['20DMA'][-lookback:].shift(1)),
+    'dma_20over50': (df['20DMA'][-lookback:] > df['50DMA'][-lookback:]) & (df['20DMA'][-lookback:].shift(1) < df['50DMA'][-lookback:].shift(1)),
+    'dma_50over200': (df['50DMA'][-lookback:] > df['200DMA'][-lookback:]) & (df['50DMA'][-lookback:].shift(1) < df['200DMA'][-lookback:].shift(1)),
+    'atr_over_signal': (df['ATR_14'][-lookback:] > df['ATR_14_signal'][-lookback:]) & (df['ATR_14'][-lookback:].shift(1) < df['ATR_14_signal'][-lookback:].shift(1)),
+    'di_over_di': (df['+DI'][-lookback:] > df['-DI'][-lookback:]) & (df['+DI'][-lookback:].shift(1) < df['-DI'][-lookback:].shift(1)),
+    'rsi_over_signal': (df['RSI_14'][-lookback:] > df['RSI_14_signal'][-lookback:]) & (df['RSI_14'][-lookback:].shift(1) < df['RSI_14_signal'][-lookback:].shift(1)),
+    'stoch_over_signal': (df['%k'][-lookback:] > df['%d'][-lookback:]) & (df['%k'][-lookback:].shift(1) < df['%d'][-lookback:].shift(1)),
+    'adx_over_signal': (df['ADX'][-lookback:] > df['ADX_signal'][-lookback:]) & (df['ADX'][-lookback:].shift(1) < df['ADX_signal'][-lookback:].shift(1)),
+    'close_overuband': (df['Close'][-lookback:] > df['u_band'][-lookback:]) & (df['Close'][-lookback:].shift(1) < df['u_band'][-lookback:].shift(1)),
+    'close_underlband': (df['Close'][-lookback:] > df['l_band'][-lookback:]) & (df['Close'][-lookback:].shift(1) < df['l_band'][-lookback:].shift(1))
     }#TODO Need to add MACD indicators
     for name, condition in conditions.items():
-        symbols[sym].df[name] = np.nan
-        symbols[sym].df[name][-lookback:].loc[condition] = 1
+        df[name] = np.nan
+        df[name][-lookback:].loc[condition] = 1
 
     #n signals
-    num_signals = {signal: len(symbols[sym].df.loc[pd.notnull(symbols[sym].df[signal])]) for signal in conditions}
+    num_signals = {signal: len(df.loc[pd.notnull(df[signal])]) for signal in conditions}
 
 
     #Returns over time
     returns = {}
     for condition in conditions:
         returns[condition] = {}
-        indicies = symbols[sym].df[condition].loc[pd.notnull(symbols[sym].df[condition])].index[-lookback:]#Type Index
+        indicies = df[condition].loc[pd.notnull(df[condition])].index[-lookback:]#Type Index
         for idx in indicies:
             index = indicies.get_loc(idx)
-            df = symbols[sym].df[-lookback:]
+            df = df[-lookback:]
             close = df.Close.loc[idx]
             if (index + 5 < len(indicies)) and (df.index.get_loc(idx) + 20):# or (len(indicies) <= 5):
                 close_plus5 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 5]].max()

@@ -5,6 +5,7 @@ Code for processing episodic pivots.
 from market_data import datetime, np, tqdm, pd
 import market_data.seeking_alpha as sa
 from watchlists_locations import make_watchlist, episodic_pivots
+from market_data import ThreadPoolExecutor, as_completed
 
 class Episodic_Pivots:
     def __init__(self, symbols: dict) -> None:
@@ -38,24 +39,49 @@ class Episodic_Pivots:
         Args:
             symbol (str): the stock to find episodic pivots for.
         """
+        df = self.symbols[sym].df
         #The first date of each found EP
         self.ep_dict[sym] = {}
-        ep_initialized = [str(day).split(' ')[0] for day in self.symbols[sym].df.loc[self.symbols[sym].df.Gap > 7.9].index]
+        ep_initialized = [str(day).split(' ')[0] for day in df.loc[df.Gap > 7.9].index]
         #Days when the Closing price is greater than the 20DMA
 
-        self.symbols[sym].df['c_over_under_20DMA'] = np.nan
-        self.symbols[sym].df['c_over_under_20DMA'].loc[(self.symbols[sym].df['Close'].shift(1) > self.symbols[sym].df['20DMA'].shift(1)) & (self.symbols[sym].df['Close'] < self.symbols[sym].df['20DMA'])] = 1
+        df['c_over_under_20DMA'] = np.nan
+        df['c_over_under_20DMA'].loc[(df['Close'].shift(1) > df['20DMA'].shift(1)) & (df['Close'] < df['20DMA'])] = 1
 
         #These for loops may not account for episodic pivots that occur while a previous episodic pivot is still true.
-        dates = self.symbols[sym].df['c_over_under_20DMA'].loc[pd.notnull(self.symbols[sym].df['c_over_under_20DMA'])].index
-        self.symbols[sym].df.ep = np.nan
-        for date in ep_initialized:
+        dates = df['c_over_under_20DMA'].loc[pd.notnull(df['c_over_under_20DMA'])].index
+        df['ep'] = np.nan
+        # for date in ep_initialized:
+        #     try:
+        #         self.symbols[sym].df.loc[date: [day for day in dates if pd.to_datetime(date) < day][0], 'ep'] = 1
+        #         self.ep_dict[sym].update({date: self.symbols[sym].df.loc[date: [day for day in dates if pd.to_datetime(date) < day][0]]})
+        #     except IndexError:
+        #         self.symbols[sym].df.loc[date:, 'ep'] = 1
+        #         self.ep_dict[sym].update({date: self.symbols[sym].df.loc[date:]})
+        local_ep: dict[str, pd.DataFrame] = {}
+
+        def work_one(date_str: str):
+            # find the first date after date_str in `dates`
             try:
-                self.symbols[sym].df.loc[date: [day for day in dates if pd.to_datetime(date) < day][0], 'ep'] = 1
-                self.ep_dict[sym].update({date: self.symbols[sym].df.loc[date: [day for day in dates if pd.to_datetime(date) < day][0]]})
-            except IndexError:
-                self.symbols[sym].df.loc[date:, 'ep'] = 1
-                self.ep_dict[sym].update({date: self.symbols[sym].df.loc[date:]})
+                next_day = next(day for day in dates
+                                if pd.to_datetime(date_str) < day)
+                segment = df.loc[date_str:next_day]
+            except StopIteration:
+                segment = df.loc[date_str:]
+            return date_str, segment
+
+        
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(work_one, dt): dt
+                       for dt in ep_initialized}
+            for future in as_completed(futures):
+                date_str, segment = future.result()
+                # mark the ep‐column in the slice to 1
+                df.loc[segment.index, 'ep'] = 1
+                # stash the slice
+                local_ep[date_str] = segment
+
+        self.ep_dict[sym] = local_ep        
 
     def drawdown(self):
         """Identifies the amount of drawdown from the open in each episodic pivot and adds it to self.drawdown_dict
@@ -113,7 +139,7 @@ class Episodic_Pivots:
     def current_duration(self):
         for sym in self.episodic_pivots_results:
             try:
-                self.current_duration_dict[sym] = self.duration_dict[sym][list(self.duration_dict[sym].keys())[-1]]
+                self.current_duration_dict[sym] = self.duration_dict[sym][sorted(self.duration_dict[sym].keys())[-1]]
             except IndexError:
                 if len(self.duration_dict[sym].keys()) == 0:
                     continue
@@ -131,18 +157,18 @@ class Episodic_Pivots:
             try:
                 if risk_level == 'low':
                     reward = float(sa.analyst_price_targets_dict[sym]['estimates'][sa.meta_data[sym]['data']['id']]['target_price']['0'][0]['dataitemvalue']) - self.symbols[sym].df.Close.iloc[-1]
-                    risk = self.symbols[sym].df.Close.iloc[-1] - self.ep_dict[sym][list(self.ep_dict[sym])[-1]].Low.min()
+                    risk = self.symbols[sym].df.Close.iloc[-1] - self.ep_dict[sym][sorted(self.ep_dict[sym])[-1]].Low.min()
                     self.reward_risk_dict[sym] = round(reward / risk, 2)
                 elif risk_level == '20DMA':
                     reward = float(sa.analyst_price_targets_dict[sym]['estimates'][sa.meta_data[sym]['data']['id']]['target_price']['0'][0]['dataitemvalue']) - self.symbols[sym].df.Close.iloc[-1]
                     risk = self.symbols[sym].df.Close.iloc[-1] - self.symbols[sym].df['20DMA'].iloc[-1]
                     self.reward_risk_dict[sym] = round(reward / risk, 2)
                 elif risk_level == 'auto':
-                    low = self.ep_dict[sym][list(self.ep_dict[sym])[-1]].Low.min()
+                    low = self.ep_dict[sym][sorted(self.ep_dict[sym])[-1]].Low.min()
                     DMA20 = self.symbols[sym].df['20DMA'].iloc[-1]
                     if low > DMA20:
                         reward = float(sa.analyst_price_targets_dict[sym]['estimates'][sa.meta_data[sym]['data']['id']]['target_price']['0'][0]['dataitemvalue']) - self.symbols[sym].df.Close.iloc[-1]
-                        risk = self.symbols[sym].df.Close.iloc[-1] - self.ep_dict[sym][list(self.ep_dict[sym])[-1]].Low.min()
+                        risk = self.symbols[sym].df.Close.iloc[-1] - self.ep_dict[sym][sorted(self.ep_dict[sym])[-1]].Low.min()
                         self.reward_risk_dict[sym] = round(reward / risk, 2)
                     elif DMA20 > low:
                         reward = float(sa.analyst_price_targets_dict[sym]['estimates'][sa.meta_data[sym]['data']['id']]['target_price']['0'][0]['dataitemvalue']) - self.symbols[sym].df.Close.iloc[-1]
