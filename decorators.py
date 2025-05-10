@@ -1,5 +1,6 @@
 from market_data import requests
 from functools import wraps
+from market_data import time
 
 def retry_on_read_timeout(max_retries=3):
     """
@@ -20,5 +21,33 @@ def retry_on_read_timeout(max_retries=3):
                     if attempts > max_retries:
                         print("Max retries reached. Raising the exception.")
                         raise
+        return wrapper
+    return decorator
+
+
+def retry_on_missing_results(max_retries: int = 3, backoff: float = 1.0):
+    """
+    Decorator to retry a function if it raises KeyError('results').
+    max_retries: total attempts (including the first).
+    backoff: seconds to sleep between retries.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except KeyError as e:
+                    # only retry on missing 'results' key
+                    if e.args and e.args[0] == 'results':
+                        last_exc = e
+                        if attempt < max_retries:
+                            time.sleep(backoff)
+                            continue
+                    # not a 'results' KeyError or out of retries: re-raise
+                    raise
+            # if somehow we exit loop without returning, re-raise last exception
+            raise last_exc
         return wrapper
     return decorator

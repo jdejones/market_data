@@ -1,4 +1,4 @@
-from market_data.decorators import retry_on_read_timeout
+from market_data.decorators import retry_on_read_timeout, retry_on_missing_results
 from functools import wraps
 from market_data.api_keys import polygon_api_key
 from market_data import pd, datetime, tqdm, limits, sleep_and_retry, requests
@@ -81,6 +81,7 @@ def intraday_import(wl: list[str], from_date: int|str|datetime.datetime = 0,
     client = StocksClient(api_key=polygon_api_key)
     data_dict = {}
     
+    # @retry_on_missing_results(max_retries=3, backoff=1.0)
     @sleep_and_retry
     @limits(calls=CALLS, period=PERIOD)
     def _fetch_ohlcv(sym: str, offset_dates: list[int|str|datetime.datetime,int|str|datetime.datetime] = None):
@@ -98,9 +99,9 @@ def intraday_import(wl: list[str], from_date: int|str|datetime.datetime = 0,
             while raw.get('next_url'):
                 next_url = raw['next_url']
                 url = next_url if next_url.startswith('http') else f'https://api.polygon.io{next_url}'
-                resp = requests.get(url, params={'apiKey': polygon_api_key})                
-                raw = resp.json()
-                all_results.extend(raw['results'])
+                resp = requests.get(url, params={'apiKey': polygon_api_key}).json()            
+                # raw = resp.json()
+                all_results.extend(resp['results'])
             return all_results
         else:
             return raw['results']

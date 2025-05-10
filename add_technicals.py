@@ -32,6 +32,8 @@ def AVWAP_by_date(df, date):
     #df['VWAP']=(df.iloc[-days:, df.columns.get_level_values(0)=='Sum CxV']/df.iloc[-days:, df.columns.get_level_values(0)=='Volume'].cumsum()).fillna(0)
     df['VWAP %s' % date]=df['Sum CxV']/df['Sum Volume']
     
+    return df
+    
 def AVWAP_rolling(df, days):
     df['CxV']=df['Close']*df['Volume']
     #df['CxV']= (df.iloc[-days:, df.columns.get_level_values(0)=='Volume'].fillna(0)*df.iloc[-days:, df.columns.get_level_values(0)=='Close']).fillna(0, inplace=True)
@@ -39,6 +41,8 @@ def AVWAP_rolling(df, days):
     df['Sum Volume'] = df.iloc[:, df.columns.get_level_values(0)=='Volume'].rolling(days).sum()
     #df['VWAP']=(df.iloc[-days:, df.columns.get_level_values(0)=='Sum CxV']/df.iloc[-days:, df.columns.get_level_values(0)=='Volume'].cumsum()).fillna(0)
     df['VWAP_%s' % days]=df['Sum CxV']/df['Sum Volume']
+    
+    return df
 
 
 def ATR(df, period, ohlc=['Open', 'High', 'Low', 'Close']):
@@ -184,6 +188,8 @@ def MACD(df, base, short_period, long_period, ma_type='simple'):
 def relative_macd(df, base):
     df[f'relative_macd_{base}'] = df[base] / df['ATR_14']
     
+    return df
+    
 def add_avwap_by_offset(df, offset: int|str):
     # if len(df) > offset:
     if isinstance(offset, int):
@@ -204,33 +210,49 @@ def atrs_from(df, base: str|int):
     elif isinstance(base, int):#I added this to try and handle the AVWAPs in the second pipeline.append().
         date_idx = df.index[-base]
         df[f'ATRs_from_AVWAP_{date_idx}'] = (df['Close'] - df[f'VWAP {date_idx}']) / df['ATR_14']
+    
+    return df
 
 def diff_from_signal(df, base, signal):
     df[f'{base}_diff'] = df[base] - df[signal]
+    return df
 
 def gap(df, base):
     df['Gap'] = (((df['Open'] - df['Close'].shift(1)) / df['Close'].shift(1)) * 100)
+    
+    return df
 
 def RVol(df, base):
     df['RVol'] = (df['Volume'] / df['AvgV20'])
+    
+    return df
 
 def dollar_volume(df, base):
     df['Dollar_Volume'] = df['Volume'] * df['Close']
+    
+    return df
 
 def percent_change(df, base):
     df['Percent_Change'] = ((df['Close'] - df['Close'].shift(1)) / df['Close'].shift(1)) * 100
+    
+    return df
 
 def atrs_traded_ex_gap(df):
     df['ATRs Traded_ex_gap'] = (df['Close'] - df['Open'].shift(1)) / df['ATR_14']
+    
+    return df
 
 def relative_atr(df):
     df['Relative_ATR'] = (df['ATR_14'] / df['Close']) * 100
+    
+    return df
 
 def atrs_traded(df):
     df['H-L'] = df['High'] - df['Low']
     df['H-Cp'] = abs(df['High'] - df['Close'].shift(1))
     df['L-Cp'] = abs(df['Low'] - df['Close'].shift(1)) 
     df['ATRs_Traded'] = df[['H-L', 'H-Cp', 'L-Cp']].max(axis=1) / df['ATR_14']
+    return df
 
 def bollinger_bands(df, base: pd.Series, window: int=20, std: int=2, rbd: bool=True, ema: bool=False):
     if ema:
@@ -242,9 +264,64 @@ def bollinger_bands(df, base: pd.Series, window: int=20, std: int=2, rbd: bool=T
     df[f'l_band'] = ma_series - (std * rolling_std)
     if rbd == True:
         df['relative_band_dist'] = ((df['u_band'] - df['l_band']) / df['ATR_14'])
+    return df
 
 def relative_diff_from_signal(df, base, target):
     df[f'relative_{target}_diff'] = df[base] / df['ATR_14']
+    return df
+
+# Intraday groupby functions
+def VWAP_(group):
+    group = group.copy()
+    group['DxV'] = group['Volume'] * group['Close']
+    group['Sumb DxV'] = group['DxV'].cumsum()
+    group['VWAP'] = group['Sumb DxV'] / group['Volume'].cumsum()
+    
+    return group
+
+def vwap_bands(group):
+    group = group.copy()
+    ma_series = group['VWAP'].ewm(span=9, adjust=False).mean()
+    rolling_std = group['VWAP'].rolling(window=9).std()
+    group['vwap_uband_1std_byday'] = ma_series + rolling_std
+    group['vwap_uband_2std_byday'] = ma_series + (2 * rolling_std)
+    group['vwap_uband_3std_byday'] = ma_series + (3 * rolling_std)
+    
+    group['vwap_lband_1std_byday'] = ma_series - rolling_std
+    group['vwap_lband_2std_byday'] = ma_series - (2 * rolling_std)
+    group['vwap_lband_3std_byday'] = ma_series - (3 * rolling_std)
+    
+    return group
+
+def byday_emas(group):
+    group = group.copy()
+    group['close_5ema_byday'] = group['Close'].ewm(span=5, adjust=False).mean()
+    group['close_9ema_byday'] = group['Close'].ewm(span=9, adjust=False).mean()
+    group['close_20ema_byday'] = group['Close'].ewm(span=20, adjust=False).mean()
+    
+    group['high_5ema_byday'] = group['High'].ewm(span=5, adjust=False).mean()
+    group['high_9ema_byday'] = group['High'].ewm(span=9, adjust=False).mean()
+    group['high_20ema_byday'] = group['High'].ewm(span=20, adjust=False).mean()
+    
+    group['low_5ema_byday'] = group['Low'].ewm(span=5, adjust=False).mean()
+    group['low_9ema_byday'] = group['Low'].ewm(span=9, adjust=False).mean()
+    group['low_20ema_byday'] = group['Low'].ewm(span=20, adjust=False).mean()
+    
+    return group
+
+def byday_bands(group):
+    group = group.copy()
+    ma_series = group['Close'].ewm(span=9, adjust=False).mean()
+    rolling_std = group['Close'].rolling(window=9).std()
+    group['close_uband_1std_byday'] = ma_series + rolling_std
+    group['close_uband_2std_byday'] = ma_series + (2 * rolling_std)
+    group['close_uband_3std_byday'] = ma_series + (3 * rolling_std)
+    
+    group['close_lband_1std_byday'] = ma_series - rolling_std
+    group['close_lband_2std_byday'] = ma_series - (2 * rolling_std)
+    group['close_lband_3std_byday'] = ma_series - (3 * rolling_std)
+
+    return group
 
 
 @dataclass(slots=True)
@@ -342,26 +419,46 @@ intraday_pipeline = [
     Step(EMA, kwargs={'base': 'eMACD920', 'target': 'eMACD920_signal', 'period': 9}, needs=['eMACD920'], adds=['eMACD920_signal']),
     Step(diff_from_signal, kwargs={'base': 'eMACD920', 'signal': 'eMACD920_signal'}, needs=['eMACD920', 'eMACD920_signal'], adds=['eMACD920_diff']),
     Step(relative_diff_from_signal, kwargs={'base': 'eMACD920_diff', 'target':'macd'}, needs=['eMACD920_diff', 'ATR_14'], adds=['relative_macd920_diff']),
+    Step(VWAP_, needs=['Close', 'Volume'], adds=['VWAP', 'DxV', 'Sumb DxV']),
+    Step(vwap_bands, needs=['VWAP'], adds=['vwap_uband_1std_byday', 'vwap_uband_2std_byday', 'vwap_uband_3std_byday', 'vwap_lband_1std_byday', 'vwap_lband_2std_byday', 'vwap_lband_3std_byday']),
+    Step(byday_emas, needs=['Close', 'High', 'Low'], adds=['close_5ema_byday', 'close_9ema_byday', 'close_20ema_byday', 'high_5ema_byday', 'high_9ema_byday', 'high_20ema_byday', 'low_5ema_byday', 'low_9ema_byday', 'low_20ema_byday']),
+    Step(byday_bands, needs=['Close'], adds=['close_uband_1std_byday', 'close_uband_2std_byday', 'close_uband_3std_byday', 'close_lband_1std_byday', 'close_lband_2std_byday', 'close_lband_3std_byday']),
 ]
+
 
 
 def run_pipeline(df: pd.DataFrame, steps: List[Step] = pipeline) -> pd.DataFrame:
     #*I commented out some original code to modify the dataframe in place.
     #*This should allow for easier access to processed dataframes.
     # out = df.copy(deep=False)   # shallow copy keeps memory down; we mutate in‑place
+    # for step in steps:
+    #     # out = step(df)         # dataclass is callable
+    #     step(df)
+    # # return out
+    
+    
+    out = df
     for step in steps:
-        # out = step(df)         # dataclass is callable
-        step(df)
-    # return out
+        out = step(out)
+    return out
 
 def _add_technicals_worker(item: tuple[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
+    # symbol, df = item
+    # run_pipeline(df)
+    # return symbol, df
+    
+    
     symbol, df = item
-    run_pipeline(df)
+    df = run_pipeline(df)
     return symbol, df
 
 def _add_intraday_technicals_worker(item: tuple[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
-    symbol, df = item
-    run_pipeline(df, steps=intraday_pipeline)
-    return symbol, df
+    # symbol, df = item
+    # run_pipeline(df, steps=intraday_pipeline)
+    # return symbol, df
 
+    
+    symbol, df = item
+    df = run_pipeline(df, steps=intraday_pipeline)
+    return symbol, df
 

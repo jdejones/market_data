@@ -2,7 +2,7 @@
 Code for processing episodic pivots.
 """
 
-from market_data import datetime, np, tqdm, pd
+from market_data import datetime, np, tqdm, pd, json
 import market_data.seeking_alpha as sa
 from watchlists_locations import make_watchlist, episodic_pivots
 from market_data import ThreadPoolExecutor, as_completed
@@ -31,6 +31,10 @@ class Episodic_Pivots:
         self.days_til_new_high()
         self.current_duration()
         self.risk_reward(risk_level='auto')
+        # The following is intended to be used with the intraday_study.py script.
+        offset_dates = {sym: [sorted(self.ep_dict[sym].keys())[-1], datetime.datetime.today().date()] for sym in make_watchlist(episodic_pivots)}
+        with open(r"E:\Market Research\Dataset\current_ep_start_end_dates.txt", "w") as f:
+            f.write(json.dumps(offset_dates, indent=4, sort_keys=True, default=str))
 
     def episodic_pivot_finder(self, sym):
         """Identifies episodic pivots. Assigns a value of 1 for days the symbol passes the episodic pivot filter. Adds the symbol, the date the ep began and the dataframe

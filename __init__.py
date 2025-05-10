@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import datetime
+import time
 import yfinance as yf
 import matplotlib.pyplot as plt
 from tqdm import tqdm
