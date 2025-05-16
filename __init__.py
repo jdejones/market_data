@@ -1,4 +1,5 @@
 #Third-party imports
+from dataclasses import dataclass
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,6 +7,8 @@ import json
 import os
 import sys
 import datetime
+from datetime import date, timedelta
+from typing import List
 import time
 import yfinance as yf
 import matplotlib.pyplot as plt
@@ -15,6 +18,7 @@ import re
 import operator
 from ratelimit import limits, sleep_and_retry
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from typing import Tuple
 
 #Local imports
 from . import fundamentals as fu
@@ -26,3 +30,4 @@ from . import watchlists_locations as wl
 from . import watchlist_filters as wf
 from . import regimes as rg
 from . import fundamentals as fu
+from . import stats_objects as so

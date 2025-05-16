@@ -399,7 +399,7 @@ pipeline.append(
     Step(add_avwap_by_offset, kwargs={'offset': datetime.datetime(datetime.datetime.today().year, 1, 1).strftime('%Y-%m-%d')}, needs=['Close', 'Volume'], adds=[f'ATRs_from_VWAP_{datetime.datetime(datetime.datetime.today().year, 1, 1).strftime('%Y-%m-%d')}'])
 )
 
-#* Does not distinguish between days. I could add a pipline that will.
+
 intraday_pipeline = [
     Step(EMA, kwargs={'base': 'Close', 'target': 'ema5', 'period': 5}, needs=['Close'], adds=['ema5']),
     Step(EMA, kwargs={'base': 'Close', 'target': 'ema9', 'period': 9}, needs=['Close'], adds=['ema9']),

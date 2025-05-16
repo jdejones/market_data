@@ -68,19 +68,19 @@ if __name__ == "__main__":
     mdy = {k: SymbolData(k,v) for k,v in api_import(make_watchlist(mdy), transfer={k:v.df for k,v in symbols.items()}).items()}
     iwm = {k: SymbolData(k,v) for k,v in api_import(make_watchlist(iwm), transfer={k:v.df for k,v in symbols.items()}).items()}
 
-    for sym in tqdm(sp500, desc='Adding technicals'):
+    for sym in tqdm(sp500, desc='Adding technicals to SPY stocks'):
         if len(sp500[sym].df.columns) <= 10:
             run_pipeline(sp500[sym].df)
-    for sym in tqdm(mdy, desc='Adding technicals'):
+    for sym in tqdm(mdy, desc='Adding technicals to MDY stocks'):
         if len(mdy[sym].df.columns) <= 10:
             run_pipeline(mdy[sym].df)
-    for sym in tqdm(iwm, desc='Adding technicals'):
+    for sym in tqdm(iwm, desc='Adding technicals to IWM stocks'):
         if len(iwm[sym].df.columns) <= 10:
             run_pipeline(iwm[sym].df)            
             
     #All ETFs
     etfs = {k: SymbolData(k,v) for k,v in api_import(make_watchlist(etfs)).items()}
-    for sym in tqdm(etfs, desc='Adding technicals'):
+    for sym in tqdm(etfs, desc='Adding technicals to ETFs'):
         run_pipeline(etfs[sym].df)
     r_etfs = rg.Regimes(etfs)
     r_etfs.run_all_combos()

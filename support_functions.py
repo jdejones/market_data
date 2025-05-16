@@ -148,8 +148,9 @@ def condition_statistics(df: pd.DataFrame, lookback:int=2000):
     'close_underlband': (df['Close'][-lookback:] > df['l_band'][-lookback:]) & (df['Close'][-lookback:].shift(1) < df['l_band'][-lookback:].shift(1))
     }#TODO Need to add MACD indicators
     for name, condition in conditions.items():
-        df[name] = np.nan
-        df[name][-lookback:].loc[condition] = 1
+        #* I've updated this to comply with changes in pandas 3.0. It seems to be working.
+        df = df[-lookback:]
+        df.loc[condition, name] = 1
 
     #n signals
     num_signals = {signal: len(df.loc[pd.notnull(df[signal])]) for signal in conditions}
@@ -209,7 +210,7 @@ def condition_statistics(df: pd.DataFrame, lookback:int=2000):
         mean_returns[condition] = {}
         for days in returns[condition]:
             mean_returns[condition][days] = sum([val for val in returns[condition][days]]) / len([val for val in returns[condition][days]])
-    return {'num_signals': num_signals, 'returns': returns, 'mean_returns': mean_returns}
+    return {'num_signals': num_signals, 'returns': returns, 'mean_returns': mean_returns, 'frame': df[list(conditions.keys())]}
 
 def perf_since_earnings(symbols, earnings_season_start=None, sort=True):
     if earnings_season_start == None:

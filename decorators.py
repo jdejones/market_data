@@ -51,3 +51,41 @@ def retry_on_missing_results(max_retries: int = 3, backoff: float = 1.0):
             raise last_exc
         return wrapper
     return decorator
+
+
+def retry_on_empty_or_missing_results(max_retries: int = 3, backoff: float = 1.0):
+    """
+    Retry the decorated function if:
+      1) it raises KeyError('results')
+      2) it returns an empty list
+    max_retries: total attempts (including the first).
+    backoff: seconds to sleep between attempts.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    result = func(*args, **kwargs)
+                except KeyError as e:
+                    # only retry on missing 'results'
+                    if e.args and e.args[0] == 'results':
+                        last_exc = e
+                        if attempt < max_retries:
+                            time.sleep(backoff)
+                            continue
+                    # other KeyErrors or out of retries: re-raise
+                    raise
+                else:
+                    # if the function returned a list, retry on empty
+                    if isinstance(result, list) and not result:
+                        last_exc = RuntimeError("Empty results list")
+                        if attempt < max_retries:
+                            time.sleep(backoff)
+                            continue
+                    return result
+            # exhausted all retries
+            raise last_exc
+        return wrapper
+    return decorator

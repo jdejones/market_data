@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from market_data import dataclass
 # import pandas as pd
 from market_data import pd
 
