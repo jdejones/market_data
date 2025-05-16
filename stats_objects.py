@@ -27,6 +27,7 @@ class IntradaySignalProcessing:
     intraday_frames: dict[str, list[pd.DataFrame]] = None
     consecutive_signals: bool = False
     intraday_signals: dict[str, list[pd.DataFrame]] = None
+    intraday_returns: dict[str, pd.DataFrame] = None
     
     def __post_init__(self):
         if isinstance(self.interday_signals, pd.DataFrame):
@@ -299,3 +300,76 @@ class IntradaySignalProcessing:
         self.intraday_signals = result
 
 
+    def measure_intraday_returns(intraday_signals):
+        """Compute return metrics for each symbol and each signal condition."""
+        results = {}
+        def process_symbol(sym):
+            daily_df = self.symbols[sym].df.copy()
+            # re‐index daily data by date for easy lookup
+            daily_by_date = daily_df.copy()
+            daily_by_date.index = daily_by_date.index.date
+            # discover all signal names for this symbol
+            conds = set()
+            for df in intraday_signals[sym]:
+                conds.update([c for c in df.columns if df[c].eq(1).any()])
+            # prepare storage
+            metrics = {}
+            for cond in conds:
+                metrics[cond] = {
+                    'count': 0,
+                    'max_within': [],
+                    'min_within': [],
+                    'ret_close0': []
+                }
+                for k in range(1, 6):
+                    metrics[cond][f'ret_high_{k}d'] = []
+                    metrics[cond][f'ret_low_{k}d'] = []
+                    metrics[cond][f'ret_close_{k}d'] = []
+            # loop through each intraday frame and collect returns
+            for df in intraday_signals[sym]:
+                # group by calendar day
+                for day, intraday in df.groupby(df.index.date):
+                    for cond in conds:
+                        times = intraday.index[intraday[cond] == 1]
+                        for t in times:
+                            price0 = intraday.at[t, 'Close']
+                            # within‐day slice
+                            sub = intraday.loc[t:]
+                            metrics[cond]['count'] += 1
+                            metrics[cond]['max_within'].append((sub['High'].max()  - price0) / price0 * 100)
+                            metrics[cond]['min_within'].append((sub['Low'].min()   - price0) / price0 * 100)
+                            metrics[cond]['ret_close0'].append((sub['Close'].iloc[-1] - price0) / price0 * 100)
+                            # next 1–5 business days
+                            d = day
+                            for k in range(1, 6):
+                                d = type(self).next_business_day(d)
+                                if d in daily_by_date.index:
+                                    row = daily_by_date.loc[d]
+                                    metrics[cond][f'ret_high_{k}d'].append((row['High']  - price0) / price0 * 100)
+                                    metrics[cond][f'ret_low_{k}d'].append((row['Low']   - price0) / price0 * 100)
+                                    metrics[cond][f'ret_close_{k}d'].append((row['Close'] - price0) / price0 * 100)
+            # aggregate into a DataFrame
+            df_ret = pd.DataFrame(index=sorted(conds))
+            for cond, vals in metrics.items():
+                df_ret.at[cond, 'count']            = vals['count']
+                df_ret.at[cond, 'mean_max_within']  = (sum(vals['max_within'])  / len(vals['max_within']))  if vals['max_within']  else float('nan')
+                df_ret.at[cond, 'mean_min_within']  = (sum(vals['min_within'])  / len(vals['min_within']))  if vals['min_within']  else float('nan')
+                df_ret.at[cond, 'mean_ret_close0']  = (sum(vals['ret_close0'])  / len(vals['ret_close0']))  if vals['ret_close0']  else float('nan')
+                for k in range(1, 6):
+                    for m in ('high','low','close'):
+                        key      = f'ret_{m}_{k}d'
+                        mean_key = f'mean_{key}'
+                        lst      = vals[key]
+                        df_ret.at[cond, mean_key] = (sum(lst) / len(lst)) if lst else float('nan')
+            return sym, df_ret
+
+        # run symbol‐level computations in parallel
+        with ProcessPoolExecutor() as executor:
+            futures = {executor.submit(process_symbol, sym): sym for sym in intraday_signals}
+            for fut in as_completed(futures):
+                sym, df_r = fut.result()
+                results[sym] = df_r
+        return results
+
+    # compute and store in the instance
+    self.intraday_returns = measure_intraday_returns(self.intraday_signals)
