@@ -1,4 +1,4 @@
-from market_data import date, timedelta, List, dataclass, pd, datetime, Tuple
+from market_data import date, timedelta, List, dataclass, pd, datetime, Tuple, timedelta
 from market_data.Symbol_Data import SymbolData
 from market_data.price_data_import import fragmented_intraday_import, nonconsecutive_intraday_import
 from market_data.add_technicals import intraday_pipeline, add_avwap_by_offset, run_pipeline, Step, _add_technicals_worker
@@ -29,11 +29,11 @@ class IntradaySignalProcessing:
     intraday_signals: dict[str, list[pd.DataFrame]] = None
     intraday_returns: dict[str, pd.DataFrame] = None
     
-    def __post_init__(self):
-        if isinstance(self.interday_signals, pd.DataFrame):
-            self.signal_dates = {sym: {signal: self.interday_signals[sym].loc[self.interday_signals[sym][signal] == 1, signal].index for signal in self.interday_signals[sym].columns} for sym in self.interday_signals}
-        elif isinstance(self.interday_signals, pd.Series):
-            self.signal_dates = {sym: self.interday_signals.index.tolist() for sym in self.interday_signals.index}
+    # def __post_init__(self):
+    #     if isinstance(self.interday_signals[list(self.interday_signals.keys())[0]], pd.DataFrame):
+    #         self.signal_dates = {sym: {signal: self.interday_signals[sym].loc[self.interday_signals[sym][signal] == 1, signal].index for signal in self.interday_signals[sym].columns} for sym in self.interday_signals}
+    #     elif isinstance(self.interday_signals[list(self.interday_signals.keys())[0]], pd.Series):
+    #         self.signal_dates = {sym: self.interday_signals[sym].loc[self.interday_signals[sym] == 1].index for sym in self.interday_signals}
 
 
     def next_business_day(d: datetime.date) -> datetime.date:
@@ -369,7 +369,9 @@ class IntradaySignalProcessing:
             for fut in as_completed(futures):
                 sym, df_r = fut.result()
                 results[sym] = df_r
+        
+        # compute and store in the instance
+        self.intraday_returns = results             
+        
         return results
 
-    # compute and store in the instance
-    self.intraday_returns = measure_intraday_returns(self.intraday_signals)

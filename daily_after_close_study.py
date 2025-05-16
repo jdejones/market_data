@@ -24,6 +24,7 @@ if __name__ == "__main__":
     import market_data.fundamentals as fu
     from market_data.episodic_pivots import Episodic_Pivots
     from market_data import operator, np, ProcessPoolExecutor, as_completed
+    from market_data.stats_objects import IntradaySignalProcessing as isp
     
     #*Import price data.
     #hadv == high average dollar volume
