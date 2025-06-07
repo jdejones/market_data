@@ -238,7 +238,6 @@ class Technical_Score_Calculator:
 
 
 #Run the trend_fanned script
-#@staticmethod
 def fanned_up(symbols, save=True):
     #from Fundamental_Analysis import Fundamentals_Analyzer
     def symbol_removal():
@@ -372,7 +371,6 @@ def mid_to_long_term_fanned_up(symbols):
             f.write(sym + '\n')
 
 #Run the long list systematic script
-#@staticmethod
 def technical_long_list_systematic(symbols, save=True):
     technical_long_list = []
     for a,b in symbols.items():
@@ -398,7 +396,6 @@ def technical_long_list_systematic(symbols, save=True):
 
 
 #Run the short list systematic script
-#@staticmethod
 def technical_short_list_systematic(symbols, save=True):
     technical_short_list=[]
     for a,b in symbols.items():
@@ -422,7 +419,7 @@ def technical_short_list_systematic(symbols, save=True):
             for item in technical_short_list_quant_under_1half:
                 f.write(item + '\n')
         
-#@staticmethod
+
 def tenets(symbols):
     #I changed the data_dict to symbolsg
     daily_percent_change = sorted({k:v.df['Percent_Change'].iloc[-1].round(2) for k,v in symbols.items() if v.df['Percent_Change'].iloc[-1].round(2) > 3 or v.df['Percent_Change'].iloc[-1].round(2) < -3}.items(), key= lambda item: item[1], reverse=True)
