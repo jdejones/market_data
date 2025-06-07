@@ -23,7 +23,7 @@ if __name__ == "__main__":
     import market_data.support_functions as sf
     import market_data.fundamentals as fu
     from market_data.episodic_pivots import Episodic_Pivots
-    from market_data import operator, np, ProcessPoolExecutor, as_completed
+    from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle
     from market_data.stats_objects import IntradaySignalProcessing as isp
     
     #*Import price data.
@@ -256,6 +256,34 @@ if __name__ == "__main__":
                 continue
             fas[sector] = sf.close_over_vwap_ratio(temp)    
         return fas
+
+    #Pickling most used objects, so I don't have to rerun the script.
+    with open(r"E:\Market Research\Dataset\daily_after_close_study\symbols.pkl", "wb") as f:
+        pickle.dump(symbols, f)
+
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\sec.pkl", "wb") as f:
+    #     pickle.dump(sec, f)
+
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\ind.pkl", "wb") as f:
+    #     pickle.dump(ind, f)
+
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\sp500.pkl", "wb") as f:
+    #     pickle.dump(sp500, f)
+
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\mdy.pkl", "wb") as f:
+    #     pickle.dump(mdy, f)
+
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\iwm.pkl", "wb") as f:
+    #     pickle.dump(iwm, f)
+
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\etfs.pkl", "wb") as f:
+    #     pickle.dump(etfs, f)
+
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\stock_stats.pkl", "wb") as f:
+    #     pickle.dump(stock_stats, f)
+
+
+
     from IPython.display import display, HTML
     from pprint import pprint
     print('\ndf_byrvol_positive dataframe descriptive statistics.',

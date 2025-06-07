@@ -500,13 +500,13 @@ def watchlist_suggestions(tb):
                 watchlists = {'downtrend': wl.make_watchlist(wl.downtrend),
                                 'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution),
                                 'distribution_breakdown': wl.make_watchlist(wl.distribution_breakdown),
-                                'relative_weakness_results': wl.make_watchlist(wl.relative_weakness_results)
+                                'relative_weakness_results': wl.make_watchlist(wl.relative_weakness_tc2000_favorites)
                                 }
                 return list(watchlists.keys())
             elif tb[2] == 'continuation':
                 watchlists = {'downtrend': wl.make_watchlist(wl.downtrend),
                                 'downtrend_distribution': wl.make_watchlist(wl.downtrend_distribution),
-                                'relative_weakness_results': wl.make_watchlist(wl.relative_weakness_results)
+                                'relative_weakness_results': wl.make_watchlist(wl.relative_weakness_tc2000_favorites)
                                 }
                 return list(watchlists.keys())
             elif tb[2] == 'retracement':

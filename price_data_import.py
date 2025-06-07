@@ -188,6 +188,7 @@ def intraday_import(wl: list[str], from_date: int|str|datetime.datetime = 0,
 
 @retry_on_read_timeout(max_retries=3)
 def nonconsecutive_intraday_import(dates_dict: dict[str, list[datetime.date]],
+                                    resample: str = False,
                                     timespan: str = 'second',
                                     multiplier: int = 10,
                                     limit: int = 50000) -> dict[str, list[pd.DataFrame]]:
@@ -221,6 +222,12 @@ def nonconsecutive_intraday_import(dates_dict: dict[str, list[datetime.date]],
             'l': 'Low',
         }).drop(['t','n'], axis=1)
         df = df.between_time('09:30:00', '15:59:50')
+        
+        if resample:
+            df = df.resample(resample).agg({'Volume': 'sum', 'VWAP': 'mean', 
+                                            'Open': 'first', 'Close': 'last', 
+                                            'High': 'max', 'Low': 'min'})
+        
         return sym, df
     
     max_workers = min(20, len([_ for sym in dates_dict for _ in dates_dict[sym]]))   #* Can be tuned.
@@ -240,6 +247,7 @@ def nonconsecutive_intraday_import(dates_dict: dict[str, list[datetime.date]],
 
 @retry_on_read_timeout(max_retries=3)
 def fragmented_intraday_import(dates_dict: dict[str, list[Tuple[datetime.date, datetime.date]]],
+                               resample: str = False,
                                timespan: str = 'second',
                                multiplier: int = 10,
                                limit: int = 50000) -> dict[str, list[pd.DataFrame]]:
@@ -273,6 +281,12 @@ def fragmented_intraday_import(dates_dict: dict[str, list[Tuple[datetime.date, d
             'l': 'Low',
         }).drop(['t','n'], axis=1)
         df = df.between_time('09:30:00', '15:59:50')
+        
+        if resample:
+            df = df.resample(resample).agg({'Volume': 'sum', 'VWAP': 'mean', 
+                                            'Open': 'first', 'Close': 'last', 
+                                            'High': 'max', 'Low': 'min'})
+                    
         return sym, df
 
     max_workers = min(20, len([_ for sym in dates_dict for _ in dates_dict[sym]]))   #* Can be tuned.
