@@ -29,12 +29,12 @@ def relative_strength(symbols, lookback=-252, bm=None):
             target = yf.download(sym, period='max', interval='1d')
         #Process Data
         df = pd.concat([df.reset_index(drop=True), target[lookback:].reset_index(drop=True)], axis=1)
-        df['relative_strength'] = df[sym]/df['SPY']#!There was an error after updating yfinance. I had to add the subscript for ['Close'] and the second [bm]
+        df['relative_strength'] = df[sym]/df['SPY']
         RSI(df, base='relative_strength')
         df = df.drop([sym, 'relative_strength'], axis=1)
         df = df.rename(columns={'RSI_21': sym})
     
-    return sorted({k: df[k].iloc[-1] for k in symbols}.items(), key=lambda x: x[1])
+    return sorted({k: round(df[k].iloc[-1].item(), 3) for k in symbols}.items(), key=lambda x: x[1])
 
 
 
@@ -220,7 +220,7 @@ def perf_since_earnings(symbols, earnings_season_start=None, sort=True):
         try:
             earnings_date = datetime.datetime.strptime(sa.earnings_dict[sym]['revenue_actual']['0'][0]['effectivedate'].split('T')[0], '%Y-%m-%d')
             if earnings_date > datetime.datetime.strptime(earnings_season_start, '%Y-%m-%d'):
-                perf_since_earnings_dict[sym] = ((symbols[sym].df.iloc[-1]['Close'] - symbols[sym].df.loc[earnings_date.strftime('%Y-%m-%d')]['Close']) / symbols[sym].df.loc[earnings_date.strftime('%Y-%m-%d')]['Close']) * 100
+                perf_since_earnings_dict[sym] = round((((symbols[sym].df.iloc[-1]['Close'] - symbols[sym].df.loc[earnings_date.strftime('%Y-%m-%d')]['Close']) / symbols[sym].df.loc[earnings_date.strftime('%Y-%m-%d')]['Close']) * 100).item(), 3)
         except Exception as e:
             #TODO print(sym, e, sep=': ') update error handling
             continue
@@ -273,7 +273,7 @@ def relationship_to_indicator(symbols: dict, secondary_indicator: str, primary_i
         except KeyError as ke:
             #TODO print(sym, ke) update error handling
             continue
-    return (syms_above_indicator / total_symbols) * 100
+    return round((syms_above_indicator / total_symbols) * 100, 3)
 
 def primary_statistics(**watchlist: dict):
     # !Symbols from IWM are not returning AVWAP data. Some of the symbols look like datetime
@@ -342,7 +342,7 @@ def close_over_vwap_ratio(symbols: dict) -> int:
         return 0.0
     else:
         ratio = (count[0]/count[1]) * 100
-        return ratio
+        return round(ratio, 3)
 
 
 

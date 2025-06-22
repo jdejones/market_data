@@ -22,6 +22,7 @@ if __name__ == "__main__":
     import market_data.regimes as rg
     import market_data.support_functions as sf
     import market_data.fundamentals as fu
+    import market_data.stats_objects as so
     from market_data.episodic_pivots import Episodic_Pivots
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle
     from market_data.stats_objects import IntradaySignalProcessing as isp
@@ -136,14 +137,14 @@ if __name__ == "__main__":
     #TODO Add concurrency for to compute the following two loops in parallel?
     for sym in tqdm(ep.current_duration_dict, desc=f'Episodic Pivots Current Duration'):
         try:
-            ep_curdur[sym] = [ep.current_duration_dict[sym], fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0]]
+            ep_curdur[sym] = [ep.current_duration_dict[sym], round(fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0].item(), 3)]
         except Exception as e:
             #TODO print(sym, ': ', e) update error handling
             continue
     ep_rr = {}
     for sym in tqdm([item[0] for item in sorted(ep.reward_risk_dict.items(), key=lambda x: x[1])], desc=f'Episodic Pivots Reward Risk'):
         try:
-            ep_rr[sym] = [ep.reward_risk_dict[sym], int(fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0])]
+            ep_rr[sym] = [round(ep.reward_risk_dict[sym].item(), 3), round(fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0].item(), 3)]
         except Exception as e:
             #TODO print(sym, e, sep=': ') update error handling
             continue
@@ -189,10 +190,10 @@ if __name__ == "__main__":
     results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Previous Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
     results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
     results_finvizsearch['DV_Cap'] = results_finvizsearch['DV'] / results_finvizsearch['Market Cap.']
-    dv_cap = results_finvizsearch[['Ticker', 'DV_Cap']].dropna().loc[results_finvizsearch.DV > 5_000_000].sort_values('DV_Cap')
+    dv_cap = results_finvizsearch[['Ticker', 'DV_Cap']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3).sort_values('DV_Cap')
     results_finvizsearch['Performance (YearToDate)'] = pd.to_numeric(results_finvizsearch['Performance (YearToDate)'].str.replace('.', '').str.replace('%', ''), errors='coerce').astype(float) / 100
     results_finvizsearch['perf_dvcap_dist'] = results_finvizsearch.apply(lambda x: np.linalg.norm(np.array([x['Performance (YearToDate)'], x['DV_Cap']])), axis=1)
-    perf_dvcap_dist = results_finvizsearch[['Ticker', 'perf_dvcap_dist']].dropna().loc[results_finvizsearch.DV > 5_000_000]
+    perf_dvcap_dist = results_finvizsearch[['Ticker', 'perf_dvcap_dist']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3)
     columns_with_percent = [col for col in results_finvizsearch.columns if (results_finvizsearch[col].astype(str).str.contains('%').any()) and (col != 'Company')]
     results_finvizsearch = results_finvizsearch.rename({col: f'{col}(%)' for col in columns_with_percent}, axis=1)
     for col in columns_with_percent:
@@ -258,8 +259,8 @@ if __name__ == "__main__":
         return fas
 
     #Pickling most used objects, so I don't have to rerun the script.
-    with open(r"E:\Market Research\Dataset\daily_after_close_study\symbols.pkl", "wb") as f:
-        pickle.dump(symbols, f)
+    # with open(r"E:\Market Research\Dataset\daily_after_close_study\symbols.pkl", "wb") as f:
+    #     pickle.dump(symbols, f)
 
     # with open(r"E:\Market Research\Dataset\daily_after_close_study\sec.pkl", "wb") as f:
     #     pickle.dump(sec, f)
@@ -316,11 +317,11 @@ if __name__ == "__main__":
           '\nIWM Close Over VWAP Ratio',
           sf.close_over_vwap_ratio(iwm),
           '\nSector Close Over VWAP Ratio',
-          sorted(close_over_vwap_dict(sector_member_mappings).items(), key=lambda x: x[1]),
+          sorted(close_over_vwap_dict(sector_member_mappings).items(), key=lambda x: x[1], reverse=True),
           '\nIndustry Close Over VWAP Ratio',
-          sorted(close_over_vwap_dict(industry_member_mappings).items(), key=lambda x: x[1]),
+          sorted(close_over_vwap_dict(industry_member_mappings).items(), key=lambda x: x[1], reverse=True),
           '\nEpisodic Pivots Reward Risk',
-          sorted(ep_rr.items(), key=lambda x: x[1][1])[::-1],
+          sorted(ep_rr.items(), key=lambda x: x[1][0])[::-1],
           '\nEpisodic Pivots Current Duration',
           sorted(ep_curdur.items(),key=operator.itemgetter(1,0))[::-1],
           '\nRelative Strength',

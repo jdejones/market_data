@@ -2,7 +2,10 @@
 The next functions that I should work on are those that access the SEC API.
 """
 
-from market_data import pd, json, os, datetime, np, yf, plt
+from market_data import pd, json, os, datetime, np, yf, plt, px
+from market_data.api_keys import sec_api_key, polygon_api_key
+from market_data.price_data_import import api_import
+from polygon import RESTClient
 # from audioop import reverse
 pd.options.display.max_columns = 150
 from matplotlib.colors import ListedColormap
@@ -650,12 +653,27 @@ def price_sales( symbol, form_type='10-K'):
     except:
         return np.nan
 
-def sales( symbol, form_type='10-K'):
-    try:
-        revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
-        return revenue
-    except:
-        return np.nan
+def sales(symbol, limit=10, timeframe='quarterly', plot=False) -> pd.Series:
+    client = RESTClient(polygon_api_key)
+    financials = []
+    for f in client.vx.list_stock_financials(
+        ticker=f"{symbol}",
+        order="asc",
+        limit=limit,
+        sort="filing_date",
+        timeframe=timeframe
+        ):
+        financials.append(f)
+    vals = []
+    for item in financials:
+        if item.financials.income_statement is not None:
+            vals.append((item.filing_date, item.financials.income_statement.revenues.value))
+    df = pd.DataFrame([val for val in vals if val[0] is not None])
+    df.columns = ['filing_date', 'sales']
+    df = df.set_index('filing_date')
+    if plot:
+        return px.line(df)
+    return df
 
 def revenue_growth( symbol, form_type='10-K'):
     try:
@@ -803,7 +821,59 @@ def cash_per_share( symbol, form_type='10-K'):
         return np.nan
     
 def current_float( symbol: str) -> Tuple[str,int]:
-    floatApi = FloatApi(f.api_key)
+    floatApi = FloatApi(sec_api_key)
     response = floatApi.get_float(ticker=symbol)
     sharesOutstanding = response['data'][0]['float']['outstandingShares'][0]['value']
     return (symbol, sharesOutstanding)
+
+def float_time_series( symbol: str) -> pd.DataFrame:
+    floatApi = FloatApi(sec_api_key)
+    response = floatApi.get_float(ticker=symbol)
+    df = pd.json_normalize(response['data'])
+    df = pd.DataFrame([(_[0]['period'], _[0]['value']) for _ in df['float.outstandingShares']])
+    df.columns = ['period', 'float_shares']
+    df['period'] = pd.to_datetime(df['period'])
+    df.set_index('period', inplace=True)
+    df.sort_index(inplace=True)
+    return df
+
+def market_cap_time_series( symbol: str, symbol_df: pd.DataFrame=None) -> pd.DataFrame:
+    float_df =float_time_series(symbol)
+    if not isinstance(symbol_df, pd.DataFrame):
+        symbol_df = api_import([symbol])[symbol]
+    # Merge the two dataframes with symbol_df index as the final index
+    merged_df = symbol_df.merge(float_df, left_index=True, right_index=True, how='left')
+    # Forward fill the nan values in the value column
+    merged_df['float_shares'] = merged_df['float_shares'].fillna(method='ffill')
+    merged_df['market_cap'] = merged_df['Close'] * merged_df['float_shares']
+    return merged_df
+
+def price_to_fundamental(symbol: str, 
+                         fundamental: callable,
+                         symbol_df: pd.DataFrame=None, 
+                         plot=False,
+                         limit=10,
+                         timeframe='annual') -> pd.Series:
+    fundamental_col: str = fundamental.__name__
+    if symbol_df is None:
+        symbol_df = symbols[symbol].df
+    if isinstance(fundamental, pd.DataFrame):
+        fundamental_df = fundamental.copy()
+    else:
+        fundamental_df = fundamental(symbol, 
+                                    limit=limit, 
+                                    timeframe=timeframe, 
+                                    plot=False)
+    price_df = market_cap_time_series(symbol, symbol_df).copy()
+    price_df.index = pd.to_datetime(price_df.index)
+    fundamental_df.index = pd.to_datetime(fundamental_df.index)
+    fundamental_df_reindexed = fundamental_df.reindex(price_df.index, method='ffill')
+    
+    price_df[fundamental_col] = fundamental_df_reindexed[fundamental_col]
+
+    price_df['price_to_fundamental'] = price_df['market_cap'] / price_df[fundamental_col]
+    price_df['price_to_fundamental'] = price_df['price_to_fundamental'].fillna(method='ffill')
+    if plot:
+        return px.line(price_df['price_to_fundamental'])
+    return price_df['price_to_fundamental']
+

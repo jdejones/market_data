@@ -71,7 +71,8 @@ def api_import(
 
 
 @retry_on_read_timeout(max_retries=3)
-def intraday_import(wl: list[str], from_date: int|str|datetime.datetime = 0, 
+def intraday_import(wl: list[str], 
+                    from_date: int|str|datetime.datetime = 0, 
                     to_date: int|str|datetime.datetime = datetime.datetime.now(),
                     resample: str = False,
                     timespan: str = 'second',

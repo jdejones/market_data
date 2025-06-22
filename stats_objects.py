@@ -1,8 +1,8 @@
 from market_data import date, timedelta, List, dataclass, pd, datetime, Tuple, timedelta, operator
 from market_data.Symbol_Data import SymbolData
-from market_data.price_data_import import fragmented_intraday_import, nonconsecutive_intraday_import
+from market_data.price_data_import import fragmented_intraday_import, nonconsecutive_intraday_import, intraday_import
 from market_data.add_technicals import intraday_pipeline, add_avwap_by_offset, run_pipeline, Step, _add_intraday_technicals_worker
-from market_data import ProcessPoolExecutor, as_completed, tqdm, ThreadPoolExecutor, levene, kruskal, median_test, sp
+from market_data import ProcessPoolExecutor, as_completed, tqdm, ThreadPoolExecutor, levene, kruskal, median_test, sp, Union, Dict, List, partial, find_peaks, linregress
 import numpy as np
 
         
@@ -209,6 +209,73 @@ def process_symbol_conditions(items):
             df.loc[cond, name] = 1            
         result.append(df)
     return sym, result
+
+def calculate_symbol_rvol(symbol_data_tuple, target_date=None, lookback_days=20):
+    """
+    Calculate intraday RVol for a single symbol.
+    
+    Args:
+        symbol_data_tuple (tuple): (symbol, dataframe) tuple
+        
+    Returns:
+        tuple: (symbol, rvol_data)
+    """
+    symbol, df = symbol_data_tuple
+    
+    if df is None or df.empty:
+        return symbol, None
+    
+    try:
+        # Ensure datetime index
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        
+        # Add date column for grouping
+        df['date'] = df.index.date
+        
+        # Calculate cumulative volume by day and time
+        df['time'] = df.index.time
+        df = df.sort_index()
+        
+        # Group by date and calculate cumulative sum within each day
+        df['cumulative_volume'] = df.groupby('date')['Volume'].cumsum()
+        
+        # Get unique dates and ensure we have enough data
+        unique_dates = sorted(df['date'].unique())
+        
+        if len(unique_dates) < lookback_days + 1:
+            return symbol, None
+        
+        # Get the target date data
+        target_date_data = df[df['date'] == target_date].copy()
+        
+        if target_date_data.empty:
+            return symbol, None
+        
+        # Get historical data (previous lookback_days)
+        historical_dates = unique_dates[-(lookback_days + 1):-1]  # Exclude target date
+        historical_data = df[df['date'].isin(historical_dates)].copy()
+        
+        if historical_data.empty:
+            return symbol, None
+        
+        # Calculate average cumulative volume by time across historical days
+        avg_cumulative_by_time = historical_data.groupby('time')['cumulative_volume'].mean()
+        
+        # Calculate RVol for target date
+        target_date_data['avg_historical_volume'] = target_date_data['time'].map(avg_cumulative_by_time)
+        target_date_data['intraday_rvol'] = (
+            target_date_data['cumulative_volume'] / target_date_data['avg_historical_volume']
+        ).fillna(0)
+        
+        # Clean up and return relevant columns
+        result_data = target_date_data[['cumulative_volume', 'avg_historical_volume', 'intraday_rvol']].copy()
+        
+        return symbol, result_data
+        
+    except Exception as e:
+        print(f"Error calculating RVol for {symbol}: {e}")
+        return symbol, None
 
 @dataclass(slots=True)
 class IntradaySignalProcessing:
@@ -1059,4 +1126,314 @@ class IntradaySignalProcessing:
         self.ev_agg       = ev_agg
         return ev_by_symbol, ev_agg
     
+#Interday EV objects
+def exit_stop_rel_entry(df, entry_signal, l_operand, r_operand, bias='long'):
+    """This function is to be used with the compute_expected_interday_values function
+    and is only needed if the exit and stop signals are the same conditions, and the
+    only difference is the relationship between their occurrnce and the value of 
+    the entry signal.
+    For example, the function was originally used to find EV with episodic pivots.
+    In the case of the episodic pivot the l_operand would be the Close price and 
+    the r_operand would be the 20DMA. The entry signal would be selected prior to
+    running this function.
     
+    It is used to compute the exit and stop signals for a given entry signal, l_operand, r_operand, and bias.
+    The entry signal is the signal that triggers the entry into a trade.
+    The l_operand is the left operand of the comparison.
+    The r_operand is the right operand of the comparison.
+    The bias is the long or short bias of the trade.
+    The function returns the exit and stop signals for the given entry signal, l_operand, r_operand, and bias.
+    
+
+    Args:
+        df (_type_): _description_
+        entry_signal (_type_): _description_
+        l_operand (_type_): _description_
+        r_operand (_type_): _description_
+        bias (str, optional): _description_. Defaults to 'long'.
+
+    Returns:
+        _type_: _description_
+    """
+    exit_signals = pd.Series(0, index=df.index)
+    stop_signals = pd.Series(0, index=df.index)
+
+    # Get all start dates
+    start_dates = df.loc[df[entry_signal] == True].index
+    for start_date in start_dates:
+        # Get the close price at start
+        start_close = df.loc[start_date, 'Close']
+        
+        # Create mask for subsequent dates where:
+        # 1. Close < 20DMA (trend broken)
+        if bias == 'long':
+            mask_exit = (df.index > start_date) & \
+                (df[l_operand] < df[r_operand]) & \
+                (df[l_operand] > start_close)        
+            mask_stop = (df.index > start_date) & \
+                (df[l_operand] < df[r_operand]) & \
+                (df[l_operand] < start_close)
+        else:
+            mask_exit = (df.index > start_date) & \
+                (df[l_operand] > df[r_operand]) & \
+                (df[l_operand] < start_close)
+            mask_stop = (df.index > start_date) & \
+                (df[l_operand] > df[r_operand]) & \
+                (df[l_operand] > start_close) 
+        if mask_exit.any():
+            first_exit_date = mask_exit.idxmax()
+            exit_signals[first_exit_date] = 1
+        if mask_stop.any():
+            first_stop_date = mask_stop.idxmax()
+            stop_signals[first_stop_date] = 1
+    return exit_signals, stop_signals
+#These functions should be tested.
+#*What will this functio do if the exit/stop signals do not occur after the entry signal?
+def compute_expected_interday_values(
+    interday_signals: Dict[str, pd.DataFrame],
+    price_data: Dict[str, pd.DataFrame],
+    entry_signal: str,
+    exit_signal: str,
+    stop_signals: Union[str, List[str]],
+    bias: str = 'long'
+) -> Tuple[Dict[str, float], float]:
+    """
+    Compute per-symbol and aggregate expected values on a daily timeframe.
+
+    Parameters
+    ----------
+    interday_signals : dict
+        Mapping symbol -> DataFrame of boolean signals (indexed by date).
+    price_data : dict
+        Mapping symbol -> DataFrame with at least a 'Close' column (same index).
+    entry_signal : str
+        Column name in each signals-DataFrame marking entry events.
+    exit_signal : str
+        Column name marking positive-exit events.
+    stop_signals : str or list of str
+        Column name(s) marking stop-loss events.
+    bias : {'long', 'short'}, default 'long'
+        Direction of the trade.
+
+    Returns
+    -------
+    ev_by_symbol : dict
+        Mapping symbol -> EV (float) for that symbol.
+    ev_aggregate : float
+        EV pooled across all symbols.
+    """
+    # Ensure stop_signals is a list
+    if isinstance(stop_signals, str):
+        stop_signals = [stop_signals]
+
+    ev_by_symbol: Dict[str, float] = {}
+    all_pos: List[float] = []
+    all_neg: List[float] = []
+
+    for sym, signals_df in interday_signals.items():
+        price_df = price_data[sym]
+        signals = signals_df.sort_index()  # ensure chronological
+
+        pos_returns = []
+        neg_returns = []
+
+        for date in signals.index:
+            # skip non-entry rows
+            if not signals.at[date, entry_signal]:
+                continue
+
+            entry_price = price_df.at[date, 'Close']
+            future = signals.loc[date:]  # include today
+
+            # find first exit
+            exits = future.index[future[exit_signal] == True]
+            exit_date = exits[0] if len(exits) > 0 else None
+
+            # find first stop
+            stops = []
+            for stop_col in stop_signals:
+                stops.extend(list(future.index[future[stop_col] == True]))
+            stop_dates = sorted(set(stops))
+            stop_date = stop_dates[0] if stop_dates else None
+
+            # Decide which event comes first
+            if exit_date and (not stop_date or exit_date <= stop_date):
+                # positive outcome
+                price_out = price_df.at[exit_date, 'Close']
+                ret = ((price_out - entry_price) / entry_price
+                       if bias == 'long'
+                       else (entry_price - price_out) / entry_price)
+                pos_returns.append(ret)
+                all_pos.append(ret)
+            elif stop_date:
+                # negative outcome
+                price_out = price_df.at[stop_date, 'Close']
+                ret = ((price_out - entry_price) / entry_price
+                       if bias == 'long'
+                       else (entry_price - price_out) / entry_price)
+                neg_returns.append(ret)
+                all_neg.append(ret)
+            # else: neither exit nor stop in the future → ignore
+
+        # compute EV for this symbol
+        total = len(pos_returns) + len(neg_returns)
+        if total > 0:
+            P_pos = len(pos_returns) / total
+            P_neg = len(neg_returns) / total
+            R_pos = np.mean(pos_returns) if pos_returns else 0.0
+            R_neg = np.mean(neg_returns) if neg_returns else 0.0
+            ev = float(np.dot([P_pos, P_neg], [R_pos, R_neg]))
+        else:
+            ev = float('nan')
+
+        ev_by_symbol[sym] = ev
+
+    # compute aggregate EV across all symbols
+    total_all = len(all_pos) + len(all_neg)
+    if total_all > 0:
+        P_pos_all = len(all_pos) / total_all
+        P_neg_all = len(all_neg) / total_all
+        R_pos_all = np.mean(all_pos) if all_pos else 0.0
+        R_neg_all = np.mean(all_neg) if all_neg else 0.0
+        ev_aggregate = float(np.dot([P_pos_all, P_neg_all], [R_pos_all, R_neg_all]))
+    else:
+        ev_aggregate = float('nan')
+
+    return ev_by_symbol, ev_aggregate
+
+
+#Intraday RVol objects
+def intraday_rvol(symbols_list, date=None, lookback_days=20, timespan='second', multiplier=30):
+    """
+    Calculate intraday relative volume for a list of symbols.
+    
+    Args:
+        symbols_list (list): List of stock symbols to analyze
+        date (str or datetime, optional): Date to measure intraday RVol for. 
+                                        Defaults to most recent trading day.
+        lookback_days (int): Number of days to use for average calculation. Default is 20.
+        multiplier (int): Time interval multiplier for intraday data import. Default is 30 (30 seconds).
+    
+    Returns:
+        dict: Dictionary with symbol as key and intraday RVol data as value
+    """
+    # from market_data.price_data_import import intraday_import
+    # from concurrent.futures import ProcessPoolExecutor
+    # import pandas as pd
+    # import numpy as np
+    # from datetime import datetime, timedelta
+    
+    # Handle date input
+    if date is None:
+        target_date = datetime.datetime.now().date()
+    elif isinstance(date, str):
+        target_date = pd.to_datetime(date).date()
+    else:
+        target_date = date.date() if hasattr(date, 'date') else date
+    
+    # Calculate date range (target date + previous lookback_days)
+    start_date = target_date - timedelta(days=lookback_days + 10)  # Add buffer for weekends/holidays
+    end_date = target_date
+    
+    # Import intraday data for all symbols
+    print(f"Importing intraday data for {len(symbols_list)} symbols...")
+    intraday_data = intraday_import(
+        wl=symbols_list,
+        from_date=start_date.strftime('%Y-%m-%d'),
+        to_date=end_date.strftime('%Y-%m-%d'),
+        timespan=timespan,
+        multiplier=multiplier
+    )
+    
+    if date is None:
+        sample = next((df for df in intraday_data.values() if df is not None and not df.empty), None)
+        if sample is None:
+            raise ValueError("No intraday data found for any symbol")
+        target_date = sample.index.date[-1]
+    
+    # Prepare data for multiprocessing
+    symbol_data_tuples = [(symbol, intraday_data.get(symbol)) for symbol in symbols_list]
+    
+    # Create a partial function with the additional arguments
+    calculate_rvol_partial = partial(calculate_symbol_rvol, target_date=target_date, lookback_days=lookback_days)
+    
+    # Use multiprocessing to calculate RVol for all symbols
+    print("Calculating intraday RVol...")
+    results = {}
+    
+    with ProcessPoolExecutor() as executor:
+        for symbol, rvol_data in tqdm(executor.map(calculate_rvol_partial, symbol_data_tuples), 
+                                      total=len(symbol_data_tuples), 
+                                      desc="Calculating RVol"):
+            if rvol_data is not None:
+                results[symbol] = rvol_data
+    
+    print(f"Completed intraday RVol calculation for {len(results)} symbols")
+    return results
+
+
+
+#Seasonality/Cyclicality objects
+def compute_cycle_strength(price: pd.Series,
+                           trend_penalty_weight: float = 1.0) -> float:
+    """
+    Given a price series, returns a scalar score ∝ cycle consistency / (1 + trend strength).
+    Higher ⇒ more evenly-sized cycles and weaker trend.
+    """
+    # 1) Clean up
+    price = price.dropna()
+    if len(price) < 10:
+        return np.nan
+
+    # 2) Fit & remove linear trend
+    x = np.arange(len(price))
+    slope, intercept, _, _, _ = linregress(x, price.values)
+    trend = slope * x + intercept
+    detrended = price.values - trend
+
+    # 3) Find peaks and troughs
+    peaks, _   = find_peaks(detrended)
+    troughs, _ = find_peaks(-detrended)
+
+    if len(peaks) < 2 or len(troughs) < 2:
+        return np.nan
+
+    peak_vals   = detrended[peaks]
+    trough_vals = detrended[troughs]
+
+    # 4) How much do those peak/trough heights *vary*?
+    #    We use coefficient of variation (std/mean_abs) so it's scale-invariant
+    cv_peaks   = np.std(peak_vals)   / (np.mean(np.abs(peak_vals))   + 1e-8)
+    cv_troughs = np.std(trough_vals) / (np.mean(np.abs(trough_vals)) + 1e-8)
+
+    cycle_consistency = 1.0 / (cv_peaks + cv_troughs + 1e-8)
+
+    # 5) Penalize any remaining trend relative to price scale
+    mean_price    = np.mean(price.values)
+    trend_strength = abs(slope) / (mean_price + 1e-8)
+
+    # 6) Final score
+    return round(cycle_consistency / (1.0 + trend_penalty_weight * trend_strength), 2)
+
+def rank_symbols_by_cycle_strength(data_dict: dict[str, pd.Series],
+                                   trend_penalty_weight: float = 1.0) -> pd.DataFrame:
+    """
+    Given a dict of {symbol: price_series}, returns a DataFrame
+    sorted by descending cycle strength score.
+    """
+    scores = {}
+    for sym, series in data_dict.items():
+        try:
+            score = compute_cycle_strength(series, trend_penalty_weight=trend_penalty_weight)
+            if not np.isnan(score):
+                scores[sym] = score
+        except Exception as e:
+            print(f"⚠️ Error processing {sym}: {e}")
+
+    df = (
+        pd.DataFrame.from_dict(scores, orient='index', columns=['cycle_strength'])
+          .sort_values('cycle_strength', ascending=False)
+          .reset_index()
+          .rename(columns={'index': 'symbol'})
+    )
+    return df
