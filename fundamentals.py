@@ -654,6 +654,19 @@ def price_sales( symbol, form_type='10-K'):
         return np.nan
 
 def sales(symbol, limit=10, timeframe='quarterly', plot=False) -> pd.Series:
+    """
+    #! Returns errors for some symbols. I believe most of them could be handled simply.
+    Returns a Series of sales data for a given symbol.
+
+    Args:
+        symbol (_type_): _description_
+        limit (int, optional): _description_. Defaults to 10.
+        timeframe (str, optional): _description_. Defaults to 'quarterly'.
+        plot (bool, optional): _description_. Defaults to False.
+
+    Returns:
+        pd.Series: _description_
+    """
     client = RESTClient(polygon_api_key)
     financials = []
     for f in client.vx.list_stock_financials(

@@ -144,7 +144,7 @@ if __name__ == "__main__":
     ep_rr = {}
     for sym in tqdm([item[0] for item in sorted(ep.reward_risk_dict.items(), key=lambda x: x[1])], desc=f'Episodic Pivots Reward Risk'):
         try:
-            ep_rr[sym] = [round(ep.reward_risk_dict[sym].item(), 3), round(fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0].item(), 3)]
+            ep_rr[sym] = [round(ep.reward_risk_dict[sym].item(), 3), round(fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0].item(), 1)]
         except Exception as e:
             #TODO print(sym, e, sep=': ') update error handling
             continue
@@ -321,7 +321,7 @@ if __name__ == "__main__":
           '\nIndustry Close Over VWAP Ratio',
           sorted(close_over_vwap_dict(industry_member_mappings).items(), key=lambda x: x[1], reverse=True),
           '\nEpisodic Pivots Reward Risk',
-          sorted(ep_rr.items(), key=lambda x: x[1][0])[::-1],
+          sorted(ep_rr.items(), key=lambda x: (x[1][1], x[1][0]), reverse=True),
           '\nEpisodic Pivots Current Duration',
           sorted(ep_curdur.items(),key=operator.itemgetter(1,0))[::-1],
           '\nRelative Strength',

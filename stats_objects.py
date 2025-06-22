@@ -1416,7 +1416,8 @@ def compute_cycle_strength(price: pd.Series,
     return round(cycle_consistency / (1.0 + trend_penalty_weight * trend_strength), 2)
 
 def rank_symbols_by_cycle_strength(data_dict: dict[str, pd.Series],
-                                   trend_penalty_weight: float = 1.0) -> pd.DataFrame:
+                                   trend_penalty_weight: float = 1.0
+                                   ) -> pd.DataFrame:
     """
     Given a dict of {symbol: price_series}, returns a DataFrame
     sorted by descending cycle strength score.
