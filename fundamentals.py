@@ -884,9 +884,19 @@ def price_to_fundamental(symbol: str,
     
     price_df[fundamental_col] = fundamental_df_reindexed[fundamental_col]
 
-    price_df['price_to_fundamental'] = price_df['market_cap'] / price_df[fundamental_col]
-    price_df['price_to_fundamental'] = price_df['price_to_fundamental'].fillna(method='ffill')
+    col = f'price_to_{fundamental_col}'
+    price_df[col] = price_df['market_cap'] / price_df[fundamental_col]
+    price_df[col] = price_df[col].fillna(method='ffill')
     if plot:
-        return px.line(price_df['price_to_fundamental'])
-    return price_df['price_to_fundamental']
+        # return px.line(price_df[col], 
+        #                title=f'{symbol} Price to {fundamental_col.title()}',
+        #                labels={'index': 'Date', 'value': f'Price to {fundamental_col.title()}'})
+        fig = px.line(price_df[col], 
+                      title=f'{symbol} Price to {fundamental_col.title()}',
+                      labels={'index': 'Date', 'value': f'Price to {fundamental_col.title()}'})
+        fig.add_scatter(x=price_df.index, y=price_df['market_cap'], 
+                       mode='lines', name='market_cap', yaxis='y2')
+        fig.update_layout(yaxis2=dict(overlaying='y', side='right', title='Market Cap'))
+        return fig
+    return price_df[col]
 
