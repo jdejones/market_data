@@ -25,6 +25,7 @@ from scipy.signal import find_peaks
 import scikit_posthocs as sp
 from functools import partial
 import plotly.express as px
+from sec_api import FloatApi
 
 #Local imports
 from . import fundamentals as fu
@@ -37,3 +38,4 @@ from . import watchlist_filters as wf
 from . import regimes as rg
 from . import fundamentals as fu
 from . import stats_objects as so
+from . import anchored_vwap as av

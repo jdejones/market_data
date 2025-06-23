@@ -2,7 +2,7 @@
 The next functions that I should work on are those that access the SEC API.
 """
 
-from market_data import pd, json, os, datetime, np, yf, plt, px
+from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi
 from market_data.api_keys import sec_api_key, polygon_api_key
 from market_data.price_data_import import api_import
 from polygon import RESTClient
@@ -851,7 +851,7 @@ def float_time_series( symbol: str) -> pd.DataFrame:
     return df
 
 def market_cap_time_series( symbol: str, symbol_df: pd.DataFrame=None) -> pd.DataFrame:
-    float_df =float_time_series(symbol)
+    float_df = float_time_series(symbol)
     if not isinstance(symbol_df, pd.DataFrame):
         symbol_df = api_import([symbol])[symbol]
     # Merge the two dataframes with symbol_df index as the final index
@@ -869,7 +869,7 @@ def price_to_fundamental(symbol: str,
                          timeframe='annual') -> pd.Series:
     fundamental_col: str = fundamental.__name__
     if symbol_df is None:
-        symbol_df = symbols[symbol].df
+        symbol_df = api_import([symbol])[symbol]
     if isinstance(fundamental, pd.DataFrame):
         fundamental_df = fundamental.copy()
     else:

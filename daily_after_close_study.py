@@ -23,6 +23,7 @@ if __name__ == "__main__":
     import market_data.support_functions as sf
     import market_data.fundamentals as fu
     import market_data.stats_objects as so
+    import market_data.anchored_vwap as av
     from market_data.episodic_pivots import Episodic_Pivots
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle
     from market_data.stats_objects import IntradaySignalProcessing as isp
