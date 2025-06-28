@@ -859,7 +859,7 @@ def market_cap_time_series( symbol: str, symbol_df: pd.DataFrame=None) -> pd.Dat
     # Forward fill the nan values in the value column
     merged_df['float_shares'] = merged_df['float_shares'].fillna(method='ffill')
     merged_df['market_cap'] = merged_df['Close'] * merged_df['float_shares']
-    return merged_df
+    return merged_df['market_cap']
 
 def price_to_fundamental(symbol: str, 
                          fundamental: callable,
