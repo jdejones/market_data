@@ -1438,3 +1438,36 @@ def rank_symbols_by_cycle_strength(data_dict: dict[str, pd.Series],
           .rename(columns={'index': 'symbol'})
     )
     return df
+
+
+def drawdown_current(df: pd.DataFrame, start: str|int):
+    if type(start) == str:
+        high = df['High'].loc[start:].max()
+        low = df['Close'].iloc[-1]
+        return high - low
+    if type(start) == int:
+        high = df['High'].loc[start:].max()
+        low = df['Close'].iloc[-1]
+        return high - low
+    
+def drawdown_max(df: pd.DataFrame, start: str|int):
+    if type(start) == str:
+        df = df[['High', 'Low']].loc[start:]
+        df['Date'] = df.index
+        # initialize max diff and dates
+        max_diff = 0
+        start_date = ''
+        end_date = ''
+        max_diff_dict = {}
+        # loop through each row and compare the current high to all lows that come after it
+        for i in range(len(df)):
+            for j in range(i+1, len(df)):
+                if df['Low'][j] < df['High'][i]:
+                    diff = df['High'][i] - df['Low'][j]
+                    if diff > max_diff:
+                        max_diff = diff
+                        start_date = df['Date'][i]
+                        end_date = df['Date'][j]
+                        max_diff_dict[start_date + ':'+ end_date] = max_diff
+
+        return max_diff_dict
