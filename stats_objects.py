@@ -1471,3 +1471,4 @@ def drawdown_max(df: pd.DataFrame, start: str|int):
                         max_diff_dict[start_date + ':'+ end_date] = max_diff
 
         return max_diff_dict
+    
