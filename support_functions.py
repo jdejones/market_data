@@ -3,7 +3,7 @@ from market_data.price_data_import import api_import
 from market_data.add_technicals import RSI
 from market_data.watchlist_filters import Technical_Score_Calculator
 import market_data.fundamentals as fu
-from market_data import pd, sa, fu, np, datetime, re
+from market_data import pd, sa, fu, np, datetime, re, scoreatpercentile
 from market_data.Symbol_Data import SymbolData
 import market_data.watchlists_locations as wl
 
@@ -160,31 +160,32 @@ def condition_statistics(df: pd.DataFrame, lookback:int=2000):
     returns = {}
     for condition in conditions:
         returns[condition] = {}
-        indicies = df[condition].loc[pd.notnull(df[condition])].index[-lookback:]#Type Index
-        for idx in indicies:
-            index = indicies.get_loc(idx)
+        indicies_condition = df[condition].loc[pd.notnull(df[condition])].index[-lookback:]#Type Index
+        indicies_all = df.index[-lookback:]
+        for idx in indicies_condition:
+            index = indicies_all.get_loc(idx)
             df = df[-lookback:]
             close = df.Close.loc[idx]
-            if (index + 5 < len(indicies)) and (df.index.get_loc(idx) + 20):# or (len(indicies) <= 5):
-                close_plus5 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 5]].max()
+            if (index + 5 <= len(indicies_all)) and (idx + datetime.timedelta(days=5) <= indicies_all[-1]):# or (len(indicies) <= 5):
+                close_plus5 = df.Close.iloc[df.index.get_loc(idx):df.index.get_loc(idx) + 6].max()
                 if close_plus5 == close:
-                    close_plus5 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 5]].min()
+                    close_plus5 = df.Close.iloc[df.index.get_loc(idx):df.index.get_loc(idx) + 6].min()
             else:
                 close_plus5 = df.Close.loc[idx:].max()
                 if close_plus5 == close:
                     close_plus5 = df.Close.loc[idx:].min()
-            if (index + 10 < len(indicies)) and (df.index.get_loc(idx) + 20):# or (len(indicies) <= 10):
-                close_plus10 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 10]].max()
+            if (index + 10 <= len(indicies_all)) and (idx + datetime.timedelta(days=10) <= indicies_all[-1]):# or (len(indicies) <= 10):
+                close_plus10 = df.Close.iloc[df.index.get_loc(idx):df.index.get_loc(idx) + 11].max()
                 if close_plus10 == close:
-                    close_plus10 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 10]].min()
+                    close_plus10 = df.Close.iloc[df.index.get_loc(idx):df.index.get_loc(idx) + 11].min()
             else:
                 close_plus10 = df.Close.loc[idx:].max()
                 if close_plus10 == close:
                     close_plus10 = df.Close.loc[idx:].min()
-            if (index + 20 < len(indicies)) and (df.index.get_loc(idx) + 20):# or (len(indicies) <= 20):#Check if there enough indicies remaining and check if the number of indicies to call is <= the total number if indicies.
-                close_plus20 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 20]].max()
+            if (index + 20 <= len(indicies_all)) and (idx + datetime.timedelta(days=20) <= indicies_all[-1]):# or (len(indicies) <= 20):#Check if there enough indicies remaining and check if the number of indicies to call is <= the total number if indicies.
+                close_plus20 = df.Close.iloc[df.index.get_loc(idx):df.index.get_loc(idx) + 21].max()
                 if close_plus20 == close:
-                    close_plus20 = df.Close.loc[idx: df.index[df.index.get_loc(idx) + 20]].min()
+                    close_plus20 = df.Close.iloc[df.index.get_loc(idx):df.index.get_loc(idx) + 21].min()
             else:
                 close_plus20 = df.Close.loc[idx:].max()
                 if close_plus20 == close:
@@ -201,6 +202,30 @@ def condition_statistics(df: pd.DataFrame, lookback:int=2000):
                 returns[condition]['20days'].append(((close_plus20 - close) / close) * 100)
             else:
                 returns[condition]['20days'] = [(((close_plus20 - close) / close) * 100)]
+    
+    #I added this feature becuase there are some time series with discrepant data. It is easier to remove
+    #the outliers caused than to find the correct prices.
+    #Remove outliers using interdecile range (remove upper and lower 10%)
+    for condition in conditions:
+        total_removed = 0
+        for days in returns[condition]:
+            if len(returns[condition][days]) >= 10:  # Only apply if we have enough data points
+                # Calculate 10th and 90th percentiles using scipy
+                p10, p90 = scoreatpercentile(returns[condition][days], [10, 90])
+                
+                # Create boolean mask to identify outliers
+                mask = [(p10 <= val <= p90) for val in returns[condition][days]]
+                
+                # Count removed values
+                num_removed = sum(not m for m in mask)
+                total_removed += num_removed
+                
+                # Filter returns while preserving order
+                returns[condition][days] = [val for val, keep in zip(returns[condition][days], mask) if keep]
+        
+        # Subtract total removed values from signal count for this condition
+        num_signals[condition] -= total_removed
+
 
 
 
@@ -210,6 +235,7 @@ def condition_statistics(df: pd.DataFrame, lookback:int=2000):
         mean_returns[condition] = {}
         for days in returns[condition]:
             mean_returns[condition][days] = sum([val for val in returns[condition][days]]) / len([val for val in returns[condition][days]])
+            
     return {'num_signals': num_signals, 'returns': returns, 'mean_returns': mean_returns, 'frame': df[list(conditions.keys())]}
 
 def perf_since_earnings(symbols, earnings_season_start=None, sort=True):

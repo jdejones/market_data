@@ -20,7 +20,7 @@ from ratelimit import limits, sleep_and_retry
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Tuple, Union, Dict, List
 import pickle
-from scipy.stats import levene, kruskal, median_test, linregress
+from scipy.stats import levene, kruskal, median_test, linregress, scoreatpercentile
 from scipy.signal import find_peaks
 import scikit_posthocs as sp
 from functools import partial
