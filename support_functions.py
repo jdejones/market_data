@@ -155,7 +155,6 @@ def condition_statistics(df: pd.DataFrame, lookback:int=2000):
     #n signals
     num_signals = {signal: len(df.loc[pd.notnull(df[signal])]) for signal in conditions}
 
-
     #Returns over time
     returns = {}
     for condition in conditions:
@@ -226,16 +225,56 @@ def condition_statistics(df: pd.DataFrame, lookback:int=2000):
         # Subtract total removed values from signal count for this condition
         num_signals[condition] -= total_removed
 
-
-
-
     #Descriptive Statistics
     mean_returns = {}
     for condition in conditions:
         mean_returns[condition] = {}
         for days in returns[condition]:
             mean_returns[condition][days] = sum([val for val in returns[condition][days]]) / len([val for val in returns[condition][days]])
+
+    # Calculate expected value (EV) for each condition
+    ev = {}
+    for condition in conditions:
+        if condition not in returns or not returns[condition]:
+            ev[condition] = {'5days': 0.0, '10days': 0.0, '20days': 0.0}
+            continue
             
+        ev[condition] = {}
+        for days in returns[condition]:
+            if not returns[condition][days]:  # empty list
+                ev[condition][days] = 0.0
+                continue
+            
+            #Obtain returns and convert to numpy array
+            returns_array = np.array(returns[condition][days])
+            n_total = len(returns_array)
+            
+            if n_total == 0:
+                ev[condition][days] = 0.0
+                continue
+            
+            # Count positive and negative returns
+            positive_mask = returns_array > 0
+            negative_mask = returns_array < 0
+            
+            n_positive = np.sum(positive_mask)
+            n_negative = np.sum(negative_mask)
+            
+            # Calculate probabilities
+            prob_positive = n_positive / n_total if n_total > 0 else 0
+            prob_negative = n_negative / n_total if n_total > 0 else 0
+            
+            # Calculate average returns for each outcome using numpy mean
+            avg_positive = np.mean(returns_array[positive_mask]) if n_positive > 0 else 0
+            avg_negative = np.mean(returns_array[negative_mask]) if n_negative > 0 else 0
+            
+            # Expected value calculation using numpy dot product
+            probabilities = np.array([prob_positive, prob_negative])
+            outcomes = np.array([avg_positive, avg_negative])
+            expected_value = np.dot(probabilities, outcomes)
+            
+            ev[condition][days] = round(expected_value, 4)
+
     return {'num_signals': num_signals, 'returns': returns, 'mean_returns': mean_returns, 'frame': df[list(conditions.keys())]}
 
 def perf_since_earnings(symbols, earnings_season_start=None, sort=True):

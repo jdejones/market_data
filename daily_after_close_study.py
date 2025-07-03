@@ -1,10 +1,10 @@
 if __name__ == "__main__":
     import warnings
-    # Suppress all warnings
+    Suppress all warnings
     warnings.filterwarnings('ignore')
-    #I added the try/except block as a quick fix to avoid conflicts with the
-    #interactive interpreter and the github repo. There should be a
-    #cleaner way to do this.
+    I added the try/except block as a quick fix to avoid conflicts with the
+    interactive interpreter and the github repo. There should be a
+    cleaner way to do this.
     try:
         from market_data.Symbol_Data import SymbolData
     except ModuleNotFoundError:
@@ -100,6 +100,62 @@ if __name__ == "__main__":
         ):
             stock_stats[sym] = stats
     
+    # Calculate expected value (EV) for each condition across all symbols
+    ev_stats = {}
+    
+    # First, collect all returns for each condition across all symbols
+    all_returns = {}
+    for sym in stock_stats:
+        if 'returns' not in stock_stats[sym]:
+            continue
+            
+        for condition in stock_stats[sym]['returns']:
+            if condition not in all_returns:
+                all_returns[condition] = {'5days': [], '10days': [], '20days': []}
+            
+            for days in ['5days', '10days', '20days']:
+                if days in stock_stats[sym]['returns'][condition] and stock_stats[sym]['returns'][condition][days]:
+                    all_returns[condition][days].extend(stock_stats[sym]['returns'][condition][days])
+    
+    # Calculate expected value for each condition
+    for condition in tqdm(all_returns, desc="Calculating Expected Values by Condition"):
+        ev_stats[condition] = {}
+        
+        for days in ['5days', '10days', '20days']:
+            if not all_returns[condition][days]:
+                ev_stats[condition][days] = 0.0
+                continue
+            
+            # Convert returns to numpy array
+            returns_array = np.array(all_returns[condition][days])
+            n_total = len(returns_array)
+            
+            if n_total == 0:
+                ev_stats[condition][days] = 0.0
+                continue
+            
+            # Count positive and negative returns
+            positive_mask = returns_array > 0
+            negative_mask = returns_array < 0
+            
+            n_positive = np.sum(positive_mask)
+            n_negative = np.sum(negative_mask)
+            
+            # Calculate probabilities
+            prob_positive = n_positive / n_total if n_total > 0 else 0
+            prob_negative = n_negative / n_total if n_total > 0 else 0
+            
+            # Calculate average returns for each outcome
+            avg_positive = np.mean(returns_array[positive_mask]) if n_positive > 0 else 0
+            avg_negative = np.mean(returns_array[negative_mask]) if n_negative > 0 else 0
+            
+            # Expected value calculation using numpy dot product
+            probabilities = np.array([prob_positive, prob_negative])
+            outcomes = np.array([avg_positive, avg_negative])
+            expected_value = np.dot(probabilities, outcomes)
+            
+            ev_stats[condition][days] = round(expected_value, 4)
+        
     sector_close_vwap_count = {sector: [0, 0] for sector in sec}
     industry_close_vwap_count = {industry: [0, 0] for industry in ind}
     for sym in tqdm(symbols, desc=f'Close Over VWAP Ratio'):
