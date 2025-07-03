@@ -1187,6 +1187,121 @@ def exit_stop_rel_entry(df, entry_signal, l_operand, r_operand, bias='long'):
             first_stop_date = mask_stop.idxmax()
             stop_signals[first_stop_date] = 1
     return exit_signals, stop_signals
+
+def signal_statistics(
+    dataframes: dict[str, pd.DataFrame],
+    signal_column: str,
+    bias: str = 'long',
+    lookback: int = 2000
+) -> Tuple[Dict[int, Dict], Dict]:
+    """
+    Calculate statistics for signals across multiple dataframes.
+    
+    Parameters
+    ----------
+    dataframes : list of pd.DataFrame
+        List of OHLCV dataframes with signal columns.
+    signal_column : str
+        Name of the column containing the signal (boolean or 1/0).
+    bias : {'long', 'short'}, default 'long'
+        Trading bias for return calculation.
+    lookback : int, default 2000
+        Number of periods to look back for analysis.
+        
+    Returns
+    -------
+    symbol_stats : dict
+        Dictionary with keys as symbol indices, values as dicts containing:
+        - 'num_signals': int
+        - 'returns': dict with keys '5days', '10days', '20days'
+        - 'mean_returns': dict with keys '5days', '10days', '20days'
+    aggregate_stats : dict
+        Aggregate statistics across all symbols with same structure.
+    """
+    symbol_stats = {}
+    all_returns = {'5days': [], '10days': [], '20days': []}
+    total_signals = 0
+    
+    for sym, df in dataframes.items():
+        # Limit to lookback period
+        df = df[-lookback:].copy()
+        
+        # Get signal dates
+        signal_dates = df.loc[df[signal_column] == 1].index
+        num_signals = len(signal_dates)
+        total_signals += num_signals
+        
+        returns = {'5days': [], '10days': [], '20days': []}
+        
+        for signal_date in signal_dates:
+            close_price = df.loc[signal_date, 'Close']
+            signal_idx = df.index.get_loc(signal_date)
+            
+            # Calculate returns for each period
+            for days in [5, 10, 20]:
+                key = f'{days}days'
+                
+                # Determine end index for the period
+                end_idx = min(signal_idx + days + 1, len(df))
+                period_data = df.iloc[signal_idx:end_idx]
+                
+                if len(period_data) <= 1:
+                    continue
+                    
+                max_val = period_data['High'].max()
+                min_val = period_data['Low'].min()                    
+                if bias == 'long':                    
+                    if max_val > close_price:
+                        exit_price = max_val
+                    else:
+                        exit_price = min_val
+                        
+                elif bias == 'short':                    
+                    if min_val < close_price:
+                        exit_price = min_val
+                    else:
+                        exit_price = max_val
+                
+                # Calculate return
+                if bias == 'long':
+                    return_pct = ((exit_price - close_price) / close_price) * 100
+                else:
+                    return_pct = ((close_price - exit_price) / close_price) * 100
+                    
+                returns[key].append(return_pct)
+                all_returns[key].append(return_pct)
+        
+        # Calculate mean returns for this symbol
+        mean_returns = {}
+        for key in returns:
+            if returns[key]:
+                mean_returns[key] = sum(returns[key]) / len(returns[key])
+            else:
+                mean_returns[key] = 0.0
+        
+        symbol_stats[sym] = {
+            'num_signals': num_signals,
+            'returns': returns,
+            'mean_returns': mean_returns
+        }
+    
+    # Calculate aggregate statistics
+    aggregate_mean_returns = {}
+    for key in all_returns:
+        if all_returns[key]:
+            aggregate_mean_returns[key] = sum(all_returns[key]) / len(all_returns[key])
+        else:
+            aggregate_mean_returns[key] = 0.0
+    
+    aggregate_stats = {
+        'num_signals': total_signals,
+        'returns': all_returns,
+        'mean_returns': aggregate_mean_returns
+    }
+    
+    return symbol_stats, aggregate_stats
+
+
 #These functions should be tested.
 #*What will this functio do if the exit/stop signals do not occur after the entry signal?
 def compute_expected_interday_values(

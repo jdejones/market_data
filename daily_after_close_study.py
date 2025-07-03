@@ -101,7 +101,7 @@ if __name__ == "__main__":
             stock_stats[sym] = stats
     
     # Calculate expected value (EV) for each condition across all symbols
-    ev_stats = {}
+    ev = {}
     
     # First, collect all returns for each condition across all symbols
     all_returns = {}
@@ -119,11 +119,11 @@ if __name__ == "__main__":
     
     # Calculate expected value for each condition
     for condition in tqdm(all_returns, desc="Calculating Expected Values by Condition"):
-        ev_stats[condition] = {}
+        ev[condition] = {}
         
         for days in ['5days', '10days', '20days']:
             if not all_returns[condition][days]:
-                ev_stats[condition][days] = 0.0
+                ev[condition][days] = 0.0
                 continue
             
             # Convert returns to numpy array
@@ -131,7 +131,7 @@ if __name__ == "__main__":
             n_total = len(returns_array)
             
             if n_total == 0:
-                ev_stats[condition][days] = 0.0
+                ev[condition][days] = 0.0
                 continue
             
             # Count positive and negative returns
@@ -154,7 +154,7 @@ if __name__ == "__main__":
             outcomes = np.array([avg_positive, avg_negative])
             expected_value = np.dot(probabilities, outcomes)
             
-            ev_stats[condition][days] = round(expected_value, 4)
+            ev[condition][days] = round(expected_value, 4)
         
     sector_close_vwap_count = {sector: [0, 0] for sector in sec}
     industry_close_vwap_count = {industry: [0, 0] for industry in ind}
