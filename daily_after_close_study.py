@@ -1,10 +1,10 @@
 if __name__ == "__main__":
     import warnings
-    Suppress all warnings
+    # Suppress all warnings
     warnings.filterwarnings('ignore')
-    I added the try/except block as a quick fix to avoid conflicts with the
-    interactive interpreter and the github repo. There should be a
-    cleaner way to do this.
+    # I added the try/except block as a quick fix to avoid conflicts with the
+    # interactive interpreter and the github repo. There should be a
+    # cleaner way to do this.
     try:
         from market_data.Symbol_Data import SymbolData
     except ModuleNotFoundError:
