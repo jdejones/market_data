@@ -1301,7 +1301,6 @@ def signal_statistics(
     
     return symbol_stats, aggregate_stats
 
-
 #These functions should be tested.
 #*What will this functio do if the exit/stop signals do not occur after the entry signal?
 def compute_expected_interday_values(
@@ -1415,6 +1414,54 @@ def compute_expected_interday_values(
         ev_aggregate = float('nan')
 
     return ev_by_symbol, ev_aggregate
+
+def conditional_probability(df, condition_col, outcome_col, condition_value=True, outcome_value=True, periods_ahead=1):
+    """
+    Calculate conditional probability of an outcome occurring in the next period(s) given a condition.
+    
+    P(outcome_t+n | condition_t) = Count(condition_t=True AND outcome_t+n=True) / Count(condition_t=True)
+    
+    Args:
+        df (pd.DataFrame): DataFrame containing the data
+        condition_col (str): Column name for the condition
+        outcome_col (str): Column name for the outcome
+        condition_value: Value that represents the condition being met. Default is True.
+        outcome_value: Value that represents the outcome occurring. Default is True.
+        periods_ahead (int): Number of periods ahead to check for outcome. Default is 1.
+    
+    Returns:
+        float: Conditional probability (0.0 to 1.0), or NaN if no condition occurrences
+    """
+    import pandas as pd
+    import numpy as np
+    
+    # Validate inputs
+    if condition_col not in df.columns:
+        raise ValueError(f"Condition column '{condition_col}' not found in DataFrame")
+    if outcome_col not in df.columns:
+        raise ValueError(f"Outcome column '{outcome_col}' not found in DataFrame")
+    
+    # Create shifted outcome column for future periods
+    outcome_shifted = df[outcome_col].shift(-periods_ahead)
+    
+    # Find where condition is met
+    condition_mask = df[condition_col] == condition_value
+    
+    # Count total condition occurrences (excluding last n periods where we can't check outcome)
+    valid_condition_mask = condition_mask & ~outcome_shifted.isna()
+    total_conditions = valid_condition_mask.sum()
+    
+    if total_conditions == 0:
+        return float('nan')
+    
+    # Count where both condition is met AND outcome occurs in next period(s)
+    both_occur = valid_condition_mask & (outcome_shifted == outcome_value)
+    favorable_outcomes = both_occur.sum()
+    
+    # Calculate conditional probability
+    probability = favorable_outcomes / total_conditions
+    
+    return float(probability)
 
 
 #Intraday RVol objects
