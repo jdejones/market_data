@@ -1432,8 +1432,6 @@ def conditional_probability(df, condition_col, outcome_col, condition_value=True
     Returns:
         float: Conditional probability (0.0 to 1.0), or NaN if no condition occurrences
     """
-    import pandas as pd
-    import numpy as np
     
     # Validate inputs
     if condition_col not in df.columns:
