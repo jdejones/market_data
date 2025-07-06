@@ -1302,7 +1302,7 @@ def signal_statistics(
     return symbol_stats, aggregate_stats
 
 #These functions should be tested.
-#*What will this functio do if the exit/stop signals do not occur after the entry signal?
+#*What will this function do if the exit/stop signals do not occur after the entry signal?
 def compute_expected_interday_values(
     interday_signals: Dict[str, pd.DataFrame],
     price_data: Dict[str, pd.DataFrame],
