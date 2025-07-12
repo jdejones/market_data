@@ -479,7 +479,7 @@ def watchlist_suggestions(tb):
             if tb[2] == 'testing':
                 watchlists = {'relative_strength_results': wl.make_watchlist(wl.relative_strength_tc2000_favorites),
                                 'high_quant_results': wl.make_watchlist(wl.high_quant),
-                                'uptrend_retracement_results': wl.make_watchlist(wl.uptrend_retracement_results)
+                                'uptrend_retracement_results': wl.make_watchlist(wl.uptrend_retracement)
                                 }
                 return list(watchlists.keys())
             elif tb[2] == 'continuation':

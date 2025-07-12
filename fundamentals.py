@@ -2,7 +2,7 @@
 The next functions that I should work on are those that access the SEC API.
 """
 
-from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi
+from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi, find_peaks
 from market_data.api_keys import sec_api_key, polygon_api_key
 from market_data.price_data_import import api_import
 from polygon import RESTClient
@@ -839,7 +839,7 @@ def current_float( symbol: str) -> Tuple[str,int]:
     sharesOutstanding = response['data'][0]['float']['outstandingShares'][0]['value']
     return (symbol, sharesOutstanding)
 
-def float_time_series( symbol: str) -> pd.DataFrame:
+def float_time_series(symbol: str) -> pd.DataFrame:
     floatApi = FloatApi(sec_api_key)
     response = floatApi.get_float(ticker=symbol)
     df = pd.json_normalize(response['data'])
@@ -850,14 +850,14 @@ def float_time_series( symbol: str) -> pd.DataFrame:
     df.sort_index(inplace=True)
     return df
 
-def market_cap_time_series( symbol: str, symbol_df: pd.DataFrame=None) -> pd.DataFrame:
+def market_cap_time_series(symbol: str, symbol_df: pd.DataFrame=None) -> pd.DataFrame:
     float_df = float_time_series(symbol)
     if not isinstance(symbol_df, pd.DataFrame):
         symbol_df = api_import([symbol])[symbol]
     # Merge the two dataframes with symbol_df index as the final index
     merged_df = symbol_df.merge(float_df, left_index=True, right_index=True, how='left')
     # Forward fill the nan values in the value column
-    merged_df['float_shares'] = merged_df['float_shares'].fillna(method='ffill')
+    merged_df['float_shares'] = merged_df['float_shares'].ffill()
     merged_df['market_cap'] = merged_df['Close'] * merged_df['float_shares']
     return merged_df['market_cap']
 
@@ -877,7 +877,7 @@ def price_to_fundamental(symbol: str,
                                     limit=limit, 
                                     timeframe=timeframe, 
                                     plot=False)
-    price_df = market_cap_time_series(symbol, symbol_df).copy()
+    price_df = market_cap_time_series(symbol, symbol_df).to_frame().copy()
     price_df.index = pd.to_datetime(price_df.index)
     fundamental_df.index = pd.to_datetime(fundamental_df.index)
     fundamental_df_reindexed = fundamental_df.reindex(price_df.index, method='ffill')
@@ -885,8 +885,19 @@ def price_to_fundamental(symbol: str,
     price_df[fundamental_col] = fundamental_df_reindexed[fundamental_col]
 
     col = f'price_to_{fundamental_col}'
-    price_df[col] = price_df['market_cap'] / price_df[fundamental_col]
-    price_df[col] = price_df[col].fillna(method='ffill')
+    price_df[col] = price_df['market_cap'] / price_df[fundamental_col].replace(0, np.nan)
+    price_df[col] = price_df[col].fillna(0)
+    price_df[col] = price_df[col].ffill()
+    
+    # Find peaks (highs) and troughs (lows) in the price-to-fundamental ratio
+    peaks, _ = find_peaks(price_df[col].dropna(), prominence=0.1)
+    troughs, _ = find_peaks(-price_df[col].dropna(), prominence=0.1)
+    
+    # Get the actual index values for peaks and troughs
+    peak_dates = price_df.index[peaks]
+    trough_dates = price_df.index[troughs]
+    peak_values = price_df[col].iloc[peaks]
+    trough_values = price_df[col].iloc[troughs]
     if plot:
         # return px.line(price_df[col], 
         #                title=f'{symbol} Price to {fundamental_col.title()}',
@@ -897,6 +908,21 @@ def price_to_fundamental(symbol: str,
         fig.add_scatter(x=price_df.index, y=price_df['market_cap'], 
                        mode='lines', name='market_cap', yaxis='y2')
         fig.update_layout(yaxis2=dict(overlaying='y', side='right', title='Market Cap'))
+        
+        
+        fig.add_scatter(x=peak_dates, y=peak_values, 
+               mode='markers', name='Peaks', marker=dict(color='red', size=8))
+        fig.add_scatter(x=trough_dates, y=trough_values, 
+                mode='markers', name='Troughs', marker=dict(color='green', size=8))
+        # # Add horizontal lines for peaks
+        # for peak_value in peak_values:
+        #     fig.add_hline(y=peak_value, line=dict(color='red', dash='dash'), 
+        #                  annotation_text=f'Peak: {peak_value:.2f}')
+        
+        # # Add horizontal lines for troughs  
+        # for trough_value in trough_values:
+        #     fig.add_hline(y=trough_value, line=dict(color='green', dash='dash'),
+        #                  annotation_text=f'Trough: {trough_value:.2f}')
         return fig
     return price_df[col]
 
