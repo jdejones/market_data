@@ -4,7 +4,7 @@ Code for processing episodic pivots.
 
 from market_data import datetime, np, tqdm, pd, json
 import market_data.seeking_alpha as sa
-from watchlists_locations import make_watchlist, episodic_pivots
+from market_data.watchlists_locations import make_watchlist, episodic_pivots
 from market_data import ThreadPoolExecutor, as_completed
 
 class Episodic_Pivots:
