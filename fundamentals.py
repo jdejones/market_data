@@ -866,7 +866,9 @@ def price_to_fundamental(symbol: str,
                          symbol_df: pd.DataFrame=None, 
                          plot=False,
                          limit=10,
-                         timeframe='annual') -> pd.Series:
+                         timeframe='annual',
+                         prominence=None,
+                         distance=90) -> pd.Series:
     fundamental_col: str = fundamental.__name__
     if symbol_df is None:
         symbol_df = api_import([symbol])[symbol]
@@ -890,8 +892,8 @@ def price_to_fundamental(symbol: str,
     price_df[col] = price_df[col].ffill()
     
     # Find peaks (highs) and troughs (lows) in the price-to-fundamental ratio
-    peaks, _ = find_peaks(price_df[col].dropna(), prominence=0.1)
-    troughs, _ = find_peaks(-price_df[col].dropna(), prominence=0.1)
+    peaks, _ = find_peaks(price_df[col].dropna(), prominence=prominence, distance=distance)
+    troughs, _ = find_peaks(-price_df[col].dropna(), prominence=prominence, distance=distance)
     
     # Get the actual index values for peaks and troughs
     peak_dates = price_df.index[peaks]
@@ -899,9 +901,6 @@ def price_to_fundamental(symbol: str,
     peak_values = price_df[col].iloc[peaks]
     trough_values = price_df[col].iloc[troughs]
     if plot:
-        # return px.line(price_df[col], 
-        #                title=f'{symbol} Price to {fundamental_col.title()}',
-        #                labels={'index': 'Date', 'value': f'Price to {fundamental_col.title()}'})
         fig = px.line(price_df[col], 
                       title=f'{symbol} Price to {fundamental_col.title()}',
                       labels={'index': 'Date', 'value': f'Price to {fundamental_col.title()}'})
@@ -909,7 +908,7 @@ def price_to_fundamental(symbol: str,
                        mode='lines', name='market_cap', yaxis='y2')
         fig.update_layout(yaxis2=dict(overlaying='y', side='right', title='Market Cap'))
         
-        
+        #Scatter plot the peaks and troughs
         fig.add_scatter(x=peak_dates, y=peak_values, 
                mode='markers', name='Peaks', marker=dict(color='red', size=8))
         fig.add_scatter(x=trough_dates, y=trough_values, 
