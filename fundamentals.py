@@ -868,7 +868,8 @@ def price_to_fundamental(symbol: str,
                          limit=10,
                          timeframe='annual',
                          prominence=None,
-                         distance=90) -> pd.Series:
+                         distance=90,
+                         return_df=False) -> pd.Series:
     fundamental_col: str = fundamental.__name__
     if symbol_df is None:
         symbol_df = api_import([symbol])[symbol]
@@ -923,5 +924,13 @@ def price_to_fundamental(symbol: str,
         #     fig.add_hline(y=trough_value, line=dict(color='green', dash='dash'),
         #                  annotation_text=f'Trough: {trough_value:.2f}')
         return fig
-    return price_df[col]
+    if return_df:
+        # Add true values at peak and trough locations
+        price_df['peaks'] = False
+        price_df['troughs'] = False
+        price_df.loc[peak_dates, 'peaks'] = True
+        price_df.loc[trough_dates, 'troughs'] = True
+        return price_df
+    else:
+        return price_df[col]
 
