@@ -30,6 +30,7 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
        (bias=='short' and df['Close'].iloc[-1] > df[init_col].iloc[-1]):
         return df
     
+    loop_count = 0
     # 3. Loop for subsequent handoffs ----------
     while True:
         prev = anchors[-1]
@@ -40,7 +41,7 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
         mask = (segment['Low'] < segment[col_prev]) if bias == 'long' else (segment['High'] > segment[col_prev])
         
         # 3b. No breach case with “Additional Consideration”
-        if not mask.any():
+        if (not mask.any()) or (not mask[1:].any()):
             # If last anchor is older than 20 bars ago, keep anchoring until first breach
             window_start = df.index[-20]
             if prev < window_start:
