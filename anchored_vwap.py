@@ -30,7 +30,6 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
        (bias=='short' and df['Close'].iloc[-1] > df[init_col].iloc[-1]):
         return df
     
-    loop_count = 0
     # 3. Loop for subsequent handoffs ----------
     while True:
         prev = anchors[-1]
@@ -40,7 +39,7 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
         # 3a. Detect breach
         mask = (segment['Low'] < segment[col_prev]) if bias == 'long' else (segment['High'] > segment[col_prev])
         
-        # 3b. No breach case with “Additional Consideration”
+        # 3b. No breach case with "Additional Consideration"
         if (not mask.any()) or (not mask[1:].any()):
             # If last anchor is older than 20 bars ago, keep anchoring until first breach
             window_start = df.index[-20]
@@ -48,16 +47,18 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
                 # keep trying: find next candidate low/high in segment
                 # we step forward one bar at a time until we find a breach
                 for idx in segment.index:
-                    # re-anchor at each new bar to see if breach occurs there
-                    df = AVWAP_by_date(df, idx)
-                    anchors.append(idx)
+                    # Check if anchor already exists before adding
+                    if idx not in anchors:
+                        # re-anchor at each new bar to see if breach occurs there
+                        df = AVWAP_by_date(df, idx)
+                        anchors.append(idx)
                     col_curr = f"VWAP {idx}"
                     # check if this new VWAP has a breach in the remaining bars
                     rem = df.loc[df.index > idx]
                     breach_rem = ((rem['Low'] < rem[col_curr]) if bias == 'long'
                                   else (rem['High'] > rem[col_curr]))
                     if breach_rem.any():
-                        # once we’ve found a true breach, break out of this inner loop
+                        # once we've found a true breach, break out of this inner loop
                         break
                 # now continue outer loop to pick up with new mask on updated VWAP
                 continue
@@ -67,8 +68,10 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
 
         # 3c. Normal handoff when breach exists
         handoff = mask[mask].index[-1]
-        df = AVWAP_by_date(df, handoff)
-        anchors.append(handoff)
+        # Check if anchor already exists before adding
+        if handoff not in anchors:
+            df = AVWAP_by_date(df, handoff)
+            anchors.append(handoff)
         col_curr = f"VWAP {handoff}"
 
         # 4. Discontinuation checks ---------------
