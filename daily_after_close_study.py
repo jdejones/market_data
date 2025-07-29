@@ -209,8 +209,8 @@ if __name__ == "__main__":
 
 
     rel_stren = sf.relative_strength(symbols)
-    prev_perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-01-15')
-    perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-04-11')
+    prev_perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-04-11')
+    perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-07-15')
     days_elevated_rvol = {}
     days_range_expansion = {}
     for sym in symbols:

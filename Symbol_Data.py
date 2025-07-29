@@ -37,3 +37,23 @@ class Intraday_SymbolData:
     market_cap: float | None = None
     rvol_df: pd.Series | None = None
     daily_loi: dict[str, float] | None = None
+
+
+
+def full_report():
+    #* The idea for this function may be better executed as an LLM prompt with RAG access to my code.
+    #Business Overview
+    ##Product/Revenue Stream
+    
+    #News
+    ##Narratives
+    
+    #Analyses
+    ##Compare/Contrast
+    
+    
+    #Fundamentals
+    
+    
+    #Technicals
+    pass
