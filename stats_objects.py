@@ -1224,7 +1224,7 @@ def signal_statistics(
     
     for sym, df in dataframes.items():
         # Limit to lookback period
-        df = df[-lookback:].copy()
+        df = df.df[-lookback:].copy()
         
         # Get signal dates
         signal_dates = df.loc[df[signal_column] == 1].index
@@ -1303,7 +1303,7 @@ def signal_statistics(
 
 #These functions should be tested.
 #*What will this function do if the exit/stop signals do not occur after the entry signal?
-def compute_expected_interday_values(
+def compute_interday_expected_values(
     interday_signals: Dict[str, pd.DataFrame],
     price_data: Dict[str, pd.DataFrame],
     entry_signal: str,
