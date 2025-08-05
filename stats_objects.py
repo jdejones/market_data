@@ -1215,11 +1215,13 @@ def signal_statistics(
         - 'num_signals': int
         - 'returns': dict with keys '5days', '10days', '20days'
         - 'mean_returns': dict with keys '5days', '10days', '20days'
+        - 'signal_dates': list of signal dates
     aggregate_stats : dict
         Aggregate statistics across all symbols with same structure.
     """
     symbol_stats = {}
     all_returns = {'5days': [], '10days': [], '20days': []}
+    all_signal_dates = []
     total_signals = 0
     
     for sym, df in dataframes.items():
@@ -1232,6 +1234,8 @@ def signal_statistics(
         total_signals += num_signals
         
         returns = {'5days': [], '10days': [], '20days': []}
+        signal_dates_list = list(signal_dates)
+        all_signal_dates.extend(signal_dates_list)
         
         for signal_date in signal_dates:
             close_price = df.loc[signal_date, 'Close']
@@ -1282,7 +1286,8 @@ def signal_statistics(
         symbol_stats[sym] = {
             'num_signals': num_signals,
             'returns': returns,
-            'mean_returns': mean_returns
+            'mean_returns': mean_returns,
+            'signal_dates': signal_dates_list
         }
     
     # Calculate aggregate statistics
@@ -1296,7 +1301,8 @@ def signal_statistics(
     aggregate_stats = {
         'num_signals': total_signals,
         'returns': all_returns,
-        'mean_returns': aggregate_mean_returns
+        'mean_returns': aggregate_mean_returns,
+        'signal_dates': all_signal_dates
     }
     
     return symbol_stats, aggregate_stats
