@@ -1226,7 +1226,7 @@ def signal_statistics(
     
     for sym, df in dataframes.items():
         # Limit to lookback period
-        df = df.df[-lookback:].copy()
+        df = df[-lookback:].copy()
         
         # Get signal dates
         signal_dates = df.loc[df[signal_column] == 1].index
