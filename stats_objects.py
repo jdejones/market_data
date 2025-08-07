@@ -1241,13 +1241,10 @@ def signal_statistics(
         for signal_date in signal_dates:
             close_price = df.loc[signal_date, 'Close']
             open_price = df.loc[signal_date, 'Open']
-            if open_price != 0:
-                if bias == 'long':
-                    day_ret = ((close_price - open_price) / open_price) * 100
-                else:
-                    day_ret = ((open_price - close_price) / open_price) * 100
+            if bias == 'long':
+                day_ret = ((close_price - open_price) / open_price) * 100
             else:
-                day_ret = 0.0
+                day_ret = ((open_price - close_price) / open_price) * 100
             returns['1day'].append(day_ret)
             all_returns['1day'].append(day_ret)
             
