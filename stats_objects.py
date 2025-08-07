@@ -854,7 +854,7 @@ class IntradaySignalProcessing:
         p_adjust: str = 'bonferroni'
     ) -> pd.DataFrame:
         """
-        Perform Dunn’s post-hoc pairwise comparisons on the groups defined in self.conditions.
+        Perform Dunn's post-hoc pairwise comparisons on the groups defined in self.conditions.
 
         Args:
             metric:   which return‐series to use (e.g. 'ret_close0')
@@ -885,7 +885,7 @@ class IntradaySignalProcessing:
         }
         if len(groups) < 2:
             raise ValueError(
-                f"Need at least two non-constant signals for Dunn’s test; "
+                f"Need at least two non-constant signals for Dunn's test; "
                 f"found only {len(groups)}."
             )
 
@@ -897,7 +897,7 @@ class IntradaySignalProcessing:
             }
         )
 
-        # 3) Run Dunn’s test
+        # 3) Run Dunn's test
         #    this returns a symmetric DataFrame of adjusted p-values
         pvals = sp.posthoc_dunn(
             df,
@@ -919,7 +919,7 @@ class IntradaySignalProcessing:
         while prev_day.weekday() >= 5:  # Sat/Sun
             prev_day -= pd.Timedelta(days=1)
 
-        # Grab yesterday’s low (or high)
+        # Grab yesterday's low (or high)
         prev_low  = df.at[prev_day, 'Low']
         prev_high = df.at[prev_day, 'High']
 
@@ -929,7 +929,7 @@ class IntradaySignalProcessing:
             bias=bias
         )
 
-        # Or, if you wanted to use yesterday’s high in a short bias:
+        # Or, if you wanted to use yesterday's high in a short bias:
         ev_sym, ev_agg = isp.compute_expected_signal_values(
             stop_target=prev_high,
             bias=bias
@@ -1219,8 +1219,9 @@ def signal_statistics(
     aggregate_stats : dict
         Aggregate statistics across all symbols with same structure.
     """
+    
     symbol_stats = {}
-    all_returns = {'5days': [], '10days': [], '20days': []}
+    all_returns = {'1day': [], '5days': [], '10days': [], '20days': []}
     all_signal_dates = []
     total_signals = 0
     
@@ -1233,12 +1234,23 @@ def signal_statistics(
         num_signals = len(signal_dates)
         total_signals += num_signals
         
-        returns = {'5days': [], '10days': [], '20days': []}
+        returns = {'1day': [], '5days': [], '10days': [], '20days': []}
         signal_dates_list = list(signal_dates)
         all_signal_dates.extend(signal_dates_list)
         
         for signal_date in signal_dates:
             close_price = df.loc[signal_date, 'Close']
+            open_price = df.loc[signal_date, 'Open']
+            if open_price != 0:
+                if bias == 'long':
+                    day_ret = ((close_price - open_price) / open_price) * 100
+                else:
+                    day_ret = ((open_price - close_price) / open_price) * 100
+            else:
+                day_ret = 0.0
+            returns['1day'].append(day_ret)
+            all_returns['1day'].append(day_ret)
+            
             signal_idx = df.index.get_loc(signal_date)
             
             # Calculate returns for each period
