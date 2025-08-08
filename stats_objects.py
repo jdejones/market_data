@@ -1,4 +1,4 @@
-from market_data import date, timedelta, List, dataclass, pd, datetime, Tuple, timedelta, operator
+from market_data import date, timedelta, List, dataclass, pd, datetime, Tuple, timedelta, operator, Union
 from market_data.Symbol_Data import SymbolData
 from market_data.price_data_import import fragmented_intraday_import, nonconsecutive_intraday_import, intraday_import
 from market_data.add_technicals import intraday_pipeline, add_avwap_by_offset, run_pipeline, Step, _add_intraday_technicals_worker
@@ -1193,7 +1193,7 @@ def exit_stop_rel_signal_price(
     entry_signal: str,
     signal_day_col: str,
     stop_day_col: str,
-    _operator: str|callable,
+    _operator: Union[str, callable],
     result_col: str
     ):
     """
