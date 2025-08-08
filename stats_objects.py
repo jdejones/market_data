@@ -1188,6 +1188,95 @@ def exit_stop_rel_entry(df, entry_signal, l_operand, r_operand, bias='long'):
             stop_signals[first_stop_date] = 1
     return exit_signals, stop_signals
 
+def exit_stop_rel_signal_price(
+    df: pd.DataFrame, 
+    entry_signal: str,
+    signal_day_col: str,
+    stop_day_col: str,
+    _operator: str|callable,
+    result_col: str
+    ):
+    """
+    This is for use with the compute_interday_expected_values function.
+    It's is needed if the stop price is dependent on a price from the day the signal occurs.
+    For example, if the stop price is greater than the high of the the day the day the signal occurs
+    the level would be 'High' and _operator would be '>'.
+    Add a column `stop_signal` marking the first day AFTER each `entry_signal` where
+    the comparison between the current row's `stop_day_col` and the ENTRY-DAY value of
+    `signal_day_col` is satisfied. The scan stops at the next entry if one occurs.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Daily OHLCV DataFrame containing `entry_signal`, `signal_day_col`, and `stop_day_col`.
+    entry_signal : str
+        Column name that is True/1 on entry days.
+    signal_day_col : str
+        Column whose value on the entry day is used as the reference price.
+    stop_day_col : str
+        Column compared on subsequent days against the entry-day `signal_day_col` value.
+    _operator : str or callable
+        One of {'>', '<', '>=', '<=', '==', '!='} or a callable (x, y) -> bool.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of df with a new integer column `stop_signal` (1 on first stop day per entry, else 0).
+    """
+    # Validate inputs and work on a copy
+    required_cols = [entry_signal, signal_day_col, stop_day_col]
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"Required column '{col}' not found in DataFrame")
+
+    df[result_col] = 0
+
+    # Resolve operator
+    _ops = {
+        '>':  operator.gt,
+        '<':  operator.lt,
+        '>=': operator.ge,
+        '<=': operator.le,
+        '==': operator.eq,
+        '!=': operator.ne,
+    }
+    if callable(_operator):
+        op_func = _operator
+    else:
+        if _operator not in _ops:
+            raise ValueError(f"Unsupported operator '{_operator}'. Use one of {list(_ops.keys())} or a callable.")
+        op_func = _ops[_operator]
+
+    # Identify entry dates
+    entry_mask = (df[entry_signal] == 1) | (df[entry_signal] == True)
+    entry_dates = df.index[entry_mask]
+    if len(entry_dates) == 0:
+        return df
+
+    # For each entry, find the first date after it (and before the next entry) where
+    # op(df[stop_day_col], entry_day_signal_price) is True.
+    for i, start_date in enumerate(entry_dates):
+        try:
+            reference_price = df.at[start_date, signal_day_col]
+        except KeyError:
+            continue
+        if pd.isna(reference_price):
+            continue
+
+        # Compute end boundary (exclusive): the next entry date, if any
+        end_date = entry_dates[i + 1] if (i + 1) < len(entry_dates) else None
+
+        window_mask = df.index > start_date
+        if end_date is not None:
+            window_mask &= df.index < end_date
+
+        cmp_mask = window_mask & op_func(df[stop_day_col], reference_price)
+        if cmp_mask.any():
+            # First occurrence in the window
+            first_stop_date = cmp_mask.idxmax()
+            df.at[first_stop_date, result_col] = 1
+
+    return df
+
 def signal_statistics(
     dataframes: dict[str, pd.DataFrame],
     signal_column: str,
@@ -1323,7 +1412,7 @@ def compute_interday_expected_values(
     price_data: Dict[str, pd.DataFrame],
     entry_signal: str,
     exit_signal: str,
-    stop_signals: Union[str, List[str]],
+    stop_signal: Union[str, List[str]],
     bias: str = 'long'
 ) -> Tuple[Dict[str, float], float]:
     """
