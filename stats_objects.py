@@ -1441,8 +1441,8 @@ def compute_interday_expected_values(
         EV pooled across all symbols.
     """
     # Ensure stop_signals is a list
-    if isinstance(stop_signals, str):
-        stop_signals = [stop_signals]
+    if isinstance(stop_signal, str):
+        stop_signals = [stop_signal]
 
     ev_by_symbol: Dict[str, float] = {}
     all_pos: List[float] = []
