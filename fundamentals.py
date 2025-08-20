@@ -688,14 +688,15 @@ def sales(symbol, limit=10, timeframe='quarterly', plot=False) -> pd.Series:
         return px.line(df)
     return df
 
-def revenue_growth( symbol, form_type='10-K'):
-    try:
-        cur_revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
-        prev_revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[1].value)
-        rev_growth = ((cur_revenue - prev_revenue) / prev_revenue) * 100
-        return rev_growth
-    except:
-        return np.nan
+def revenue_growth(symbol, limit=10, timeframe='quarterly', plot=False, most_recent=True):
+    df = sales(symbol, limit=limit, timeframe=timeframe, plot=plot)
+    if plot:
+        return df
+    df['pct_change'] = df.sales.pct_change()
+    if most_recent:
+        return df['pct_change'].iloc[-1].item()
+    else:
+        return df['pct_change']
 
 def capex( symbol, form_type='10-K'):
     try:
