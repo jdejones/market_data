@@ -1461,7 +1461,17 @@ def compute_interday_expected_values(
                 continue
 
             entry_price = price_df.at[date, 'Close']
-            future = signals.loc[date:]  # include today
+            # Only consider signals strictly AFTER the entry day to prevent same-day exit/stop
+            pos = signals.index.get_loc(date)
+            if isinstance(pos, slice) or not np.isscalar(pos):
+                # If duplicates exist, start after the last occurrence of this date
+                if isinstance(pos, slice):
+                    start_i = pos.stop
+                else:
+                    start_i = int(np.max(pos)) + 1
+            else:
+                start_i = pos + 1
+            future = signals.iloc[start_i:]
 
             # find first exit
             exits = future.index[future[exit_signal] == True]
