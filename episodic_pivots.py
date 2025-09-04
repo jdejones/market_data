@@ -21,9 +21,9 @@ class Episodic_Pivots:
         self.reward_risk_dict = {}        
     
 
-    def load_all(self):
+    def load_all(self, gap_threshold=7.9):
         for sym in tqdm(self.symbols, desc='Loading Episodic Pivots'):
-            self.episodic_pivot_finder(sym)
+            self.episodic_pivot_finder(sym, gap_threshold)
         self.drawdown()
         self.returns()
         self.max_return()
@@ -36,9 +36,12 @@ class Episodic_Pivots:
         with open(r"E:\Market Research\Dataset\current_ep_start_end_dates.txt", "w") as f:
             f.write(json.dumps(offset_dates, indent=4, sort_keys=True, default=str))
 
-    def episodic_pivot_finder(self, sym):
+    def episodic_pivot_finder(self, sym, gap_threshold):
         """Identifies episodic pivots. Assigns a value of 1 for days the symbol passes the episodic pivot filter. Adds the symbol, the date the ep began and the dataframe
-            containing the days the symbol was an episodic pivot to a dictionary called ep_dict
+            containing the days the symbol was an episodic pivot to a dictionary called ep_dict.
+            
+            Simplified logic of ep identification:
+                EP is the date range between the row with ep == 1 and the row with c_over_under_20DMA == 1.
 
         Args:
             symbol (str): the stock to find episodic pivots for.
@@ -46,9 +49,10 @@ class Episodic_Pivots:
         df = self.symbols[sym].df
         #The first date of each found EP
         self.ep_dict[sym] = {}
-        ep_initialized = [str(day).split(' ')[0] for day in df.loc[df.Gap > 7.9].index]
+      
+        ep_initialized = [str(day).split(' ')[0] for day in df.loc[df.Gap > gap_threshold].index]      
+        
         #Days when the Closing price is greater than the 20DMA
-
         df['c_over_under_20DMA'] = np.nan
         df['c_over_under_20DMA'].loc[(df['Close'].shift(1) > df['20DMA'].shift(1)) & (df['Close'] < df['20DMA'])] = 1
 
@@ -83,7 +87,7 @@ class Episodic_Pivots:
                 # mark the ep‐column in the slice to 1
                 df.loc[segment.index, 'ep'] = 1
                 # stash the slice
-                local_ep[date_str] = segment
+                local_ep[date_str] = segment.copy()
 
         self.ep_dict[sym] = local_ep        
 
