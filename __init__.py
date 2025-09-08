@@ -26,6 +26,7 @@ import scikit_posthocs as sp
 from functools import partial
 import plotly.express as px
 from sec_api import FloatApi
+from bs4 import BeautifulSoup as bs
 
 #Local imports
 from . import fundamentals as fu

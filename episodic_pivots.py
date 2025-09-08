@@ -32,7 +32,7 @@ class Episodic_Pivots:
         self.current_duration()
         self.risk_reward(risk_level='auto')
         # The following is intended to be used with the intraday_study.py script.
-        offset_dates = {sym: [sorted(self.ep_dict[sym].keys())[-1], datetime.datetime.today().date()] for sym in make_watchlist(episodic_pivots)}
+        offset_dates = {sym: [sorted(self.ep_dict[sym].keys())[-1], datetime.datetime.today().date()] for sym in self.ep_dict if len(self.ep_dict[sym]) > 0}
         with open(r"E:\Market Research\Dataset\current_ep_start_end_dates.txt", "w") as f:
             f.write(json.dumps(offset_dates, indent=4, sort_keys=True, default=str))
 

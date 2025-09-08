@@ -4,7 +4,7 @@ import os
 import logging
 from datetime import datetime, timedelta
 from market_data.api_keys import seeking_alpha_api_key
-from market_data import fu, pd
+from market_data import fu, pd, bs
 import sys
 
 
