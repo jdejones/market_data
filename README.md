@@ -1,6 +1,6 @@
 ### Market Data Processing and Technical Analysis Toolkit
 
-Professional toolkit for importing equity market data, enriching it with technical indicators, computing fundamentals-derived analytics, and exploring sector/industry behavior. The code integrates multiple data providers (Polygon.io, SEC API, Seeking Alpha via RapidAPI, Yahoo Finance) with rate-limited, concurrent data collection and a flexible indicator pipeline.
+Toolkit for importing equity market data, enriching it with technical indicators, computing fundamentals-derived analytics, and exploring sector/industry behavior. The code integrates multiple data providers (Polygon.io, SEC API, Seeking Alpha via RapidAPI, Yahoo Finance) with rate-limited, concurrent data collection and a flexible indicator pipeline.
 
 This repository assumes a Python package layout named `market_data` (as referenced throughout the modules). If you are using it directly from the repository, ensure the package is importable (see Installation). 
 
