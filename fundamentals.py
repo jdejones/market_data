@@ -844,7 +844,7 @@ def float_time_series(symbol: str) -> pd.DataFrame:
     floatApi = FloatApi(sec_api_key)
     response = floatApi.get_float(ticker=symbol)
     df = pd.json_normalize(response['data'])
-    df = pd.DataFrame([(_[0]['period'], _[0]['value']) for _ in df['float.outstandingShares']])
+    df = pd.DataFrame([(_[0]['period'], _[0]['value']) for _ in df['float.outstandingShares'] if len(_) > 0])
     df.columns = ['period', 'float_shares']
     df['period'] = pd.to_datetime(df['period'])
     df.set_index('period', inplace=True)
