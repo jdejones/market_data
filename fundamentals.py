@@ -5,7 +5,7 @@ The next functions that I should work on are those that access the SEC API.
 from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi, find_peaks
 from market_data.api_keys import sec_api_key, polygon_api_key
 from market_data.price_data_import import api_import
-from polygon import RESTClient
+from polygon.rest import RESTClient
 # from audioop import reverse
 pd.options.display.max_columns = 150
 from matplotlib.colors import ListedColormap

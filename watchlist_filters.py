@@ -1518,7 +1518,7 @@ def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, ale
         all_symbols_list = wl.make_watchlist(wl.all_symbols)
         for sym in ma_pullback_alerts:
             try:
-                if -1 > symbols[sym].df['ATRs_from_'+ma+'DMA'].iloc[-1] > alert_keep_threshold:
+                if -1 < symbols[sym].df['ATRs_from_'+ma+'DMA'].iloc[-1] < alert_keep_threshold:
                     ma_pullback_alerts.remove(sym)
             except KeyError as ke:
                 if sym in all_symbols_list:#Continue if symbol is filter out by liquidity filter.

@@ -4,7 +4,7 @@ from market_data.api_keys import polygon_api_key
 from market_data import pd, datetime, tqdm, limits, sleep_and_retry, requests, time, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy import create_engine
-from polygon.stocks import StocksClient
+from polygon.rest import RESTClient
 
 # at most 75 calls per 1 second window
 CALLS = 75
@@ -17,7 +17,7 @@ def api_import(
     to_date: datetime = datetime.datetime.today(), 
     transfer: dict[str, pd.DataFrame] = None
     ) -> dict[str, pd.DataFrame]:
-    client = StocksClient(api_key=polygon_api_key)
+    client = RESTClient(api_key=polygon_api_key)
     if transfer == None:
         data_dict = {}
     else:
@@ -28,8 +28,11 @@ def api_import(
     @limits(calls=CALLS, period=PERIOD)
     def _fetch_ohlcv(sym: str):
         """Function to make api requests with rate limits."""
-        raw = client.get_aggregate_bars(symbol=sym, from_date=from_date, to_date=to_date)
-        return raw['results']
+        aggs = client.list_aggs(ticker=sym, multiplier=1, timespan='day', from_=from_date, to=to_date)
+        # Convert Agg objects to dictionaries for compatibility
+        return [{'o': agg.open, 'h': agg.high, 'l': agg.low, 'c': agg.close,
+                 'v': agg.volume, 'vw': agg.vwap, 't': agg.timestamp, 'n': agg.transactions}
+                for agg in aggs]
 
     def _process(sym: str):
         """Fetch + turn into a DataFrame."""
@@ -94,7 +97,7 @@ def intraday_import(wl: list[str],
     Returns:
         dict[str, pd.DataFrame]: _description_
     """
-    client = StocksClient(api_key=polygon_api_key)
+    client = RESTClient(api_key=polygon_api_key)
     data_dict = {}
     
     #! _fetch_ohlcv is returning KeyError('results'). It is unclear why.
@@ -110,26 +113,15 @@ def intraday_import(wl: list[str],
     @limits(calls=CALLS, period=PERIOD)
     def _fetch_ohlcv(sym: str, offset_dates: list[int|str|datetime.datetime,int|str|datetime.datetime] = None):
         if offset_dates:
-            raw = client.get_aggregate_bars(symbol=sym, multiplier=multiplier, 
-                                            timespan=timespan, from_date=offset_dates[0], 
-                                            limit=limit,to_date=offset_dates[1])
+            aggs = client.list_aggs(ticker=sym, multiplier=multiplier, timespan=timespan,
+                                    from_=offset_dates[0], to=offset_dates[1], limit=limit)
         else:
-            raw = client.get_aggregate_bars(symbol=sym, multiplier=multiplier, 
-                                            timespan=timespan, from_date=from_date, 
-                                            limit=limit,to_date=to_date)
-        if 'next_url' in list(raw.keys()):
-            all_results = raw['results']
-            # Follow pagination if there’s a next_url
-            while raw.get('next_url'):
-                time.sleep(1)
-                next_url = raw['next_url']
-                url = next_url if next_url.startswith('http') else f'https://api.polygon.io{next_url}'
-                resp = requests.get(url, params={'apiKey': polygon_api_key}).json()            
-                # raw = resp.json()
-                all_results.extend(resp['results'])
-            return all_results
-        else:
-            return raw['results']
+            aggs = client.list_aggs(ticker=sym, multiplier=multiplier, timespan=timespan,
+                                    from_=from_date, to=to_date, limit=limit)
+        # Convert Agg objects to dictionaries for compatibility
+        return [{'o': agg.open, 'h': agg.high, 'l': agg.low, 'c': agg.close,
+                 'v': agg.volume, 'vw': agg.vwap, 't': agg.timestamp, 'n': agg.transactions}
+                for agg in aggs]
     
     def _process(sym: str, offset_dates: list[int|str|datetime.datetime,int|str|datetime.datetime] = None):
         """Fetch + turn into a DataFrame."""
@@ -194,15 +186,17 @@ def nonconsecutive_intraday_import(dates_dict: dict[str, list[datetime.date]],
                                     multiplier: int = 10,
                                     limit: int = 50000) -> dict[str, list[pd.DataFrame]]:
     data_dict = {sym: [] for sym in dates_dict}
-    client = StocksClient(api_key=polygon_api_key)
-    
+    client = RESTClient(api_key=polygon_api_key)
+
     @sleep_and_retry
     @limits(calls=CALLS, period=PERIOD)
     def _fetch_ohlcv(sym: str, from_date: datetime.date, to_date: datetime.date):
-        raw = client.get_aggregate_bars(symbol=sym, multiplier=multiplier, 
-                                        timespan=timespan, limit=limit, 
-                                        from_date=from_date, to_date=to_date)
-        return raw['results']
+        aggs = client.list_aggs(ticker=sym, multiplier=multiplier, timespan=timespan,
+                                from_=from_date, to=to_date, limit=limit)
+        # Convert Agg objects to dictionaries for compatibility
+        return [{'o': agg.open, 'h': agg.high, 'l': agg.low, 'c': agg.close,
+                 'v': agg.volume, 'vw': agg.vwap, 't': agg.timestamp, 'n': agg.transactions}
+                for agg in aggs]
     
     def _process(sym: str, from_date: datetime.date, to_date: datetime.date):   
         price_data = _fetch_ohlcv(sym, from_date, to_date)
@@ -253,15 +247,17 @@ def fragmented_intraday_import(dates_dict: dict[str, list[Tuple[datetime.date, d
                                multiplier: int = 10,
                                limit: int = 50000) -> dict[str, list[pd.DataFrame]]:
     data_dict = {sym: [] for sym in dates_dict}
-    client = StocksClient(api_key=polygon_api_key)
-    
+    client = RESTClient(api_key=polygon_api_key)
+
     @sleep_and_retry
     @limits(calls=CALLS, period=PERIOD)
     def _fetch_ohlcv(sym: str, from_date: datetime.date, to_date: datetime.date):
-        raw = client.get_aggregate_bars(symbol=sym, multiplier=multiplier, 
-                                        timespan=timespan, limit=limit, 
-                                        from_date=from_date, to_date=to_date)
-        return raw['results']
+        aggs = client.list_aggs(ticker=sym, multiplier=multiplier, timespan=timespan,
+                                from_=from_date, to=to_date, limit=limit)
+        # Convert Agg objects to dictionaries for compatibility
+        return [{'o': agg.open, 'h': agg.high, 'l': agg.low, 'c': agg.close,
+                 'v': agg.volume, 'vw': agg.vwap, 't': agg.timestamp, 'n': agg.transactions}
+                for agg in aggs]
     
     def _process(sym: str, from_date: datetime.date, to_date: datetime.date):
         price_data = _fetch_ohlcv(sym, from_date, to_date)
