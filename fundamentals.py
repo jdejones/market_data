@@ -10,7 +10,7 @@ from polygon.rest import RESTClient
 pd.options.display.max_columns = 150
 from matplotlib.colors import ListedColormap
 from typing import Dict, List, Tuple, Any
-    
+
 
 sa_fundamental_data = pd.read_csv(r"E:\Market Research\Fundamental Analysis\Files\Seeking Alpha\hadv\hadv.txt")
 # saa = seeking_alpha_api()
