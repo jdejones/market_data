@@ -314,6 +314,25 @@ if __name__ == "__main__":
                 continue
             fas[sector] = sf.close_over_vwap_ratio(temp)    
         return fas
+    
+    #Factors: Fundamental
+    #Expected Revenue Growth +1Q and +4Q
+    qplus1 = {}
+    gplus4 = {}
+    for sym in sa.earnings_dict:
+        try:
+            qplus1[sym] = (
+                round((float(sa.earnings_dict[sym]['revenue_consensus_mean']['1'][0]['dataitemvalue'])
+                - float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue'])
+            ) / float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue']) * 100, 2)
+            )
+            gplus4[sym] = (
+                round((float(sa.earnings_dict[sym]['revenue_consensus_mean']['4'][0]['dataitemvalue'])
+                - float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue'])
+            ) / float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue']) * 100, 2)
+            )
+        except:
+            continue
 
     #Pickling most used objects, so I don't have to rerun the script.
     # with open(r"E:\Market Research\Dataset\daily_after_close_study\symbols.pkl", "wb") as f:
@@ -393,6 +412,10 @@ if __name__ == "__main__":
           perf_since_earnings[-100:][::-1],          
           '\nUnderperformers Since Earnings Season Start',
           perf_since_earnings[:50],
+          '\nExpected Revenue Growth +1Q',
+          sorted(qplus1.items(), key=lambda x: x[1], reverse=True)[:100],
+          '\nExpected Revenue Growth +4Q',
+          sorted(gplus4.items(), key=lambda x: x[1], reverse=True)[:100],
           '\nDays With Elevated RVol',
           sorted(days_elevated_rvol.items(), key=lambda x: x[1], reverse=True),
           '\nDays With Consecutive Range Expansion',
