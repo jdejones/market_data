@@ -2,7 +2,7 @@
 Code for processing episodic pivots.
 """
 
-from market_data import datetime, np, tqdm, pd, json
+from market_data import datetime, np, tqdm, pd, json, api_import
 import market_data.seeking_alpha as sa
 from market_data.watchlists_locations import make_watchlist, episodic_pivots
 from market_data import ThreadPoolExecutor, as_completed
@@ -186,3 +186,15 @@ class Episodic_Pivots:
                 #TODO print(self.__class__, ': ', sym, '-', e) update error handling
                 continue
         
+    def ep_count(self, include_spy=True):
+        df_dict = {}
+        for sym in self.symbols:
+            df_dict[sym] = symbols[sym].df.ep
+        df = pd.DataFrame(df_dict)
+        df['total'] = df.sum(axis=1)
+        if include_spy:
+            spy = api_import(['SPY'])['SPY']['Close']
+            ep_spy = pd.concat([df['total'], spy], keys=['EP Count', '$SPY Close'], axis=1)
+            return ep_spy.plot()
+        df.rename(columns={'total': 'EP Count'}, inplace=True)
+        return df['EP Count'].plot()
