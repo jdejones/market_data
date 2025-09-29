@@ -2,10 +2,11 @@
 Code for processing episodic pivots.
 """
 
-from market_data import datetime, np, tqdm, pd, json, api_import
+from market_data import datetime, np, tqdm, pd, json
 import market_data.seeking_alpha as sa
 from market_data.watchlists_locations import make_watchlist, episodic_pivots
 from market_data import ThreadPoolExecutor, as_completed
+from market_data.price_data_import import api_import
 
 class Episodic_Pivots:
     def __init__(self, symbols: dict) -> None:
