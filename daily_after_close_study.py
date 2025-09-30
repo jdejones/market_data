@@ -504,7 +504,7 @@ if __name__ == "__main__":
           '\nDays With Consecutive Range Expansion',
           sorted(days_range_expansion.items(), key=lambda x: x[1], reverse=True),
           '\nRecent Short Interest',
-          recent_short_int[['Ticker', recent_short_int.columns[-1]]].sort_values(by=recent_short_int.columns[-1], ascending=False).head(100),
+          hist_short_int[['Ticker', hist_short_int.columns[-1]]].sort_values(by=hist_short_int.columns[-1], ascending=False).head(100).set_index('Ticker').to_dict()[hist_short_int.columns[-1]],
           '\nDollar Volume Over Market Cap All',
           dv_cap.tail(30),
           '\nDollar Volume Over Market Cap hadv',
