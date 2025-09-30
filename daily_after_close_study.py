@@ -80,6 +80,7 @@ if __name__ == "__main__":
             response = requests.get(url, headers=headers, params=querystring).json()
             
             #Container for symbol and respective rating
+            quant_ratings_errors = {}
             try:
                 sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
             except:
@@ -88,9 +89,11 @@ if __name__ == "__main__":
                     try:
                         sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
                     except Exception as e:
-                        print(e, _)
+                        quant_ratings_errors[sym] = e
                         continue
                 pass
+            if len(quant_ratings_errors) > 2000:
+                break
             
             #Concatenate rating to dataframe
             for sym in sym_ratings:
