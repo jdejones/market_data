@@ -92,7 +92,7 @@ if __name__ == "__main__":
                         quant_ratings_errors[sym] = e
                         continue
                 pass
-            if len(quant_ratings_errors) > 2000:
+            if len(quant_ratings_errors) > 3000:
                 break
             
             #Concatenate rating to dataframe
