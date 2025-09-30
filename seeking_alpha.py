@@ -21,6 +21,7 @@ analyst_price_targets_dict = None
 filters = json.load(open(r"E:\Market Research\Dataset\seeking_alpha_api\screeners_filters.txt"))
 analyst_ratings_dict = None
 sec_ind_ids = json.load(open(r"E:\Market Research\Dataset\seeking_alpha_api\sector_industry_ids.txt"))
+sym_by_id = json.load(open(r"E:\Market Research\Dataset\seeking_alpha_api\get_sym_by_id.txt"))
 
 def meta_data_load():
     global meta_data
@@ -105,7 +106,7 @@ def meta_data_save(symbols, replacement=False):
     with open(r"E:\Market Research\Dataset\seeking_alpha_api\seeking_alpha_meta_data.txt", "w") as f:
         f.write(json.dumps(meta_data, indent=4, sort_keys=True))
 
-  
+
 
 def earnings(ticker_ids, period_type='quarterly', relative_periods="-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23", data_items='all'): #"-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
     """Accepts a maximum of 4 symbols. If more are submitted an error will be raised.

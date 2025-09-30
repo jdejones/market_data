@@ -25,7 +25,7 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
     anchors = [anchor]
     init_col = f"VWAP {anchor}"
     
-    # 2. Structural bias check ------------------
+    # 2. First AVWAP check ------------------
     if (bias=='long' and df['Close'].iloc[-1] < df[init_col].iloc[-1]) or \
        (bias=='short' and df['Close'].iloc[-1] > df[init_col].iloc[-1]):
         return df

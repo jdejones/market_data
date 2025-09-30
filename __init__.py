@@ -27,6 +27,8 @@ from functools import partial
 import plotly.express as px
 from sec_api import FloatApi
 from bs4 import BeautifulSoup as bs
+from sqlalchemy import create_engine, text, DateTime
+import pymysql
 
 #Local imports
 from . import fundamentals as fu

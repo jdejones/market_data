@@ -27,12 +27,92 @@ if __name__ == "__main__":
     from market_data.episodic_pivots import Episodic_Pivots
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle
     from market_data.stats_objects import IntradaySignalProcessing as isp
+    from market_data import create_engine, text, DateTime, pymysql
+    from market_data.api_keys import database_password, seeking_alpha_api_key
     
     #*Import price data.
     #hadv == high average dollar volume
     hadv = make_watchlist(hadv)
     data = api_import(hadv)
     symbols = {k: SymbolData(k, v) for k,v in data.items()}
+    
+    #########################################################################
+    #Connect to database
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/daily_sa"
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+
+    # query a database -> DataFrame
+    daily_quant_rating_df = pd.read_sql("SELECT * FROM quant_rating", con=engine)
+    
+    if len(daily_quant_rating_df.columns) > 1000:
+        warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
+        
+    daily_quant_rating_df.set_index('index', inplace=True)
+    #Concatenate new column
+    daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
+
+    #Request and add new rows
+    #list of symbols
+    syms = list(symbols.keys())
+
+    #api requests
+    #assign counters
+    i=0
+    j=50
+    while True:
+            #break when list is exhausted
+            if i > len(syms):
+                break
+            #assign None near end of list
+            if j > len(syms):
+                j = None
+            #API call
+            url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
+
+            querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
+
+            headers = {
+                "x-rapidapi-key": f"{seeking_alpha_api_key}",
+                "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
+            }
+
+            response = requests.get(url, headers=headers, params=querystring).json()
+            
+            #Container for symbol and respective rating
+            try:
+                sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
+            except:
+                sym_ratings = {}
+                for _ in response['data']:
+                    try:
+                        sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
+                    except Exception as e:
+                        print(e, _)
+                        continue
+                pass
+            
+            #Concatenate rating to dataframe
+            for sym in sym_ratings:
+                daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
+                    
+            #Increment counters
+            i += 50
+            if j == None:
+                break
+            j += 50
+            time.sleep(2)
+
+    daily_quant_rating_df.reset_index(inplace=True)
+    # # write back, replace existing table
+    daily_quant_rating_df.to_sql("quant_rating", 
+            con=engine, 
+            if_exists="replace", 
+            index=False, 
+            method="multi",
+            chunksize=200,
+            dtype={'date': DateTime})
+    #########################################################################
     
     #*Add technicals.
     items = [(sd.symbol, sd.df) for sd in symbols.values()]
@@ -420,6 +500,8 @@ if __name__ == "__main__":
           sorted(days_elevated_rvol.items(), key=lambda x: x[1], reverse=True),
           '\nDays With Consecutive Range Expansion',
           sorted(days_range_expansion.items(), key=lambda x: x[1], reverse=True),
+          '\nRecent Short Interest',
+          recent_short_int[['Ticker', recent_short_int.columns[-1]]].sort_values(by=recent_short_int.columns[-1], ascending=False).head(100),
           '\nDollar Volume Over Market Cap All',
           dv_cap.tail(30),
           '\nDollar Volume Over Market Cap hadv',
