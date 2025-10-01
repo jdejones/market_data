@@ -115,6 +115,7 @@ if __name__ == "__main__":
             method="multi",
             chunksize=200,
             dtype={'date': DateTime})
+    daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
     #########################################################################
     
     #*Add technicals.
