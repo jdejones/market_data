@@ -497,10 +497,6 @@ if __name__ == "__main__":
           perf_since_earnings[-100:][::-1],          
           '\nUnderperformers Since Earnings Season Start',
           perf_since_earnings[:50],
-          '\nExpected Revenue Growth +1Q',
-          sorted(qplus1.items(), key=lambda x: x[1], reverse=True)[:100],
-          '\nExpected Revenue Growth +4Q',
-          sorted(gplus4.items(), key=lambda x: x[1], reverse=True)[:100],
           '\nDays With Elevated RVol',
           sorted(days_elevated_rvol.items(), key=lambda x: x[1], reverse=True),
           '\nDays With Consecutive Range Expansion',
@@ -517,6 +513,10 @@ if __name__ == "__main__":
           sf.trend_bias(etfs['SPY']), 
           '\nSuggested Watchlists',
           sf.watchlist_suggestions(sf.trend_bias(etfs['SPY'])),
+          '\nExpected Revenue Growth +1Q',
+          sorted(qplus1.items(), key=lambda x: x[1], reverse=True)[:100],
+          '\nExpected Revenue Growth +4Q',
+          sorted(gplus4.items(), key=lambda x: x[1], reverse=True)[:100],          
           sep='\n')
 
     # Revert to default settings
