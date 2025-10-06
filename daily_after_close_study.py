@@ -89,7 +89,7 @@ if __name__ == "__main__":
                     try:
                         sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
                     except Exception as e:
-                        quant_ratings_errors[sym] = e
+                        quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
                         continue
                 pass
             if len(quant_ratings_errors) > 3000:
