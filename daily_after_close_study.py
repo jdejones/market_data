@@ -292,8 +292,8 @@ if __name__ == "__main__":
             continue
 
 
-
-    rel_stren = sf.relative_strength(symbols)
+    rel_stren_obj = sf.relative_strength(symbols)
+    rel_stren = rel_stren_obj()
     prev_perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-04-11')
     perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-07-15')
     days_elevated_rvol = {}

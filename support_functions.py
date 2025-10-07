@@ -11,30 +11,37 @@ import market_data.watchlists_locations as wl
 
 
 
-def relative_strength(symbols, lookback=-252, bm=None):
-    #TODO This function is minimally viable. It currently only finds the relative strength for a given look back period. It should be able to find
-    #TODO the relative strength since IPO.
-    #Get Data
-    if bm is None:
-        df = api_import(['SPY'])['SPY']['Close'][lookback:]#.reset_index(drop=True)
-        df.name = 'SPY'
-        bm = df
-    else:
-        bm_df = bm
-    for sym in symbols:
-        if sym in symbols.keys():
-            target = symbols[sym].df['Close']
-            target.name = sym
-        else:
-            target = yf.download(sym, period='max', interval='1d')
-        #Process Data
-        df = pd.concat([df.reset_index(drop=True), target[lookback:].reset_index(drop=True)], axis=1)
-        df['relative_strength'] = df[sym]/df['SPY']
-        RSI(df, base='relative_strength')
-        df = df.drop([sym, 'relative_strength'], axis=1)
-        df = df.rename(columns={'RSI_21': sym})
+class relative_strength:
     
-    return sorted({k: round(df[k].iloc[-1].item(), 3) for k in symbols}.items(), key=lambda x: x[1])
+    def __init__(self, symbols, lookback=-252, bm=None):
+        self.symbols = symbols
+        self.lookback = lookback
+        self.bm = bm
+    
+    def __call__(self):
+        #TODO This function is minimally viable. It currently only finds the relative strength for a given look back period. It should be able to find
+        #TODO the relative strength since IPO.
+        #Get Data
+        if self.bm is None:
+            self.df = api_import(['SPY'])['SPY']['Close'][self.lookback:]#.reset_index(drop=True)
+            self.df.name = 'SPY'
+            self.bm = self.df
+        else:
+            bm_df = self.bm
+        for sym in self.symbols:
+            if sym in self.symbols.keys():
+                target = self.symbols[sym].df['Close']
+                target.name = sym
+            else:
+                target = yf.download(sym, period='max', interval='1d')
+            #Process Data
+            self.df = pd.concat([self.df.reset_index(drop=True), target[self.lookback:].reset_index(drop=True)], axis=1)
+            self.df['relative_strength'] = self.df[sym]/self.df['SPY']
+            RSI(self.df, base='relative_strength')
+            self.df = self.df.drop([sym, 'relative_strength'], axis=1)
+            self.df = self.df.rename(columns={'RSI_21': sym})
+        
+        return sorted({k: round(self.df[k].iloc[-1].item(), 3) for k in self.symbols}.items(), key=lambda x: x[1])
 
 
 
