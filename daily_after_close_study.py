@@ -77,7 +77,22 @@ if __name__ == "__main__":
                 "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
             }
 
-            response = requests.get(url, headers=headers, params=querystring).json()
+            response_request = requests.get(url, headers=headers, params=querystring)
+            response = response_request.json()
+            if response_request.status_code != 200:
+                if response_request.status_code == 504:
+                    print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+                    response = response_request.json()
+                else:
+                    print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+                    response = response_request.json()
+                    
+            if response_request.status_code != 200:
+                break
             
             #Container for symbol and respective rating
             quant_ratings_errors = {}
