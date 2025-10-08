@@ -13,35 +13,43 @@ import market_data.watchlists_locations as wl
 
 class relative_strength:
     
-    def __init__(self, symbols, lookback=-252, bm=None):
+    def __init__(self, symbols: dict, lookback: int=-252, bm: pd.Series=None):
         self.symbols = symbols
         self.lookback = lookback
         self.bm = bm
     
-    def __call__(self):
-        #TODO This function is minimally viable. It currently only finds the relative strength for a given look back period. It should be able to find
-        #TODO the relative strength since IPO.
-        #Get Data
+    def __call__(self) -> list[tuple[str, float]]:
         if self.bm is None:
-            self.df = api_import(['SPY'])['SPY']['Close'][self.lookback:]#.reset_index(drop=True)
-            self.df.name = 'SPY'
-            self.bm = self.df
+            bm = api_import(['SPY'])['SPY']['Close'][self.lookback:]
+            bm.name = 'SPY'
         else:
-            bm_df = self.bm
+            bm = self.bm
+        
+        # Initialize self.df as a DataFrame with SPY
+        self.df = pd.DataFrame(index=bm.index)
+        self.df['SPY'] = bm
+        
         for sym in self.symbols:
             if sym in self.symbols.keys():
-                target = self.symbols[sym].df['Close']
-                target.name = sym
+                target = self.symbols[sym].df['Close'][self.lookback:]
             else:
-                target = yf.download(sym, period='max', interval='1d')
-            #Process Data
-            self.df = pd.concat([self.df.reset_index(drop=True), target[self.lookback:].reset_index(drop=True)], axis=1)
-            self.df['relative_strength'] = self.df[sym]/self.df['SPY']
-            RSI(self.df, base='relative_strength')
-            self.df = self.df.drop([sym, 'relative_strength'], axis=1)
-            self.df = self.df.rename(columns={'RSI_21': sym})
+                target = yf.download(sym, period='max', interval='1d')['Close'][self.lookback:]
+            
+            # Use a temporary DataFrame to avoid cumulative issues
+            temp_df = pd.DataFrame({'SPY': bm, sym: target})
+            temp_df['relative_strength'] = temp_df[sym] / temp_df['SPY']
+            
+            # Calculate RSI on the temporary DataFrame
+            RSI(temp_df, base='relative_strength')
+            
+            # Store the RSI result in self.df
+            self.df[sym] = round(temp_df['RSI_21'], 3)
         
+        # Return the sorted list of (symbol, RSI) tuples
         return sorted({k: round(self.df[k].iloc[-1].item(), 3) for k in self.symbols}.items(), key=lambda x: x[1])
+    
+    def __getitem__(self, key):
+        return self.df[key]
 
 
 
