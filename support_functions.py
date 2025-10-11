@@ -51,8 +51,6 @@ class relative_strength:
     def __getitem__(self, key):
         return self.df[key]
 
-
-
 def create_index(symbols, level='sector'):    
     def indexer(dict_of_frames):
         """Indexer accepts a dictionary of dataframes and returns an OHLC time series dataframe with cumulative market cap values
@@ -144,7 +142,6 @@ def create_index(symbols, level='sector'):
     for k,v in multidexer_dict_of_frames.items():
         final_dict[k] = indexer(v)
     return final_dict
-
 
 def condition_statistics(df: pd.DataFrame, lookback:int=2000):
     #Set conditions
