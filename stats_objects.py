@@ -1282,7 +1282,7 @@ def signal_statistics(
     signal_column: str,
     bias: str = 'long',
     lookback: int = 2000
-) -> Tuple[Dict[int, Dict], Dict]:
+    ) -> Tuple[Dict[int, Dict], Dict]:
     """
     Calculate statistics for signals across multiple dataframes.
     
