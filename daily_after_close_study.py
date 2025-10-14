@@ -418,7 +418,7 @@ if __name__ == "__main__":
     #Factors: Fundamental
     #Expected Revenue Growth +1Q and +4Q
     qplus1 = {}
-    gplus4 = {}
+    qplus4 = {}
     for sym in sa.earnings_dict:
         try:
             qplus1[sym] = (
@@ -426,7 +426,7 @@ if __name__ == "__main__":
                 - float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue'])
             ) / float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue']) * 100, 2)
             )
-            gplus4[sym] = (
+            qplus4[sym] = (
                 round((float(sa.earnings_dict[sym]['revenue_consensus_mean']['4'][0]['dataitemvalue'])
                 - float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue'])
             ) / float(sa.earnings_dict[sym]['revenue_actual']['0'][0]['dataitemvalue']) * 100, 2)
@@ -531,7 +531,7 @@ if __name__ == "__main__":
           '\nExpected Revenue Growth +1Q',
           sorted(qplus1.items(), key=lambda x: x[1], reverse=True)[:100],
           '\nExpected Revenue Growth +4Q',
-          sorted(gplus4.items(), key=lambda x: x[1], reverse=True)[:100],          
+          sorted(qplus4.items(), key=lambda x: x[1], reverse=True)[:100],          
           sep='\n')
 
     # Revert to default settings
