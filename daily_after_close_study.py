@@ -78,7 +78,7 @@ if __name__ == "__main__":
             }
 
             response_request = requests.get(url, headers=headers, params=querystring)
-            response = response_request.json()
+
             if response_request.status_code != 200:
                 if response_request.status_code == 504:
                     print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
@@ -90,6 +90,8 @@ if __name__ == "__main__":
                     time.sleep(30)
                     response_request = requests.get(url, headers=headers, params=querystring)
                     response = response_request.json()
+
+            response = response_request.json()
                     
             if response_request.status_code != 200:
                 break
@@ -131,6 +133,7 @@ if __name__ == "__main__":
             chunksize=200,
             dtype={'date': DateTime})
     daily_quant_rating_df.set_index('index', inplace=True)
+    daily_quant_rating_df.index.name = 'Symbol'
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
     #########################################################################
     
