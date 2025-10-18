@@ -1746,3 +1746,44 @@ def drawdown_max(df: pd.DataFrame, start: str|int):
 
         return max_diff_dict
     
+    elif type(start) == datetime.date:
+        df = df[['High', 'Low']].loc[start:]
+        df['Date'] = df.index
+        # initialize max diff and dates
+        max_diff = 0
+        start_date = ''
+        end_date = ''
+        max_diff_dict = {}
+        # loop through each row and compare the current high to all lows that come after it
+        for i in range(len(df)):
+            for j in range(i+1, len(df)):
+                if df['Low'][j] < df['High'][i]:
+                    diff = df['High'][i] - df['Low'][j]
+                    if diff > max_diff:
+                        max_diff = diff
+                        start_date = df['Date'][i]
+                        end_date = df['Date'][j]
+                        max_diff_dict[start_date + ':'+ end_date] = max_diff
+        return max_diff_dict
+    
+    elif type(start) == int:
+        df = df[['High', 'Low']].loc[start:]
+        df['Date'] = df.index
+        # initialize max diff and dates
+        max_diff = 0
+        start_date = ''
+        end_date = ''
+        max_diff_dict = {}
+        # loop through each row and compare the current high to all lows that come after it
+        for i in range(len(df)):
+            for j in range(i+1, len(df)):
+                if df['Low'][j] < df['High'][i]:
+                    diff = df['High'][i] - df['Low'][j]
+                    if diff > max_diff:
+                        max_diff = diff
+                        start_date = df['Date'][i]
+                        end_date = df['Date'][j]
+                        max_diff_dict[start_date + ':'+ end_date] = max_diff
+        return max_diff_dict
+    else:
+        raise ValueError(f"Invalid type for start: {type(start)}")
