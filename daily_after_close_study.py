@@ -38,17 +38,20 @@ if __name__ == "__main__":
     
     #########################################################################
     #Connect to database
-    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/daily_sa"
-    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+    #*Temporarily commented out while fixing MySQL bugs
+    # url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/daily_sa"
+    # engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
 
-    # query a database -> DataFrame
-    daily_quant_rating_df = pd.read_sql("SELECT * FROM quant_rating", con=engine)
+    # # query a database -> DataFrame
+    # daily_quant_rating_df = pd.read_sql("SELECT * FROM quant_rating", con=engine)
+    daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='index')
     
     if len(daily_quant_rating_df.columns) > 1000:
         warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
         
-    daily_quant_rating_df.set_index('index', inplace=True)
+    #*Temporarily commented out while fixing MySQL bugs
+    # daily_quant_rating_df.set_index('index', inplace=True)
     #Concatenate new column
     daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
 
@@ -123,17 +126,18 @@ if __name__ == "__main__":
             j += 50
             time.sleep(2)
 
-    daily_quant_rating_df.reset_index(inplace=True)
-    # # write back, replace existing table
-    daily_quant_rating_df.to_sql("quant_rating", 
-            con=engine, 
-            if_exists="replace", 
-            index=False, 
-            method="multi",
-            chunksize=200,
-            dtype={'date': DateTime})
-    daily_quant_rating_df.set_index('index', inplace=True)
-    daily_quant_rating_df.index.name = 'Symbol'
+    #*Temporarily commented out while fixing MySQL bugs
+    # daily_quant_rating_df.reset_index(inplace=True)
+    # # # write back, replace existing table
+    # daily_quant_rating_df.to_sql("quant_rating", 
+    #         con=engine, 
+    #         if_exists="replace", 
+    #         index=False, 
+    #         method="multi",
+    #         chunksize=200,
+    #         dtype={'date': DateTime})
+    # daily_quant_rating_df.set_index('index', inplace=True)
+    # daily_quant_rating_df.index.name = 'Symbol'
     daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
     #########################################################################
