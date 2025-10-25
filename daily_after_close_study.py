@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
     # # query a database -> DataFrame
     # daily_quant_rating_df = pd.read_sql("SELECT * FROM quant_rating", con=engine)
-    daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='index')
+    daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
     if len(daily_quant_rating_df.columns) > 1000:
         warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
