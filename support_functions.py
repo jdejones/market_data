@@ -17,6 +17,7 @@ class relative_strength:
         self.symbols = symbols
         self.lookback = lookback
         self.bm = bm
+        self.errors = {}
     
     def __call__(self) -> list[tuple[str, float]]:
         if self.bm is None:
@@ -35,6 +36,17 @@ class relative_strength:
             else:
                 target = yf.download(sym, period='max', interval='1d')['Close'][self.lookback:]
             
+            try:
+                try:
+                    # Check if target index exactly matches bm index, or if target index matches the end of bm index
+                    if not (target.index.equals(bm.index) or target.index.equals(bm.index[-len(target.index):])):
+                        raise IndexError(f'{sym} index does not match SPY index')
+                except IndexError as ie:
+                    self.errors[sym] = ie
+                    continue
+            except Exception as e:
+                self.errors[sym] = e
+                continue
             # Use a temporary DataFrame to avoid cumulative issues
             temp_df = pd.DataFrame({'SPY': bm, sym: target})
             temp_df['relative_strength'] = temp_df[sym] / temp_df['SPY']
@@ -45,8 +57,8 @@ class relative_strength:
             # Store the RSI result in self.df
             self.df[sym] = round(temp_df['RSI_21'], 3)
         
-        # Return the sorted list of (symbol, RSI) tuples
-        return sorted({k: round(self.df[k].iloc[-1].item(), 3) for k in self.symbols}.items(), key=lambda x: x[1])
+        # Return the sorted list of (symbol, RSI) tuples (only for symbols that were successfully processed)
+        return sorted({k: round(self.df[k].iloc[-1].item(), 3) for k in self.df.columns[1:]}.items(), key=lambda x: x[1])
     
     def __getitem__(self, key):
         return self.df[key]

@@ -163,8 +163,8 @@ if __name__ == "__main__":
 
     #Sector and industry indices
     #TODO Add concurrency for sector and industry indices instantiation.
-    sec = {k: SymbolData(k,v) for k,v in sf.create_index(symbols).items() if len(v) > 0}
-    ind = {k: SymbolData(k,v) for k,v in sf.create_index(symbols, level='industry').items() if len(v) > 0}
+    sec = {k: SymbolData(k,v) for k,v in sf.create_index(symbols).items() if len(v) > 0}#TODO: Add error handling for symbols that do not have data in sa.key_data.
+    ind = {k: SymbolData(k,v) for k,v in sf.create_index(symbols, level='industry').items() if len(v) > 0}#TODO: Add error handling for symbols that do not have data in sa.key_data.
     #TODO Add concurrency for sector and industry indices technicals.
     for symbol in tqdm(sec, desc='Adding technicals'):
         run_pipeline(sec[symbol].df)
