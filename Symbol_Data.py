@@ -9,6 +9,8 @@ class SymbolData:
     #Sector and market cap represent the categorical variables that will be added later.
     sector: str | None = None
     market_cap: float | None = None
+    interest_factor: str | None = None
+    theme: str | None = None
 
     # convenience proxy
     def __getattr__(self, item):          # let s.close mean s.df["close"]
