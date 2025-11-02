@@ -18,17 +18,6 @@ class SymbolData:
             return self.df[item]
         raise AttributeError(item)
 
-#The following isn't quite what I was expecting when I requested the code.
-#I can add the fundamental categorical variables and I want to add technical categorical variables, such as levels of interest.
-#Therefore, the following dictionary will not be created before processing technicals.
-# build once
-# symbols: dict[str, SymbolData] = {
-#     s: SymbolData(s, df, sector=sector_map.get(s))
-#     for s, df in raw_dict.items()
-# }
-
-# usage
-# sma20 = symbols["AAPL"].close.rolling(20).mean()
 
 
 @dataclass(slots=True)
