@@ -102,5 +102,4 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
 #Make filters using the results of vwap_handoff
 
 
-
 #Make function for vwap pinch
