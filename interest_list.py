@@ -4,5 +4,5 @@
 class InterestList:
     pass
 
-    def sym_value_filter():
+    def value_filter():
         pass
