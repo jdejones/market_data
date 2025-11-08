@@ -7,16 +7,21 @@ class SymbolData:
     symbol: str
     df: pd.DataFrame
     #Sector and market cap represent the categorical variables that will be added later.
+    #*When adding attributes check for conflicts with the dataframe columns. The conflicts are typically due to the use of a shortcut for attribute access(__getattr__).
     sector: str | None = None
     market_cap: float | None = None
     interest_factor: str | None = None
     theme: str | None = None
 
-    # convenience proxy
+    # convenience proxy for attribute access
     def __getattr__(self, item):          # let s.close mean s.df["close"]
         if item in self.df.columns:
             return self.df[item]
         raise AttributeError(item)
+
+    # convenience proxy for subscript access
+    def __getitem__(self, key):           # let s['close'] mean s.df['close']
+        return self.df[key]
 
 
 
