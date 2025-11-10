@@ -467,6 +467,17 @@ if __name__ == "__main__":
     # with open(r"E:\Market Research\Dataset\daily_after_close_study\stock_stats.pkl", "wb") as f:
     #     pickle.dump(stock_stats, f)
 
+    interest_list_long = InterestList()
+    interest_list_long.value_filter(rel_stren, 70, '>=', 'Technical', 'Long')
+    interest_list_long.value_filter(prev_perf_since_earnings, 50, '>=', 'Technical', 'Long')
+    interest_list_long.value_filter(perf_since_earnings, 30, '>=', 'Technical', 'Long')
+    interest_list_long.value_filter(tsc.sent_dict.items(), 
+                                    (tsc.positive_sent_dict_stats.loc['mean'].values[0] + 
+                                    (tsc.positive_sent_dict_stats.loc['std'].values[0] * 2)), 
+                                    '>=', 'Technical', 'Long')
+
+    interest_list_long.value_filter(qplus1, 50, '>=', 'Fundamental', 'Long')
+    interest_list_long.value_filter(qplus4, 100, '>=', 'Fundamental', 'Long')
 
 
     from IPython.display import display, HTML
