@@ -29,6 +29,7 @@ if __name__ == "__main__":
     from market_data.stats_objects import IntradaySignalProcessing as isp
     from market_data import create_engine, text, DateTime, pymysql
     from market_data.api_keys import database_password, seeking_alpha_api_key
+    from market_data.interest_list import InterestList as il
     
     #*Import price data.
     #hadv == high average dollar volume
@@ -467,7 +468,7 @@ if __name__ == "__main__":
     # with open(r"E:\Market Research\Dataset\daily_after_close_study\stock_stats.pkl", "wb") as f:
     #     pickle.dump(stock_stats, f)
 
-    interest_list_long = InterestList()
+    interest_list_long = il(source_symbols=symbols)
     interest_list_long.value_filter(rel_stren, 70, '>=', 'Technical', 'Long')
     interest_list_long.value_filter(prev_perf_since_earnings, 50, '>=', 'Technical', 'Long')
     interest_list_long.value_filter(perf_since_earnings, 30, '>=', 'Technical', 'Long')

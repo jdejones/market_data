@@ -1,6 +1,6 @@
 from market_data import dataclass
-# import pandas as pd
 from market_data import pd
+from typing import List
 
 @dataclass(slots=True)
 class SymbolData:
