@@ -14,7 +14,7 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
         bias (str): 'long' for bullish (anchor at min low), 'short' for bearish (anchor at max high).
 
     Returns:
-        pd.DataFrame: Original df with added VWAP columns per anchor date.
+        pd.DataFrame: Original df with added AVWAP columns per anchor date.
     """    
     if bias not in ('long','short'):
         raise ValueError("bias must be 'long' or 'short'")
