@@ -1,0 +1,9 @@
+# docker-compose.yml (excerpt)
+services:
+  redis:
+    image: redis:8
+    command: ["redis-server","--appendonly","yes"]
+    ports: ["6379:6379"]        # publish to host
+    volumes: ["redis_data:/data"]
+volumes:
+  redis_data: {}
