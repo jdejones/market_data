@@ -27,6 +27,50 @@ class SymbolData:
         if key in self.df.columns:
             return self.df[key]
         raise KeyError(key)
+    
+    def to_redis(self) -> dict:
+        # Convert datetime columns to strings for JSON serialization
+        df_copy = self.df.reset_index().copy()
+        for col in df_copy.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_copy[col]):
+                df_copy[col] = df_copy[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        return {
+            "symbol": self.symbol,
+            "df": df_copy.to_dict(),
+            "sector": self.sector,
+            "industry": self.industry,
+            "market_cap": self.market_cap,
+            "interest_factor": self.interest_factor,
+            "interest_direction": self.interest_direction,
+            "theme": self.theme,
+        }
+
+    @classmethod
+    def from_redis(cls, payload: dict):
+        df = pd.DataFrame(payload["df"])
+        # Convert string datetime columns back to datetime
+        for col in df.columns:
+            if pd.api.types.is_string_dtype(df[col]):
+                try:
+                    # Try to parse as datetime if it looks like a datetime string
+                    pd.to_datetime(df[col], format='%Y-%m-%d %H:%M:%S', errors='raise')
+                    df[col] = pd.to_datetime(df[col], format='%Y-%m-%d %H:%M:%S')
+                except (ValueError, TypeError):
+                    pass  # Not a datetime column, leave as string
+
+        # Set the first column (which was the index) back as the index
+        df = df.set_index(df.columns[0])
+        return cls(
+            symbol=payload["symbol"],
+            df=df,
+            sector=payload["sector"],
+            industry=payload["industry"],
+            market_cap=payload["market_cap"],
+            interest_factor=payload["interest_factor"],
+            interest_direction=payload["interest_direction"],
+            theme=payload["theme"],
+        )
 
 
 

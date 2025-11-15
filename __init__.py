@@ -30,6 +30,7 @@ from bs4 import BeautifulSoup as bs
 from sqlalchemy import create_engine, text, DateTime
 import pymysql
 import warnings
+import redis
 
 #Local imports
 from . import fundamentals as fu

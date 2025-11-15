@@ -27,7 +27,7 @@ if __name__ == "__main__":
     from market_data.episodic_pivots import Episodic_Pivots
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle
     from market_data.stats_objects import IntradaySignalProcessing as isp
-    from market_data import create_engine, text, DateTime, pymysql
+    from market_data import create_engine, text, DateTime, pymysql, redis, json
     from market_data.api_keys import database_password, seeking_alpha_api_key
     from market_data.interest_list import InterestList as il
     
@@ -48,98 +48,98 @@ if __name__ == "__main__":
     # daily_quant_rating_df = pd.read_sql("SELECT * FROM quant_rating", con=engine)
     daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
-    if len(daily_quant_rating_df.columns) > 1000:
-        warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
+    # if len(daily_quant_rating_df.columns) > 1000:
+    #     warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
         
-    #*Temporarily commented out while fixing MySQL bugs
-    # daily_quant_rating_df.set_index('index', inplace=True)
-    #Concatenate new column
-    daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
+    # #*Temporarily commented out while fixing MySQL bugs
+    # # daily_quant_rating_df.set_index('index', inplace=True)
+    # #Concatenate new column
+    # daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
 
-    #Request and add new rows
-    #list of symbols
-    syms = list(symbols.keys())
+    # #Request and add new rows
+    # #list of symbols
+    # syms = list(symbols.keys())
 
-    #api requests
-    #assign counters
-    i=0
-    j=50
-    while True:
-            #break when list is exhausted
-            if i > len(syms):
-                break
-            #assign None near end of list
-            if j > len(syms):
-                j = None
-            #API call
-            url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
+    # #api requests
+    # #assign counters
+    # i=0
+    # j=50
+    # while True:
+    #         #break when list is exhausted
+    #         if i > len(syms):
+    #             break
+    #         #assign None near end of list
+    #         if j > len(syms):
+    #             j = None
+    #         #API call
+    #         url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
 
-            querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
+    #         querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
 
-            headers = {
-                "x-rapidapi-key": f"{seeking_alpha_api_key}",
-                "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
-            }
+    #         headers = {
+    #             "x-rapidapi-key": f"{seeking_alpha_api_key}",
+    #             "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
+    #         }
 
-            response_request = requests.get(url, headers=headers, params=querystring)
+    #         response_request = requests.get(url, headers=headers, params=querystring)
 
-            if response_request.status_code != 200:
-                if response_request.status_code == 504:
-                    print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
-                    time.sleep(30)
-                    response_request = requests.get(url, headers=headers, params=querystring)
-                    response = response_request.json()
-                else:
-                    print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
-                    time.sleep(30)
-                    response_request = requests.get(url, headers=headers, params=querystring)
-                    response = response_request.json()
+    #         if response_request.status_code != 200:
+    #             if response_request.status_code == 504:
+    #                 print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
+    #                 time.sleep(30)
+    #                 response_request = requests.get(url, headers=headers, params=querystring)
+    #                 response = response_request.json()
+    #             else:
+    #                 print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
+    #                 time.sleep(30)
+    #                 response_request = requests.get(url, headers=headers, params=querystring)
+    #                 response = response_request.json()
 
-            response = response_request.json()
+    #         response = response_request.json()
                     
-            if response_request.status_code != 200:
-                break
+    #         if response_request.status_code != 200:
+    #             break
             
-            #Container for symbol and respective rating
-            quant_ratings_errors = {}
-            try:
-                sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
-            except:
-                sym_ratings = {}
-                for _ in response['data']:
-                    try:
-                        sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
-                    except Exception as e:
-                        quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
-                        continue
-                pass
-            if len(quant_ratings_errors) > 3000:
-                break
+    #         #Container for symbol and respective rating
+    #         quant_ratings_errors = {}
+    #         try:
+    #             sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
+    #         except:
+    #             sym_ratings = {}
+    #             for _ in response['data']:
+    #                 try:
+    #                     sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
+    #                 except Exception as e:
+    #                     quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
+    #                     continue
+    #             pass
+    #         if len(quant_ratings_errors) > 3000:
+    #             break
             
-            #Concatenate rating to dataframe
-            for sym in sym_ratings:
-                daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
+    #         #Concatenate rating to dataframe
+    #         for sym in sym_ratings:
+    #             daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
                     
-            #Increment counters
-            i += 50
-            if j == None:
-                break
-            j += 50
-            time.sleep(2)
+    #         #Increment counters
+    #         i += 50
+    #         if j == None:
+    #             break
+    #         j += 50
+    #         time.sleep(2)
 
-    #*Temporarily commented out while fixing MySQL bugs
-    # daily_quant_rating_df.reset_index(inplace=True)
-    # # # write back, replace existing table
-    # daily_quant_rating_df.to_sql("quant_rating", 
-    #         con=engine, 
-    #         if_exists="replace", 
-    #         index=False, 
-    #         method="multi",
-    #         chunksize=200,
-    #         dtype={'date': DateTime})
-    # daily_quant_rating_df.set_index('index', inplace=True)
-    # daily_quant_rating_df.index.name = 'Symbol'
-    daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
+    # #*Temporarily commented out while fixing MySQL bugs
+    # # daily_quant_rating_df.reset_index(inplace=True)
+    # # # # write back, replace existing table
+    # # daily_quant_rating_df.to_sql("quant_rating", 
+    # #         con=engine, 
+    # #         if_exists="replace", 
+    # #         index=False, 
+    # #         method="multi",
+    # #         chunksize=200,
+    # #         dtype={'date': DateTime})
+    # # daily_quant_rating_df.set_index('index', inplace=True)
+    # # daily_quant_rating_df.index.name = 'Symbol'
+    # daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
     #########################################################################
     
@@ -479,6 +479,68 @@ if __name__ == "__main__":
 
     interest_list_long.value_filter(qplus1, 50, '>=', 'Fundamental', 'Long')
     interest_list_long.value_filter(qplus4, 100, '>=', 'Fundamental', 'Long')
+    
+    #Redis storage
+    #Symbols
+    r = redis.Redis(host="localhost", port=6379, decode_responses=True, 
+                    socket_keepalive=True, retry_on_timeout=True) 
+    i=0
+    j=1000
+    while True:
+        symbols_redis = {}
+        for sym in list(symbols.keys())[i:j]:
+            symbols_redis[sym] = symbols[sym].to_redis()
+        from itertools import islice
+        def batched(iterable, n):
+            it = iter(iterable)
+            while True:
+                batch = list(islice(it, n))
+                if not batch:
+                    break
+                yield batch
+        BATCH_SIZE = 50  # or even 20 if needed
+        for batch in batched(list(symbols_redis.items()), BATCH_SIZE):
+            pipe = r.pipeline(transaction=False)
+            for sym, data in batch:
+                pipe.hset(f"symbols", sym, json.dumps(data, default=str))
+            pipe.execute()
+        i += 1000
+        if i > len(list(symbols.keys())):
+            break
+        if ((j+1000) > len(list(symbols.keys()))):
+            j = None
+        if j is not None:
+            j += 1000
+    #Sec
+    sec_redis = {}
+    for s in sec:
+        sec_redis[s] = sec[s].to_redis()
+        r.hset("sec", mapping={s:json.dumps(sec_redis[s], default=str)})
+    #Ind
+    ind_redis = {}
+    for i in ind:
+        ind_redis[i] = ind[i].to_redis()
+        r.hset("ind", mapping={i:json.dumps(ind_redis[i], default=str)})
+    #sp500
+    sp500_redis = {}
+    for sym in sp500:
+        sp500_redis[sym] = sp500[sym].to_redis()
+        r.hset("sp500", mapping={sym:json.dumps(sp500_redis[sym], default=str)})
+    #mdy
+    mdy_redis = {}
+    for sym in mdy:
+        mdy_redis[sym] = mdy[sym].to_redis()
+        r.hset("mdy", mapping={sym:json.dumps(mdy_redis[sym], default=str)})
+    #iwm
+    iwm_redis = {}
+    for sym in iwm:
+        iwm_redis[sym] = iwm[sym].to_redis()
+        r.hset("iwm", mapping={sym:json.dumps(iwm_redis[sym], default=str)})
+    #etfs
+    etfs_redis = {}
+    for sym in etfs:
+        etfs_redis[sym] = etfs[sym].to_redis()
+        r.hset("etfs", mapping={sym:json.dumps(etfs_redis[sym], default=str)})        
 
 
     from IPython.display import display, HTML
