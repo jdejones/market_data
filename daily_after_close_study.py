@@ -523,19 +523,28 @@ if __name__ == "__main__":
         r.hset("ind", mapping={i:json.dumps(ind_redis[i], default=str)})
     #sp500
     sp500_redis = {}
+    sp500_redis['in_symbols'] = [sym for sym in sp500 if sym in symbols]
     for sym in sp500:
-        sp500_redis[sym] = sp500[sym].to_redis()
-        r.hset("sp500", mapping={sym:json.dumps(sp500_redis[sym], default=str)})
+        if sym not in symbols:
+            sp500_redis[sym] = sp500[sym].to_redis()
+            r.hset("sp500", mapping={sym:json.dumps(sp500_redis[sym], default=str)})
+    r.hset("sp500", mapping={'in_symbols':json.dumps(sp500_redis['in_symbols'], default=str)})
     #mdy
     mdy_redis = {}
+    mdy_redis['in_symbols'] = [sym for sym in mdy if sym in symbols]
     for sym in mdy:
-        mdy_redis[sym] = mdy[sym].to_redis()
-        r.hset("mdy", mapping={sym:json.dumps(mdy_redis[sym], default=str)})
+        if sym not in symbols:
+            mdy_redis[sym] = mdy[sym].to_redis()
+            r.hset("mdy", mapping={sym:json.dumps(mdy_redis[sym], default=str)})
+    r.hset("mdy", mapping={'in_symbols':json.dumps(mdy_redis['in_symbols'], default=str)})
     #iwm
     iwm_redis = {}
+    iwm_redis['in_symbols'] = [sym for sym in iwm if sym in symbols]
     for sym in iwm:
-        iwm_redis[sym] = iwm[sym].to_redis()
-        r.hset("iwm", mapping={sym:json.dumps(iwm_redis[sym], default=str)})
+        if sym not in symbols:
+            iwm_redis[sym] = iwm[sym].to_redis()
+            r.hset("iwm", mapping={sym:json.dumps(iwm_redis[sym], default=str)})
+    r.hset("iwm", mapping={'in_symbols':json.dumps(iwm_redis['in_symbols'], default=str)})
     #etfs
     etfs_redis = {}
     for sym in etfs:
