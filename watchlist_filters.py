@@ -887,6 +887,8 @@ def relative_strength(symbols, threshold=70, no_of_results=5, bm=None, lookback=
         if len(threshold_passed) >= no_of_results:
             pass
         else:
+            if threshold - 5 < 50:
+                raise ValueError('Threshold is too low. It cannot be less than 50.')
             results(threshold=threshold-5)   
     results(threshold=threshold)     
     with open(file, "w") as f:
@@ -904,6 +906,8 @@ def relative_weakness(symbols, threshold=20, no_of_results=5, bm=None, file=r"C:
         if len(threshold_passed) >= no_of_results:
             pass
         else:
+            if threshold + 5 > 50:
+                raise ValueError('Threshold is too high. It cannot be greater than 50.')
             results(threshold=threshold+5)
     results(threshold)  
     with open(file, "w") as f:

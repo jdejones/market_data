@@ -25,9 +25,9 @@ if __name__ == "__main__":
     import market_data.stats_objects as so
     import market_data.anchored_vwap as av
     from market_data.episodic_pivots import Episodic_Pivots
-    from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle
+    from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading
     from market_data.stats_objects import IntradaySignalProcessing as isp
-    from market_data import create_engine, text, DateTime, pymysql, redis, json
+    from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip
     from market_data.api_keys import database_password, seeking_alpha_api_key
     from market_data.interest_list import InterestList as il
     
@@ -444,6 +444,61 @@ if __name__ == "__main__":
             continue
 
     #Pickling most used objects, so I don't have to rerun the script.
+    def save_snapshots(obj, name):
+        base = r"E:\Market Research\Dataset\daily_after_close_study"
+        with gzip.open(fr"{base}\{name}.pkl.gz", "wb", compresslevel=5) as f:
+            pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+            
+    t = []
+    variables = ((symbols,'symbols'), 
+            (sec, 'sec'),
+            (ind, 'ind'),
+            (sp500, 'sp500'),
+            (mdy, 'mdy'),
+            (iwm, 'iwm'),
+            (etfs, 'etfs'),
+            (stock_stats, 'stock_stats'))
+    for _ in variables:
+        t.append(threading.Thread(
+            target=save_snapshots,
+            args=(_[0], _[1]),
+            daemon=False,
+        ))
+    for _ in t:
+        _.start()
+
+    for _ in t:
+        _.join()
+
+    # #Pickling most used objects, so I don't have to rerun the script.
+    # def save_snapshots(symbols, sec, ind, sp500, mdy, iwm, etfs, stock_stats):
+    #     base = r"E:\Market Research\Dataset\daily_after_close_study"
+    #     with open(fr"{base}\symbols.pkl", "wb") as f:
+    #         pickle.dump(symbols, f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     with open(fr"{base}\sec.pkl", "wb") as f:
+    #         pickle.dump(sec, f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     with open(fr"{base}\ind.pkl", "wb") as f:
+    #         pickle.dump(ind, f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     with open(fr"{base}\sp500.pkl", "wb") as f:
+    #         pickle.dump(sp500, f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     with open(fr"{base}\mdy.pkl", "wb") as f:
+    #         pickle.dump(mdy, f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     with open(fr"{base}\iwm.pkl", "wb") as f:
+    #         pickle.dump(iwm, f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     with open(fr"{base}\etfs.pkl", "wb") as f:
+    #         pickle.dump(etfs, f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     with open(fr"{base}\stock_stats.pkl", "wb") as f:
+    #         pickle.dump(stock_stats, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # t = threading.Thread(
+    #     target=save_snapshots,
+    #     args=(symbols, sec, ind, sp500, mdy, iwm, etfs, stock_stats),
+    #     daemon=True,
+    # )
+    # t.start()
+
+    #TODO Remove the following code once the previous threading is working.
+    #Pickling most used objects, so I don't have to rerun the script.
     # with open(r"E:\Market Research\Dataset\daily_after_close_study\symbols.pkl", "wb") as f:
     #     pickle.dump(symbols, f)
 
@@ -482,74 +537,74 @@ if __name__ == "__main__":
     
     #Redis storage
     #Symbols
-    r = redis.Redis(host="localhost", port=6379, decode_responses=True, 
-                    socket_keepalive=True, retry_on_timeout=True) 
-    i=0
-    j=1000
-    while True:
-        symbols_redis = {}
-        for sym in list(symbols.keys())[i:j]:
-            symbols_redis[sym] = symbols[sym].to_redis()
-        from itertools import islice
-        def batched(iterable, n):
-            it = iter(iterable)
-            while True:
-                batch = list(islice(it, n))
-                if not batch:
-                    break
-                yield batch
-        BATCH_SIZE = 50  # or even 20 if needed
-        for batch in batched(list(symbols_redis.items()), BATCH_SIZE):
-            pipe = r.pipeline(transaction=False)
-            for sym, data in batch:
-                pipe.hset(f"symbols", sym, json.dumps(data, default=str))
-            pipe.execute()
-        i += 1000
-        if i > len(list(symbols.keys())):
-            break
-        if ((j+1000) > len(list(symbols.keys()))):
-            j = None
-        if j is not None:
-            j += 1000
-    #Sec
-    sec_redis = {}
-    for s in sec:
-        sec_redis[s] = sec[s].to_redis()
-        r.hset("sec", mapping={s:json.dumps(sec_redis[s], default=str)})
-    #Ind
-    ind_redis = {}
-    for i in ind:
-        ind_redis[i] = ind[i].to_redis()
-        r.hset("ind", mapping={i:json.dumps(ind_redis[i], default=str)})
-    #sp500
-    sp500_redis = {}
-    sp500_redis['in_symbols'] = [sym for sym in sp500 if sym in symbols]
-    for sym in sp500:
-        if sym not in symbols:
-            sp500_redis[sym] = sp500[sym].to_redis()
-            r.hset("sp500", mapping={sym:json.dumps(sp500_redis[sym], default=str)})
-    r.hset("sp500", mapping={'in_symbols':json.dumps(sp500_redis['in_symbols'], default=str)})
-    #mdy
-    mdy_redis = {}
-    mdy_redis['in_symbols'] = [sym for sym in mdy if sym in symbols]
-    for sym in mdy:
-        if sym not in symbols:
-            mdy_redis[sym] = mdy[sym].to_redis()
-            r.hset("mdy", mapping={sym:json.dumps(mdy_redis[sym], default=str)})
-    r.hset("mdy", mapping={'in_symbols':json.dumps(mdy_redis['in_symbols'], default=str)})
-    #iwm
-    iwm_redis = {}
-    iwm_redis['in_symbols'] = [sym for sym in iwm if sym in symbols]
-    for sym in iwm:
-        if sym not in symbols:
-            iwm_redis[sym] = iwm[sym].to_redis()
-            r.hset("iwm", mapping={sym:json.dumps(iwm_redis[sym], default=str)})
-    r.hset("iwm", mapping={'in_symbols':json.dumps(iwm_redis['in_symbols'], default=str)})
-    #etfs
-    etfs_redis = {}
-    for sym in etfs:
-        etfs_redis[sym] = etfs[sym].to_redis()
-        r.hset("etfs", mapping={sym:json.dumps(etfs_redis[sym], default=str)})        
+    # r = redis.Redis(host="localhost", port=6379, decode_responses=True, 
+    #                 socket_keepalive=True, retry_on_timeout=True) 
+    # i=0
+    # j=1000
+    # while True:
+    #     symbols_redis = {}
+    #     for sym in list(symbols.keys())[i:j]:
+    #         symbols_redis[sym] = symbols[sym].to_redis()
+    #     from itertools import islice
+    #     def batched(iterable, n):
+    #         it = iter(iterable)
+    #         while True:
+    #             batch = list(islice(it, n))
+    #             if not batch:
+    #                 break
+    #             yield batch
+    #     BATCH_SIZE = 50  # or even 20 if needed
+    #     for batch in batched(list(symbols_redis.items()), BATCH_SIZE):
+    #         pipe = r.pipeline(transaction=False)
+    #         for sym, data in batch:
+    #             pipe.hset(f"symbols", sym, json.dumps(data, default=str))
+    #         pipe.execute()
+    #     i += 1000
+    #     if i > len(list(symbols.keys())):
+    #         break
+    #     if ((j+1000) > len(list(symbols.keys()))):
+    #         j = None
+    #     if j is not None:
+    #         j += 1000
+    # #Sec
+    # sec_redis = {}
+    # for s in sec:
+    #     sec_redis[s] = sec[s].to_redis()
+    #     r.hset("sec", mapping={s:json.dumps(sec_redis[s], default=str)})
+    # #Ind
+    # ind_redis = {}
+    # for i in ind:
+    #     ind_redis[i] = ind[i].to_redis()
+    #     r.hset("ind", mapping={i:json.dumps(ind_redis[i], default=str)})
+    # #sp500
+    # sp500_redis = {}
+    # sp500_redis['in_symbols'] = [sym for sym in sp500 if sym in symbols]
+    # for sym in sp500:
+    #     if sym not in symbols:
+    #         sp500_redis[sym] = sp500[sym].to_redis()
+    #         r.hset("sp500", mapping={sym:json.dumps(sp500_redis[sym], default=str)})
+    # r.hset("sp500", mapping={'in_symbols':json.dumps(sp500_redis['in_symbols'], default=str)})
+    # #mdy
+    # mdy_redis = {}
+    # mdy_redis['in_symbols'] = [sym for sym in mdy if sym in symbols]
+    # for sym in mdy:
+    #     if sym not in symbols:
+    #         mdy_redis[sym] = mdy[sym].to_redis()
+    #         r.hset("mdy", mapping={sym:json.dumps(mdy_redis[sym], default=str)})
+    # r.hset("mdy", mapping={'in_symbols':json.dumps(mdy_redis['in_symbols'], default=str)})
+    # #iwm
+    # iwm_redis = {}
+    # iwm_redis['in_symbols'] = [sym for sym in iwm if sym in symbols]
+    # for sym in iwm:
+    #     if sym not in symbols:
+    #         iwm_redis[sym] = iwm[sym].to_redis()
+    #         r.hset("iwm", mapping={sym:json.dumps(iwm_redis[sym], default=str)})
+    # r.hset("iwm", mapping={'in_symbols':json.dumps(iwm_redis['in_symbols'], default=str)})
+    # #etfs
+    # etfs_redis = {}
+    # for sym in etfs:
+    #     etfs_redis[sym] = etfs[sym].to_redis()
+    #     r.hset("etfs", mapping={sym:json.dumps(etfs_redis[sym], default=str)})        
 
 
     from IPython.display import display, HTML
