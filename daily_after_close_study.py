@@ -457,7 +457,25 @@ if __name__ == "__main__":
             (mdy, 'mdy'),
             (iwm, 'iwm'),
             (etfs, 'etfs'),
-            (stock_stats, 'stock_stats'))
+            (stock_stats, 'stock_stats'),
+            (ev, 'ev'),
+            (all_returns, 'all_returns'),
+            (sector_close_vwap_ratio, 'sector_close_vwap_ratio'),
+            (industry_close_vwap_ratio, 'industry_close_vwap_ratio'),
+            (ep_curdur, 'ep_curdur'),
+            (ep_rr, 'ep_rr'),
+            (rel_stren, 'rel_stren'),
+            (prev_perf_since_earnings, 'prev_perf_since_earnings'),
+            (perf_since_earnings, 'perf_since_earnings'),
+            (days_elevated_rvol, 'days_elevated_rvol'),
+            (days_range_expansion, 'days_range_expansion'),
+            (results_finvizsearch, 'results_finvizsearch'),
+            (tsc, 'tsc'),
+            (tsc_sec, 'tsc_sec'),
+            (tsc_ind, 'tsc_ind'),
+            (qplus1, 'qplus1'),
+            (qplus4, 'qplus4'),
+            (interest_list_long.interest_list, 'interest_list_long'))
     for _ in variables:
         t.append(threading.Thread(
             target=save_snapshots,
@@ -524,16 +542,20 @@ if __name__ == "__main__":
     #     pickle.dump(stock_stats, f)
 
     interest_list_long = il(source_symbols=symbols)
-    interest_list_long.value_filter(rel_stren, 70, '>=', 'Technical', 'Long')
-    interest_list_long.value_filter(prev_perf_since_earnings, 50, '>=', 'Technical', 'Long')
-    interest_list_long.value_filter(perf_since_earnings, 30, '>=', 'Technical', 'Long')
+    interest_list_long.value_filter(rel_stren, 70, '>=', 'Technical', 'Long', 'rel_stren')
+    interest_list_long.value_filter(prev_perf_since_earnings, 50, '>=', 'Technical', 'Long', 'prev_perf_since_earnings')
+    interest_list_long.value_filter(perf_since_earnings, 30, '>=', 'Technical', 'Long', 'perf_since_earnings')
     interest_list_long.value_filter(tsc.sent_dict.items(), 
                                     (tsc.positive_sent_dict_stats.loc['mean'].values[0] + 
                                     (tsc.positive_sent_dict_stats.loc['std'].values[0] * 2)), 
-                                    '>=', 'Technical', 'Long')
+                                    '>=', 'Technical', 'Long', 'tsc')
 
     interest_list_long.value_filter(qplus1, 50, '>=', 'Fundamental', 'Long')
     interest_list_long.value_filter(qplus4, 100, '>=', 'Fundamental', 'Long')
+    
+    with open(fr"{wl.systematic_watchlists_root}\interest_list_long.txt", "w") as f:
+        for sym in interest_list_long.interest_list:
+            f.write(sym + '\n')
     
     #Redis storage
     #Symbols

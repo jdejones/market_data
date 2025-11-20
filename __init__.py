@@ -1,5 +1,5 @@
 #Third-party imports
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,7 +8,7 @@ import os
 import sys
 import datetime
 from datetime import date, timedelta
-from typing import List
+from typing import List, Iterable
 import time
 import yfinance as yf
 import matplotlib.pyplot as plt

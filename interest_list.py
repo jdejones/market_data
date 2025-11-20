@@ -1,5 +1,4 @@
-from market_data import pd, operator, warnings
-from typing import Iterable
+from market_data import pd, operator, warnings, Iterable
 
 
 class InterestList:
@@ -8,7 +7,8 @@ class InterestList:
         self.source_symbols = source_symbols
 
     def value_filter(self, sym_value: Iterable[tuple[str, float]], threshold: float, 
-                     _operator: str, interest_factor: str, interest_direction: str):
+                     _operator: str, interest_factor: str, interest_direction: str,
+                     interest_source: str):
         if _operator == '>':
             op = operator.gt
         elif _operator == '<':
@@ -36,6 +36,7 @@ class InterestList:
                 else:
                     sym_data.interest_factor.append(interest_factor)
                 sym_data.interest_direction = interest_direction
+                sym_data.interest_source.append(interest_source)
                 self.interest_list.append(sym)
 
     def __call__(self):

@@ -1,4 +1,4 @@
-from market_data import dataclass
+from market_data import dataclass, field
 from market_data import pd
 from typing import List
 
@@ -13,11 +13,22 @@ class SymbolData:
     market_cap: float | None = None
     interest_factor: List[str] | None = None
     interest_direction: str | None = None
+    interest_source: List[str] = field(default_factory=list)
     theme: str | None = None
 
 
     # convenience proxy for attribute access
     def __getattr__(self, item):          # let s.close mean s.df["close"]
+        """
+        Let s.close mean s.df["close"], but avoid recursion during unpickling
+        or when df is not yet set.
+        """
+        # Try to get df without triggering __getattr__ again
+        try:
+            df = object.__getattribute__(self, "df")
+        except AttributeError:
+            # df doesn't exist yet; behave like normal missing attribute
+            raise AttributeError(item)        
         if item in self.df.columns:
             return self.df[item]
         raise AttributeError(item)
