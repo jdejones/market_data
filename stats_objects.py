@@ -773,8 +773,7 @@ class IntradaySignalProcessing:
 
     def perform_kruskal(self,
         metric: str = 'max_within',
-        return_full: bool = False
-    ) -> tuple[list[str], float] | dict:
+        return_full: bool = False) -> tuple[list[str], float] | dict:
         """
         Perform Levene's test and the Kruskal–Wallis H-test across signals on a specified return metric.
 
@@ -851,8 +850,7 @@ class IntradaySignalProcessing:
 
     def perform_dunn(self,
         metric: str = 'max_within',
-        p_adjust: str = 'bonferroni'
-    ) -> pd.DataFrame:
+        p_adjust: str = 'bonferroni') -> pd.DataFrame:
         """
         Perform Dunn's post-hoc pairwise comparisons on the groups defined in self.conditions.
 
@@ -1413,8 +1411,7 @@ def compute_interday_expected_values(
     entry_signal: str,
     exit_signal: str,
     stop_signal: Union[str, List[str]],
-    bias: str = 'long'
-) -> Tuple[Dict[str, float], float]:
+    bias: str = 'long') -> Tuple[Dict[str, float], float]:
     """
     Compute per-symbol and aggregate expected values on a daily timeframe.
 
@@ -1577,7 +1574,8 @@ def conditional_probability(df, condition_col, outcome_col, condition_value=True
 
 
 #Intraday RVol objects
-def intraday_rvol(symbols_list, date=None, lookback_days=20, timespan='second', multiplier=30):
+def intraday_rvol(symbols_list, date=None, lookback_days=20, 
+                  timespan='second', multiplier=30, market_open_only=True):
     """
     Calculate intraday relative volume for a list of symbols.
     
@@ -1587,6 +1585,7 @@ def intraday_rvol(symbols_list, date=None, lookback_days=20, timespan='second', 
                                         Defaults to most recent trading day.
         lookback_days (int): Number of days to use for average calculation. Default is 20.
         multiplier (int): Time interval multiplier for intraday data import. Default is 30 (30 seconds).
+        market_open_only (bool): Whether to only use market open data. Default is True.
     
     Returns:
         dict: Dictionary with symbol as key and intraday RVol data as value
@@ -1616,7 +1615,8 @@ def intraday_rvol(symbols_list, date=None, lookback_days=20, timespan='second', 
         from_date=start_date.strftime('%Y-%m-%d'),
         to_date=end_date.strftime('%Y-%m-%d'),
         timespan=timespan,
-        multiplier=multiplier
+        multiplier=multiplier,
+        market_open_only=market_open_only
     )
     
     if date is None:

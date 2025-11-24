@@ -81,7 +81,8 @@ def intraday_import(wl: list[str],
                     timespan: str = 'second',
                     multiplier: int = 10,
                     limit: int = 50000,
-                    offset_dates: dict[str, list[int|str|datetime.datetime,int|str|datetime.datetime]] = None) -> dict[str, pd.DataFrame]:
+                    offset_dates: dict[str, list[int|str|datetime.datetime,int|str|datetime.datetime]] = None,
+                    market_open_only: bool = True) -> dict[str, pd.DataFrame]:
     """Offset dates is used if all symbols don't start/end with the same date.
 
     Args:
@@ -143,7 +144,8 @@ def intraday_import(wl: list[str],
             'h': 'High',
             'l': 'Low',
         }).drop(['t','n'], axis=1)
-        df = df.between_time('09:30:00', '15:59:50')
+        if market_open_only:
+            df = df.between_time('09:30:00', '15:59:50')
         if resample:
             df = df.resample(resample).agg({'Volume': 'sum', 'VWAP': 'mean', 
                                             'Open': 'first', 'Close': 'last', 
