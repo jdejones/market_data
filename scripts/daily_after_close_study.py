@@ -48,98 +48,98 @@ if __name__ == "__main__":
     # daily_quant_rating_df = pd.read_sql("SELECT * FROM quant_rating", con=engine)
     daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
-    # if len(daily_quant_rating_df.columns) > 1000:
-    #     warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
+    if len(daily_quant_rating_df.columns) > 1000:
+        warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
         
-    # #*Temporarily commented out while fixing MySQL bugs
-    # # daily_quant_rating_df.set_index('index', inplace=True)
-    # #Concatenate new column
-    # daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
+    #*Temporarily commented out while fixing MySQL bugs
+    # daily_quant_rating_df.set_index('index', inplace=True)
+    #Concatenate new column
+    daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
 
-    # #Request and add new rows
-    # #list of symbols
-    # syms = list(symbols.keys())
+    #Request and add new rows
+    #list of symbols
+    syms = list(symbols.keys())
 
-    # #api requests
-    # #assign counters
-    # i=0
-    # j=50
-    # while True:
-    #         #break when list is exhausted
-    #         if i > len(syms):
-    #             break
-    #         #assign None near end of list
-    #         if j > len(syms):
-    #             j = None
-    #         #API call
-    #         url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
+    #api requests
+    #assign counters
+    i=0
+    j=50
+    while True:
+            #break when list is exhausted
+            if i > len(syms):
+                break
+            #assign None near end of list
+            if j > len(syms):
+                j = None
+            #API call
+            url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
 
-    #         querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
+            querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
 
-    #         headers = {
-    #             "x-rapidapi-key": f"{seeking_alpha_api_key}",
-    #             "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
-    #         }
+            headers = {
+                "x-rapidapi-key": f"{seeking_alpha_api_key}",
+                "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
+            }
 
-    #         response_request = requests.get(url, headers=headers, params=querystring)
+            response_request = requests.get(url, headers=headers, params=querystring)
 
-    #         if response_request.status_code != 200:
-    #             if response_request.status_code == 504:
-    #                 print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
-    #                 time.sleep(30)
-    #                 response_request = requests.get(url, headers=headers, params=querystring)
-    #                 response = response_request.json()
-    #             else:
-    #                 print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
-    #                 time.sleep(30)
-    #                 response_request = requests.get(url, headers=headers, params=querystring)
-    #                 response = response_request.json()
+            if response_request.status_code != 200:
+                if response_request.status_code == 504:
+                    print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+                    response = response_request.json()
+                else:
+                    print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+                    response = response_request.json()
 
-    #         response = response_request.json()
+            response = response_request.json()
                     
-    #         if response_request.status_code != 200:
-    #             break
+            if response_request.status_code != 200:
+                break
             
-    #         #Container for symbol and respective rating
-    #         quant_ratings_errors = {}
-    #         try:
-    #             sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
-    #         except:
-    #             sym_ratings = {}
-    #             for _ in response['data']:
-    #                 try:
-    #                     sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
-    #                 except Exception as e:
-    #                     quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
-    #                     continue
-    #             pass
-    #         if len(quant_ratings_errors) > 3000:
-    #             break
+            #Container for symbol and respective rating
+            quant_ratings_errors = {}
+            try:
+                sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
+            except:
+                sym_ratings = {}
+                for _ in response['data']:
+                    try:
+                        sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
+                    except Exception as e:
+                        quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
+                        continue
+                pass
+            if len(quant_ratings_errors) > 3000:
+                break
             
-    #         #Concatenate rating to dataframe
-    #         for sym in sym_ratings:
-    #             daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
+            #Concatenate rating to dataframe
+            for sym in sym_ratings:
+                daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
                     
-    #         #Increment counters
-    #         i += 50
-    #         if j == None:
-    #             break
-    #         j += 50
-    #         time.sleep(2)
+            #Increment counters
+            i += 50
+            if j == None:
+                break
+            j += 50
+            time.sleep(2)
 
-    # #*Temporarily commented out while fixing MySQL bugs
-    # # daily_quant_rating_df.reset_index(inplace=True)
-    # # # # write back, replace existing table
-    # # daily_quant_rating_df.to_sql("quant_rating", 
-    # #         con=engine, 
-    # #         if_exists="replace", 
-    # #         index=False, 
-    # #         method="multi",
-    # #         chunksize=200,
-    # #         dtype={'date': DateTime})
-    # # daily_quant_rating_df.set_index('index', inplace=True)
-    # # daily_quant_rating_df.index.name = 'Symbol'
-    # daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
+    #*Temporarily commented out while fixing MySQL bugs
+    # daily_quant_rating_df.reset_index(inplace=True)
+    # # # write back, replace existing table
+    # daily_quant_rating_df.to_sql("quant_rating", 
+    #         con=engine, 
+    #         if_exists="replace", 
+    #         index=False, 
+    #         method="multi",
+    #         chunksize=200,
+    #         dtype={'date': DateTime})
+    # daily_quant_rating_df.set_index('index', inplace=True)
+    # daily_quant_rating_df.index.name = 'Symbol'
+    daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
     #########################################################################
     
@@ -455,7 +455,9 @@ if __name__ == "__main__":
     interest_list_long.value_filter(qplus1, 50, '>=', 'Fundamental', 'Long', 'qplus1')
     interest_list_long.value_filter(qplus4, 100, '>=', 'Fundamental', 'Long', 'qplus4')
     quant_rating_interest = daily_quant_rating_df[daily_quant_rating_df.columns[-2]].reset_index()
-    quant_rating_interest = [(sym, val) for sym, val in zip(quant_rating_interest['index'], quant_rating_interest[quant_rating_interest.columns[-1]])]
+    quant_rating_interest = [(sym, val) for sym, val in 
+                             zip(quant_rating_interest['index'], quant_rating_interest[quant_rating_interest.columns[-1]])
+                             if sym in symbols]
     interest_list_long.value_filter(quant_rating_interest, 4.9, '>=', 'Fundamental', 'Long', 'daily_quant_rating')
     
     with open(fr"{wl.systematic_watchlists_root}\interest_list_long.txt", "w") as f:
