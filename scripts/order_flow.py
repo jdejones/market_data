@@ -465,7 +465,14 @@ def update_charts(_n: int):
         xaxis_title="Time (US/Eastern)",
         yaxis_title="Trade Value (USD)",
         legend_title="Buckets",
-        margin={"l": 40, "r": 20, "t": 40, "b": 40},
+        legend=dict(
+            orientation="h",
+            x=1.0,
+            xanchor="right",
+            y=1.15,
+            yanchor="bottom",
+        ),
+        margin={"l": 40, "r": 20, "t": 60, "b": 40},
     )
 
     # Trades per second
