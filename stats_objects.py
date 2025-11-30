@@ -1715,17 +1715,17 @@ def rank_symbols_by_cycle_strength(data_dict: dict[str, pd.Series],
 
 
 def drawdown_current(df: pd.DataFrame, start: str|int):
-    if type(start) == str:
+    if isinstance(start, str):
         high = df['High'].loc[start:].max()
         low = df['Close'].iloc[-1]
         return high - low
-    if type(start) == int:
+    if isinstance(start, int):
         high = df['High'].loc[start:].max()
         low = df['Close'].iloc[-1]
         return high - low
     
-def drawdown_max(df: pd.DataFrame, start: str|int):
-    if type(start) == str:
+def drawdown_max(df: pd.DataFrame, start: str|int|datetime.date):
+    if isinstance(start, str):
         df = df[['High', 'Low']].loc[start:]
         df['Date'] = df.index
         # initialize max diff and dates
@@ -1746,7 +1746,7 @@ def drawdown_max(df: pd.DataFrame, start: str|int):
 
         return max_diff_dict
     
-    elif type(start) == datetime.date:
+    elif isinstance(start, datetime.date):
         df = df[['High', 'Low']].loc[start:]
         df['Date'] = df.index
         # initialize max diff and dates
@@ -1766,7 +1766,7 @@ def drawdown_max(df: pd.DataFrame, start: str|int):
                         max_diff_dict[start_date + ':'+ end_date] = max_diff
         return max_diff_dict
     
-    elif type(start) == int:
+    elif isinstance(start, int):
         df = df[['High', 'Low']].loc[start:]
         df['Date'] = df.index
         # initialize max diff and dates
