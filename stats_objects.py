@@ -1,7 +1,7 @@
 from market_data import date, timedelta, List, dataclass, pd, datetime, Tuple, timedelta, operator, Union
 from market_data.Symbol_Data import SymbolData
 from market_data.price_data_import import fragmented_intraday_import, nonconsecutive_intraday_import, intraday_import
-from market_data.add_technicals import intraday_pipeline, add_avwap_by_offset, run_pipeline, Step, _add_intraday_technicals_worker
+from market_data.add_technicals import intraday_pipeline, add_avwap_by_offset, run_pipeline, Step, _add_intraday_technicals_worker, SMA, EMA
 from market_data import ProcessPoolExecutor, as_completed, tqdm, ThreadPoolExecutor, levene, kruskal, median_test, sp, Union, Dict, List, partial, find_peaks, linregress
 import numpy as np
 
@@ -1402,6 +1402,161 @@ def signal_statistics(
     }
     
     return symbol_stats, aggregate_stats
+    
+def signal_statistics_optimized(
+    dataframes: Dict[str, pd.DataFrame],
+    indicator: str = 'SMA',
+    base_col: str = 'Close',
+    min_period: int = 5,
+    max_period: int = 50,
+    op: str = '>',
+    bias: str = 'long',
+    lookback: int = 2000
+) -> pd.DataFrame:
+    """
+    Compare two *instances of the same technical indicator* with different
+    lookback windows (e.g. ``10DMA > 20DMA``, ``9DMA > 19DMA``) across a
+    range of periods, and compute return statistics via :func:`signal_statistics`.
+
+    For each pair of periods ``(p_fast, p_slow)`` with ``min_period <= p_fast < p_slow <= max_period``:
+
+    - The requested moving average (currently ``SMA`` or ``EMA``) of ``base_col``
+      is computed for both ``p_fast`` and ``p_slow`` if not already present.
+    - A 0/1 **signal column** is created in the function namespace named::
+
+          signal_{indicator_lower}_{base_col}_{p_fast}{op}{p_slow}
+
+      e.g. ``signal_sma_Close_10>20``.
+    - :func:`signal_statistics` is called with that signal column.
+    - Aggregate mean, max and min returns are collected for 1/5/10/20 day horizons.
+
+    Parameters
+    ----------
+    dataframes : dict[str, pd.DataFrame]
+        Mapping of symbol -> price/indicator DataFrame.
+    indicator : {'SMA', 'EMA'}, default 'SMA'
+        Which moving-average function from :mod:`add_technicals` to use.
+    base_col : str, default 'Close'
+        Column over which the moving average is computed.
+    min_period, max_period : int
+        Inclusive bounds for the moving-average lookback window.
+        All ordered pairs (p_fast, p_slow) with min_period <= p_fast < p_slow <= max_period
+        are evaluated.
+    op : {'>', '<', '>=', '<=', '==', '!='}, default '>'
+        Comparison operator applied between the two MAs for each (p_fast, p_slow) pair.
+    bias : {'long', 'short'}, default 'long'
+        Direction of the trade, forwarded to :func:`signal_statistics`.
+    lookback : int, default 2000
+        Lookback window (in rows) forwarded to :func:`signal_statistics`.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with one row per (p_fast, p_slow) pair and columns:
+
+        - ``fast_period`` / ``slow_period`` – the two lookback windows compared.
+        - ``num_signals`` – total number of signals across all symbols.
+        - ``mean_1day``, ``mean_5days``, ``mean_10days``, ``mean_20days`` –
+          aggregate mean returns from :func:`signal_statistics`.
+        - ``max_1day`` / ``min_1day`` (and analogues for 5/10/20 days) –
+          maximum / minimum realized returns across all signals.
+
+    Notes
+    -----
+    - The original input DataFrames are **not** modified; copies are created
+      before adding moving-average and signal columns.
+    - If no signals are generated for a given pair, the max/min statistics
+      for that horizon are set to ``NaN``.
+    """
+    if min_period <= 0 or max_period <= 0:
+        raise ValueError("min_period and max_period must be positive integers.")
+    if min_period >= max_period:
+        raise ValueError("min_period must be strictly less than max_period.")
+
+    # Map indicator name to the underlying implementation in add_technicals.py
+    ma_funcs = {
+        'SMA': SMA,
+        'EMA': EMA,
+    }
+    if indicator not in ma_funcs:
+        raise ValueError(f"Unsupported indicator {indicator!r}. Supported: {list(ma_funcs.keys())}.")
+    ma_func = ma_funcs[indicator]
+
+    # Operator mapping reused from elsewhere in this module
+    _ops = {
+        '>':  operator.gt,
+        '<':  operator.lt,
+        '>=': operator.ge,
+        '<=': operator.le,
+        '==': operator.eq,
+        '!=': operator.ne,
+    }
+    if op not in _ops:
+        raise ValueError(f"Unsupported operator {op!r}. Valid operators are {list(_ops.keys())}.")
+
+    # Work on copies so we do not mutate the caller's data
+    ma_frames: Dict[str, pd.DataFrame] = {sym: df.copy() for sym, df in dataframes.items()}
+
+    # Pre-compute the moving-average columns for all needed periods
+    period_range = range(min_period, max_period + 1)
+    for sym, df in ma_frames.items():
+        if base_col not in df.columns:
+            raise KeyError(f"Base column {base_col!r} not found in DataFrame for symbol {sym!r}.")
+        for p in period_range:
+            col_name = f'{indicator}_{base_col}_{p}'
+            if col_name not in df.columns:
+                # ma_func mutates df in-place
+                ma_func(df, base=base_col, target=col_name, period=p)
+
+    rows: List[Dict[str, float]] = []
+    horizons = ['1day', '5days', '10days', '20days']
+    indicator_lower = indicator.lower()
+
+    # Evaluate all ordered pairs p_fast < p_slow
+    for p_fast in period_range:
+        for p_slow in period_range:
+            if p_fast >= p_slow:
+                continue
+
+            left_col = f'{indicator}_{base_col}_{p_fast}'
+            right_col = f'{indicator}_{base_col}_{p_slow}'
+            # Signal column lives purely inside this function's namespace;
+            # its name is deterministic but not user-configurable.
+            signal_col = f'signal_{indicator_lower}_{base_col}_{p_fast}{op}{p_slow}'
+
+            # Create / overwrite the signal column on the MA-enriched frames
+            for sym, df in ma_frames.items():
+                cmp_result = _ops[op](df[left_col], df[right_col])
+                df[signal_col] = cmp_result.astype(int)
+
+            _, aggregate_stats = signal_statistics(
+                ma_frames,
+                signal_column=signal_col,
+                bias=bias,
+                lookback=lookback
+            )
+
+            row: Dict[str, float] = {
+                'fast_period': float(p_fast),
+                'slow_period': float(p_slow),
+                'num_signals': float(aggregate_stats.get('num_signals', 0)),
+            }
+
+            for h in horizons:
+                returns_list = aggregate_stats['returns'].get(h, [])
+                mean_ret = aggregate_stats['mean_returns'].get(h, 0.0)
+                row[f'mean_{h}'] = float(mean_ret)
+                if returns_list:
+                    row[f'max_{h}'] = float(max(returns_list))
+                    row[f'min_{h}'] = float(min(returns_list))
+                else:
+                    row[f'max_{h}'] = float('nan')
+                    row[f'min_{h}'] = float('nan')
+
+            rows.append(row)
+
+    results = pd.DataFrame(rows)
+    return results
 
 #These functions should be tested.
 #*What will this function do if the exit/stop signals do not occur after the entry signal?
