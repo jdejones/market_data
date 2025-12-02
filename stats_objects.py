@@ -1407,8 +1407,9 @@ def signal_statistics_optimized(
     dataframes: Dict[str, pd.DataFrame],
     indicator: str = 'SMA',
     base_col: str = 'Close',
-    min_period: int = 5,
-    max_period: int = 50,
+    left_operand: int = 10,
+    right_operand: int = 20,
+    variance: int = 5,
     op: str = '>',
     bias: str = 'long',
     lookback: int = 2000
@@ -1418,7 +1419,15 @@ def signal_statistics_optimized(
     lookback windows (e.g. ``10DMA > 20DMA``, ``9DMA > 19DMA``) across a
     range of periods, and compute return statistics via :func:`signal_statistics`.
 
-    For each pair of periods ``(p_fast, p_slow)`` with ``min_period <= p_fast < p_slow <= max_period``:
+    Instead of scanning a broad min/max window, this function explores a
+    *local neighbourhood* around two anchor periods:
+
+        left_period  ∈ [left_operand  - variance, left_operand  + variance]
+        right_period ∈ [right_operand - variance, right_operand + variance]
+
+    For each pair of periods ``(p_fast, p_slow)`` with
+    ``p_fast`` taken from the left range, ``p_slow`` from the right range,
+    and ``p_fast < p_slow``:
 
     - The requested moving average (currently ``SMA`` or ``EMA``) of ``base_col``
       is computed for both ``p_fast`` and ``p_slow`` if not already present.
@@ -1438,10 +1447,19 @@ def signal_statistics_optimized(
         Which moving-average function from :mod:`add_technicals` to use.
     base_col : str, default 'Close'
         Column over which the moving average is computed.
-    min_period, max_period : int
-        Inclusive bounds for the moving-average lookback window.
-        All ordered pairs (p_fast, p_slow) with min_period <= p_fast < p_slow <= max_period
-        are evaluated.
+    left_operand : int, default 10
+        Center of the period range for the "fast" moving average.
+    right_operand : int, default 20
+        Center of the period range for the "slow" moving average.
+    variance : int, default 5
+        Radius around each operand that defines the search window.
+        For example, ``left_operand=10, right_operand=20, variance=5``
+        yields:
+
+            p_fast  ∈ [5, 15]
+            p_slow  ∈ [15, 25]
+
+        and the function evaluates all pairs with ``p_fast < p_slow``.
     op : {'>', '<', '>=', '<=', '==', '!='}, default '>'
         Comparison operator applied between the two MAs for each (p_fast, p_slow) pair.
     bias : {'long', 'short'}, default 'long'
@@ -1451,15 +1469,20 @@ def signal_statistics_optimized(
 
     Returns
     -------
-    pd.DataFrame
-        A DataFrame with one row per (p_fast, p_slow) pair and columns:
-
-        - ``fast_period`` / ``slow_period`` – the two lookback windows compared.
-        - ``num_signals`` – total number of signals across all symbols.
-        - ``mean_1day``, ``mean_5days``, ``mean_10days``, ``mean_20days`` –
-          aggregate mean returns from :func:`signal_statistics`.
-        - ``max_1day`` / ``min_1day`` (and analogues for 5/10/20 days) –
-          maximum / minimum realized returns across all signals.
+    pair_symbol_stats : dict
+        Mapping ``(fast_period, slow_period) -> symbol_stats`` where
+        ``symbol_stats`` has the same structure as :func:`signal_statistics`
+        but is augmented with:
+        
+        - ``min_returns`` : dict[horizon -> float]
+        - ``max_returns`` : dict[horizon -> float]
+        
+        and ``num_signals`` is an integer.
+    pair_aggregate_stats : dict
+        Mapping ``(fast_period, slow_period) -> aggregate_stats`` where
+        ``aggregate_stats`` has the same base structure as
+        :func:`signal_statistics` and is also augmented with
+        ``min_returns`` / ``max_returns`` dictionaries of floats.
 
     Notes
     -----
@@ -1468,10 +1491,10 @@ def signal_statistics_optimized(
     - If no signals are generated for a given pair, the max/min statistics
       for that horizon are set to ``NaN``.
     """
-    if min_period <= 0 or max_period <= 0:
-        raise ValueError("min_period and max_period must be positive integers.")
-    if min_period >= max_period:
-        raise ValueError("min_period must be strictly less than max_period.")
+    if left_operand <= 0 or right_operand <= 0:
+        raise ValueError("left_operand and right_operand must be positive integers.")
+    if variance < 0:
+        raise ValueError("variance must be a non-negative integer.")
 
     # Map indicator name to the underlying implementation in add_technicals.py
     ma_funcs = {
@@ -1497,26 +1520,40 @@ def signal_statistics_optimized(
     # Work on copies so we do not mutate the caller's data
     ma_frames: Dict[str, pd.DataFrame] = {sym: df.copy() for sym, df in dataframes.items()}
 
+    # Determine the relevant period ranges around each operand
+    left_start = max(1, left_operand - variance)
+    left_end   = left_operand + variance
+    right_start = max(1, right_operand - variance)
+    right_end   = right_operand + variance
+
+    left_range  = range(left_start, left_end + 1)
+    right_range = range(right_start, right_end + 1)
+
     # Pre-compute the moving-average columns for all needed periods
-    period_range = range(min_period, max_period + 1)
+    all_periods = sorted(set(list(left_range) + list(right_range)))
     for sym, df in ma_frames.items():
         if base_col not in df.columns:
             raise KeyError(f"Base column {base_col!r} not found in DataFrame for symbol {sym!r}.")
-        for p in period_range:
+        for p in all_periods:
             col_name = f'{indicator}_{base_col}_{p}'
             if col_name not in df.columns:
                 # ma_func mutates df in-place
                 ma_func(df, base=base_col, target=col_name, period=p)
 
-    rows: List[Dict[str, float]] = []
     horizons = ['1day', '5days', '10days', '20days']
     indicator_lower = indicator.lower()
+    pair_symbol_stats: Dict[Tuple[int, int], Dict[str, Dict]] = {}
+    pair_aggregate_stats: Dict[Tuple[int, int], Dict] = {}
 
-    # Evaluate all ordered pairs p_fast < p_slow
-    for p_fast in period_range:
-        for p_slow in period_range:
-            if p_fast >= p_slow:
-                continue
+    # Evaluate all ordered pairs p_fast < p_slow drawn from the two ranges.
+    # Explicitly skip any pairs where the periods are equal to avoid
+    # comparing identical windows (which can distort statistics).
+    for p_fast in left_range:
+        for p_slow in right_range:
+            if p_fast == p_slow:
+                continue  # never compare equal-period MAs
+            if p_fast > p_slow:
+                continue  # enforce "fast" MA has shorter lookback
 
             left_col = f'{indicator}_{base_col}_{p_fast}'
             right_col = f'{indicator}_{base_col}_{p_slow}'
@@ -1529,34 +1566,47 @@ def signal_statistics_optimized(
                 cmp_result = _ops[op](df[left_col], df[right_col])
                 df[signal_col] = cmp_result.astype(int)
 
-            _, aggregate_stats = signal_statistics(
+            symbol_stats, aggregate_stats = signal_statistics(
                 ma_frames,
                 signal_column=signal_col,
                 bias=bias,
                 lookback=lookback
             )
-
-            row: Dict[str, float] = {
-                'fast_period': float(p_fast),
-                'slow_period': float(p_slow),
-                'num_signals': float(aggregate_stats.get('num_signals', 0)),
-            }
-
+            
+            # Augment per-symbol stats with min/max per horizon
+            for sym, stats in symbol_stats.items():
+                min_ret: Dict[str, float] = {}
+                max_ret: Dict[str, float] = {}
+                for h in horizons:
+                    vals = stats['returns'].get(h, [])
+                    if vals:
+                        min_ret[h] = float(min(vals))
+                        max_ret[h] = float(max(vals))
+                    else:
+                        min_ret[h] = float('nan')
+                        max_ret[h] = float('nan')
+                stats['min_returns'] = min_ret
+                stats['max_returns'] = max_ret
+            
+            # Augment aggregate stats with min/max per horizon
+            agg_min: Dict[str, float] = {}
+            agg_max: Dict[str, float] = {}
             for h in horizons:
-                returns_list = aggregate_stats['returns'].get(h, [])
-                mean_ret = aggregate_stats['mean_returns'].get(h, 0.0)
-                row[f'mean_{h}'] = float(mean_ret)
-                if returns_list:
-                    row[f'max_{h}'] = float(max(returns_list))
-                    row[f'min_{h}'] = float(min(returns_list))
+                vals = aggregate_stats['returns'].get(h, [])
+                if vals:
+                    agg_min[h] = float(min(vals))
+                    agg_max[h] = float(max(vals))
                 else:
-                    row[f'max_{h}'] = float('nan')
-                    row[f'min_{h}'] = float('nan')
+                    agg_min[h] = float('nan')
+                    agg_max[h] = float('nan')
+            aggregate_stats['min_returns'] = agg_min
+            aggregate_stats['max_returns'] = agg_max
+            
+            key = (int(p_fast), int(p_slow))
+            pair_symbol_stats[key] = symbol_stats
+            pair_aggregate_stats[key] = aggregate_stats
 
-            rows.append(row)
-
-    results = pd.DataFrame(rows)
-    return results
+    return pair_symbol_stats, pair_aggregate_stats
 
 #These functions should be tested.
 #*What will this function do if the exit/stop signals do not occur after the entry signal?

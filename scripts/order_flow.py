@@ -426,6 +426,14 @@ def update_charts(_n: int):
         )
         return go.Figure(layout=empty_layout), go.Figure(layout=empty_layout)
 
+    # Debug: print visible time range in the dashboard data
+    try:
+        ts_min = df["timestamp"].min()
+        ts_max = df["timestamp"].max()
+        print(f"Dashboard time span: {ts_min} -> {ts_max}")
+    except Exception as e:
+        print(f"Error computing dashboard time span: {e}")
+
     # Trade value buckets
     fig_value = go.Figure()
     fig_value.add_trace(
