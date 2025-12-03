@@ -35,9 +35,7 @@ class SymbolData:
 
     # convenience proxy for subscript access
     def __getitem__(self, key):           # let s['close'] mean s.df['close']
-        if key in self.df.columns:
-            return self.df[key]
-        raise KeyError(key)
+        return self.df[key]
     
     def to_redis(self) -> dict:
         # Convert datetime columns to strings for JSON serialization
