@@ -606,4 +606,5 @@ def watchlist_suggestions(tb):
                                 }
                 return list(watchlists.keys())
 
-
+def timeframe_optimizer():
+    pass
