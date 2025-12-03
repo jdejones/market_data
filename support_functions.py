@@ -734,8 +734,8 @@ def timeframe_optimizer(symbol: str,
     # Base resolution: 1-minute intraday data for the symbol.
     data_dict = intraday_import(
         wl=[symbol],
-        from_date=start_date,
-        to_date=end_date,
+        from_date=from_date,
+        to_date=to_date,
         timespan="minute",
         multiplier=1,
         resample=False,
@@ -754,8 +754,13 @@ def timeframe_optimizer(symbol: str,
     reg.reset_variables()
     reg.lower_upper_OHLC(base_df)
     # Use default lvl=2 for initial swing construction; this sets up Lo1/Hi1 and Lo2/Hi2.
-    reg.regime_args(base_df, lvl=2)
-    reg.historical_swings(base_df)
+    try:
+        reg.regime_args(base_df, lvl=2)
+        reg.historical_swings(base_df)
+    except IndexError:
+        base_df.attrs["optimized_timeframe"] = f"{start_minutes}T"
+        base_df.attrs["swing_level"] = None
+        return base_df
 
     highest_level = _detect_highest_swing_level(base_df)
     if highest_level is None:
@@ -782,11 +787,14 @@ def timeframe_optimizer(symbol: str,
         if resampled_df.empty:
             continue
 
-        reg.reset_variables()
-        reg.lower_upper_OHLC(resampled_df)
-        # Use the same highest swing level discovered on the base data for consistency.
-        reg.regime_args(resampled_df, lvl=highest_level)
-        reg.historical_swings(resampled_df)
+        try:
+            reg.reset_variables()
+            reg.lower_upper_OHLC(resampled_df)
+            # Use the same highest swing level discovered on the base data for consistency.
+            reg.regime_args(resampled_df, lvl=highest_level)
+            reg.historical_swings(resampled_df)
+        except IndexError:
+            continue
 
         score = _evaluate_simplicity(resampled_df, highest_level)
         if score is None:
