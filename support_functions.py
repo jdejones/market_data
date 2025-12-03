@@ -1,10 +1,11 @@
 import yfinance as yf
-from market_data.price_data_import import api_import
+from market_data.price_data_import import api_import, intraday_import
 from market_data.add_technicals import RSI
 from market_data.watchlist_filters import Technical_Score_Calculator
 import market_data.fundamentals as fu
 from market_data import pd, sa, fu, np, datetime, re, scoreatpercentile
 from market_data.Symbol_Data import SymbolData
+from market_data.regimes import Regimes
 import market_data.watchlists_locations as wl
 
 
@@ -606,5 +607,205 @@ def watchlist_suggestions(tb):
                                 }
                 return list(watchlists.keys())
 
-def timeframe_optimizer():
-    pass
+
+def timeframe_optimizer(symbol: str,
+                        start_minutes: int = 1,
+                        max_minutes: int = 15,
+                        minute_step: int = 1,
+                        from_date: int | str | datetime.datetime = 0,
+                        to_date: int | str | datetime.datetime = datetime.datetime.now()
+                        ) -> pd.DataFrame:
+    """Find the intraday timeframe that best simplifies the swing structure for a single symbol.
+
+    The algorithm:
+    - Uses 1-minute data as the base resolution (fetched via ``intraday_import``).
+    - Runs the ``Regimes.historical_swings`` logic to label hierarchical swing highs/lows (Hi1/Lo1, Hi2/Lo2, …).
+    - Determines the highest swing level present on the 1-minute data (e.g. 3 for Hi3/Lo3).
+    - Iteratively resamples the 1-minute data to coarser timeframes up to ``max_minutes`` and re-runs swing detection.
+    - For each timeframe, computes how many Hi1/Lo1 swings appear between successive major swings (HiN/LoN, N = highest level),
+      preferring timeframes with:
+        * at least one Hi1 and one Lo1 between major swings, and
+        * the fewest “extra” Hi1/Lo1 points beyond one each per interval.
+
+    Args:
+        symbol (str): Ticker symbol.
+        start_minutes (int): Smallest timeframe (in minutes) to consider for the simplified trend (default 1).
+        max_minutes (int): Largest timeframe (in minutes) to consider (default 15).
+        minute_step (int): Step size (in minutes) when iterating timeframes (default 1).
+        start_date (int | str | datetime.datetime): Start date for intraday data (passed to ``intraday_import`` as ``from_date``).
+        end_date (int | str | datetime.datetime): End date for intraday data (passed to ``intraday_import`` as ``to_date``).
+
+    Returns:
+        pd.DataFrame: OHLCV DataFrame at the chosen timeframe, annotated with swing columns.
+                      The selected timeframe (e.g. ``'5T'``) is stored in
+                      ``df.attrs['optimized_timeframe']``, and the swing level used in
+                      ``df.attrs['swing_level']``.
+    """
+
+    if start_minutes <= 0:
+        raise ValueError("start_minutes must be a positive integer.")
+    if max_minutes < start_minutes:
+        raise ValueError("max_minutes must be greater than or equal to start_minutes.")
+    if minute_step <= 0:
+        raise ValueError("minute_step must be a positive integer.")
+
+    # --- Helper functions -------------------------------------------------
+
+    def _detect_highest_swing_level(frame: pd.DataFrame) -> int | None:
+        """Return the highest N such that both HiN and LoN exist and have at least one non-null value."""
+        levels: list[int] = []
+        for col in frame.columns:
+            if col.startswith("Hi") and col[2:].isdigit():
+                n = int(col[2:])
+                lo_col = f"Lo{n}"
+                if lo_col in frame.columns and frame[col].notna().any() and frame[lo_col].notna().any():
+                    levels.append(n)
+        return max(levels) if levels else None
+
+    def _resample_ohlcv(frame: pd.DataFrame, minutes: int) -> pd.DataFrame:
+        """Resample intraday OHLCV to the given minute frequency."""
+        freq = f"{minutes}T"
+        agg = {
+            "Volume": "sum",
+            "Open": "first",
+            "Close": "last",
+            "High": "max",
+            "Low": "min",
+        }
+        if "VWAP" in frame.columns:
+            agg["VWAP"] = "mean"
+        resampled = frame.resample(freq).agg(agg)
+        # Drop completely empty rows that may appear at the edges
+        resampled = resampled.dropna(subset=["Open", "High", "Low", "Close"], how="any")
+        return resampled
+
+    def _evaluate_simplicity(frame: pd.DataFrame, level: int) -> tuple[int, int] | None:
+        """Score how 'simple' the trend is at a given timeframe for a chosen major swing level.
+
+        Returns a tuple (bad_intervals, extra_minors) where:
+        - bad_intervals: number of intervals between major swings (HiN/LoN) that lack either a Hi1 or a Lo1.
+        - extra_minors: total number of extra Hi1/Lo1 points beyond one of each per interval.
+        Lower is better. Returns None if required columns or sufficient swings are not present.
+        """
+        major_hi = f"Hi{level}"
+        major_lo = f"Lo{level}"
+        minor_hi = "Hi1"
+        minor_lo = "Lo1"
+
+        required_cols = [major_hi, major_lo, minor_hi, minor_lo]
+        if any(col not in frame.columns for col in required_cols):
+            return None
+
+        hi_idx = list(frame.index[frame[major_hi].notna()])
+        lo_idx = list(frame.index[frame[major_lo].notna()])
+        if len(hi_idx) + len(lo_idx) < 2:
+            return None
+
+        events: list[tuple[pd.Timestamp, str]] = [(ix, "hi") for ix in hi_idx] + [(ix, "lo") for ix in lo_idx]
+        events.sort(key=lambda x: x[0])
+
+        bad_intervals = 0
+        extra_minors = 0
+        intervals = 0
+
+        for (start_ix, _), (end_ix, _) in zip(events, events[1:]):
+            if end_ix <= start_ix:
+                continue
+            segment = frame.loc[start_ix:end_ix]
+            hi1_count = int(segment[minor_hi].notna().sum())
+            lo1_count = int(segment[minor_lo].notna().sum())
+
+            if hi1_count == 0 or lo1_count == 0:
+                bad_intervals += 1
+            else:
+                if hi1_count > 1:
+                    extra_minors += hi1_count - 1
+                if lo1_count > 1:
+                    extra_minors += lo1_count - 1
+            intervals += 1
+
+        if intervals == 0:
+            return None
+
+        return bad_intervals, extra_minors
+
+    # --- Load 1-minute data ----------------------------------------------
+
+    # Base resolution: 1-minute intraday data for the symbol.
+    data_dict = intraday_import(
+        wl=[symbol],
+        from_date=start_date,
+        to_date=end_date,
+        timespan="minute",
+        multiplier=1,
+        resample=False,
+    )
+    try:
+        base_df = data_dict[symbol].sort_index()
+    except KeyError:
+        raise ValueError(f"Intraday data for symbol '{symbol}' could not be imported.")
+
+    if base_df.empty:
+        raise ValueError("Input DataFrame for timeframe_optimizer is empty.")
+
+    # --- Run regimes on the base (1-minute) data --------------------------
+
+    reg = Regimes(symbols={symbol: SymbolData(symbol=symbol, df=base_df)})
+    reg.reset_variables()
+    reg.lower_upper_OHLC(base_df)
+    # Use default lvl=2 for initial swing construction; this sets up Lo1/Hi1 and Lo2/Hi2.
+    reg.regime_args(base_df, lvl=2)
+    reg.historical_swings(base_df)
+
+    highest_level = _detect_highest_swing_level(base_df)
+    if highest_level is None:
+        # No hierarchical swings detected; return base data as-is.
+        base_df.attrs["optimized_timeframe"] = f"{start_minutes}T"
+        base_df.attrs["swing_level"] = None
+        return base_df
+
+    # Evaluate simplicity at the base timeframe.
+    best_df = base_df
+    best_freq = f"{start_minutes}T"
+    best_score = _evaluate_simplicity(base_df, highest_level)
+
+    # If base timeframe is already ideal (one Hi1/Lo1 per interval), we are done.
+    if best_score == (0, 0):
+        best_df.attrs["optimized_timeframe"] = best_freq
+        best_df.attrs["swing_level"] = highest_level
+        return best_df
+
+    # --- Iterate over coarser timeframes ----------------------------------
+
+    for minutes in range(max(start_minutes + minute_step, start_minutes + 1), max_minutes + 1, minute_step):
+        resampled_df = _resample_ohlcv(base_df, minutes)
+        if resampled_df.empty:
+            continue
+
+        reg.reset_variables()
+        reg.lower_upper_OHLC(resampled_df)
+        # Use the same highest swing level discovered on the base data for consistency.
+        reg.regime_args(resampled_df, lvl=highest_level)
+        reg.historical_swings(resampled_df)
+
+        score = _evaluate_simplicity(resampled_df, highest_level)
+        if score is None:
+            continue
+
+        if best_score is None or score < best_score:
+            best_score = score
+            best_df = resampled_df
+            best_freq = f"{minutes}T"
+
+            # Early exit if we reach the ideal configuration.
+            if score == (0, 0):
+                break
+
+    # If no valid score was ever computed (very unlikely), fall back to base data.
+    if best_score is None:
+        best_df = base_df
+        best_freq = f"{start_minutes}T"
+
+    best_df.attrs["optimized_timeframe"] = best_freq
+    best_df.attrs["swing_level"] = highest_level
+    return best_df
