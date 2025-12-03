@@ -641,7 +641,10 @@ def timeframe_optimizer(symbol: str,
                       ``df.attrs['optimized_timeframe']``, and the swing level used in
                       ``df.attrs['swing_level']``.
     """
-
+    #TODO I've added lines denoted by #! that were suggested for catching
+    #TODO KeyErrors for High levels. When using them, instead of KeyErrors
+    #TODO the function returns a 1-minute timeframe. I need to return
+    #TODO to this to find another solution.
     if start_minutes <= 0:
         raise ValueError("start_minutes must be a positive integer.")
     if max_minutes < start_minutes:
@@ -773,7 +776,8 @@ def timeframe_optimizer(symbol: str,
     best_df = base_df
     best_freq = f"{start_minutes}T"
     best_score = _evaluate_simplicity(base_df, highest_level)
-
+    #! best_level = highest_level
+    
     # If base timeframe is already ideal (one Hi1/Lo1 per interval), we are done.
     if best_score == (0, 0):
         best_df.attrs["optimized_timeframe"] = best_freq
@@ -786,24 +790,53 @@ def timeframe_optimizer(symbol: str,
         resampled_df = _resample_ohlcv(base_df, minutes)
         if resampled_df.empty:
             continue
+        
+        #! # For this timeframe, try the highest swing level first and step down if needed.
+        #! candidate_best_df = None
+        #! candidate_best_score: tuple[int, int] | None = None
+        #! candidate_best_level: int | None = None
+
+        #! for lvl in range(highest_level, 1, -1):  # try N, N-1, ..., 2
+        #!     df_lvl = resampled_df.copy()
 
         try:
             reg.reset_variables()
             reg.lower_upper_OHLC(resampled_df)
+            #! reg.lower_upper_OHLC(df_lvl)
             # Use the same highest swing level discovered on the base data for consistency.
             reg.regime_args(resampled_df, lvl=highest_level)
             reg.historical_swings(resampled_df)
-        except IndexError:
+            #! reg.regime_args(df_lvl, lvl=lvl)
+            #! reg.historical_swings(df_lvl)            
+        except IndexError:#! except (IndexError, KeyError):
             continue
 
         score = _evaluate_simplicity(resampled_df, highest_level)
         if score is None:
             continue
+        
+        #!     if candidate_best_score is None or score < candidate_best_score:
+        #! candidate_best_score = score
+        #! candidate_best_df = df_lvl
+        #! candidate_best_level = lvl
 
-        if best_score is None or score < best_score:
+        #! # Ideal configuration for this timeframe; no need to try lower levels here.
+        #! if score == (0, 0):
+        #!     break
+        
+        #!End nested for loop
+        
+        #! if candidate_best_df is None:
+        #!     continue
+
+        if best_score is None or score < best_score:#! if best_score is None or candidate_best_score < best_score:
             best_score = score
             best_df = resampled_df
             best_freq = f"{minutes}T"
+            #! best_score = candidate_best_score
+            #! best_df = candidate_best_df
+            #! best_freq = f"{minutes}T"
+            #! best_level = candidate_best_level
 
             # Early exit if we reach the ideal configuration.
             if score == (0, 0):
@@ -813,6 +846,7 @@ def timeframe_optimizer(symbol: str,
     if best_score is None:
         best_df = base_df
         best_freq = f"{start_minutes}T"
+        #! best_level = highest_level
 
     best_df.attrs["optimized_timeframe"] = best_freq
     best_df.attrs["swing_level"] = highest_level
