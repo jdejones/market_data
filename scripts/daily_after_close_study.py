@@ -470,44 +470,49 @@ if __name__ == "__main__":
         with gzip.open(fr"{base}\{name}.pkl.gz", "wb", compresslevel=5) as f:
             pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
             
-    t = []
-    variables = ((symbols,'symbols'), 
-            (sec, 'sec'),
-            (ind, 'ind'),
-            (sp500, 'sp500'),
-            (mdy, 'mdy'),
-            (iwm, 'iwm'),
-            (etfs, 'etfs'),
-            (stock_stats, 'stock_stats'),
-            (ev, 'ev'),
-            (all_returns, 'all_returns'),
-            (sector_close_vwap_ratio, 'sector_close_vwap_ratio'),
-            (industry_close_vwap_ratio, 'industry_close_vwap_ratio'),
-            (ep_curdur, 'ep_curdur'),
-            (ep_rr, 'ep_rr'),
-            (rel_stren, 'rel_stren'),
-            (prev_perf_since_earnings, 'prev_perf_since_earnings'),
-            (perf_since_earnings, 'perf_since_earnings'),
-            (days_elevated_rvol, 'days_elevated_rvol'),
-            (days_range_expansion, 'days_range_expansion'),
-            (results_finvizsearch, 'results_finvizsearch'),
-            (tsc, 'tsc'),
-            (tsc_sec, 'tsc_sec'),
-            (tsc_ind, 'tsc_ind'),
-            (qplus1, 'qplus1'),
-            (qplus4, 'qplus4'),
-            (interest_list_long.interest_list, 'interest_list_long'))
-    for _ in variables:
-        t.append(threading.Thread(
+    variables = (
+        (symbols,'symbols'), 
+        (sec, 'sec'),
+        (ind, 'ind'),
+        (sp500, 'sp500'),
+        (mdy, 'mdy'),
+        (iwm, 'iwm'),
+        (etfs, 'etfs'),
+        (stock_stats, 'stock_stats'),
+        (ev, 'ev'),
+        (all_returns, 'all_returns'),
+        (sector_close_vwap_ratio, 'sector_close_vwap_ratio'),
+        (industry_close_vwap_ratio, 'industry_close_vwap_ratio'),
+        (ep_curdur, 'ep_curdur'),
+        (ep_rr, 'ep_rr'),
+        (rel_stren, 'rel_stren'),
+        (prev_perf_since_earnings, 'prev_perf_since_earnings'),
+        (perf_since_earnings, 'perf_since_earnings'),
+        (days_elevated_rvol, 'days_elevated_rvol'),
+        (days_range_expansion, 'days_range_expansion'),
+        (results_finvizsearch, 'results_finvizsearch'),
+        (tsc, 'tsc'),
+        (tsc_sec, 'tsc_sec'),
+        (tsc_ind, 'tsc_ind'),
+        (qplus1, 'qplus1'),
+        (qplus4, 'qplus4'),
+        (interest_list_long.interest_list, 'interest_list_long'),
+    )
+
+    # Use tqdm only on the longest-running step (waiting for threads to finish)
+    threads = []
+    for obj, name in variables:
+        threads.append(threading.Thread(
             target=save_snapshots,
-            args=(_[0], _[1]),
+            args=(obj, name),
             daemon=False,
         ))
-    for _ in t:
-        _.start()
 
-    for _ in t:
-        _.join()
+    for thread in threads:
+        thread.start()
+
+    for thread in tqdm(threads, desc="Waiting for snapshot completion"):
+        thread.join()
 
     # #Pickling most used objects, so I don't have to rerun the script.
     # def save_snapshots(symbols, sec, ind, sp500, mdy, iwm, etfs, stock_stats):
