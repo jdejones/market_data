@@ -205,7 +205,7 @@ class Regimes:
 
     # helper to do one symbol for floor/ceiling combo
     def _process_floor_ceiling_symbol(self, sym):
-        df = self.symbols[sym].df
+        df = self.symbols[sym].df = self.symbols[sym].df.copy() #Performance warning workaround.
         self.reset_variables()
         self.lower_upper_OHLC(df)
         self.regime_args(df)
