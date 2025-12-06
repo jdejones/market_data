@@ -1506,6 +1506,7 @@ def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, ale
     ma_pullback_alerts_10 = []
     ma_pullback_alerts_20 = []
     ma_pullback_alerts_50 = []
+    errors: list[str] = []
     if ma == '10':
         ma_pullback_alerts = ma_pullback_alerts_10
     elif ma =='20':
@@ -1528,8 +1529,11 @@ def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, ale
             except KeyError as ke:
                 if sym in all_symbols_list:#Continue if symbol is filter out by liquidity filter.
                     continue
-                print(ma_pullback.__name__, sym, sep=': ')
+                errors.append(ma_pullback.__name__ + ': ' + sym)
                 continue
+    _10percent_symbols = len(symbols) * 0.1
+    if len(errors) > _10percent_symbols:
+        print('Too many errors in ma_pullback: ' + '\n'.join(errors))
     for sym in syms:
         if (sym in symbols) and (-0.5 < symbols[sym].df['ATRs_from_'+ma+'DMA'].iloc[-1] < alert_pass_threshold):
             ma_pullback_alerts.append(sym)
