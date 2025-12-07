@@ -40,105 +40,105 @@ if __name__ == "__main__":
     #########################################################################
     #Connect to database
     #*Temporarily commented out while fixing MySQL bugs
-    # url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
-    # engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
 
-    # # query a database -> DataFrame
-    # daily_quant_rating_df = pd.read_sql("SELECT * FROM daily_quant_rating", con=engine)
-    daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
+    # query a database -> DataFrame
+    daily_quant_rating_df = pd.read_sql("SELECT * FROM daily_quant_rating", con=engine)
+    # daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
-    # if len(daily_quant_rating_df.columns) > 1000:
-    #     warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
+    if len(daily_quant_rating_df.columns) > 1000:
+        warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
         
-    # #*Temporarily commented out while fixing MySQL bugs
-    # # daily_quant_rating_df.set_index('index', inplace=True)
-    # #Concatenate new column
-    # daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
+    #*Temporarily commented out while fixing MySQL bugs
+    # daily_quant_rating_df.set_index('index', inplace=True)
+    #Concatenate new column
+    daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
 
-    # #Request and add new rows
-    # #list of symbols
-    # syms = list(symbols.keys())
+    #Request and add new rows
+    #list of symbols
+    syms = list(symbols.keys())
 
-    # #api requests
-    # #assign counters
-    # i=0
-    # j=50
-    # while True:
-    #         #break when list is exhausted
-    #         if i > len(syms):
-    #             break
-    #         #assign None near end of list
-    #         if j > len(syms):
-    #             j = None
-    #         #API call
-    #         url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
+    #api requests
+    #assign counters
+    i=0
+    j=50
+    while True:
+            #break when list is exhausted
+            if i > len(syms):
+                break
+            #assign None near end of list
+            if j > len(syms):
+                j = None
+            #API call
+            url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
 
-    #         querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
+            querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
 
-    #         headers = {
-    #             "x-rapidapi-key": f"{seeking_alpha_api_key}",
-    #             "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
-    #         }
+            headers = {
+                "x-rapidapi-key": f"{seeking_alpha_api_key}",
+                "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
+            }
 
-    #         response_request = requests.get(url, headers=headers, params=querystring)
+            response_request = requests.get(url, headers=headers, params=querystring)
 
-    #         if response_request.status_code != 200:
-    #             if response_request.status_code == 504:
-    #                 print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
-    #                 time.sleep(30)
-    #                 response_request = requests.get(url, headers=headers, params=querystring)
-    #                 response = response_request.json()
-    #             else:
-    #                 print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
-    #                 time.sleep(30)
-    #                 response_request = requests.get(url, headers=headers, params=querystring)
-    #                 response = response_request.json()
+            if response_request.status_code != 200:
+                if response_request.status_code == 504:
+                    print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+                    response = response_request.json()
+                else:
+                    print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+                    response = response_request.json()
 
-    #         response = response_request.json()
+            response = response_request.json()
                     
-    #         if response_request.status_code != 200:
-    #             break
+            if response_request.status_code != 200:
+                break
             
-    #         #Container for symbol and respective rating
-    #         quant_ratings_errors = {}
-    #         try:
-    #             sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
-    #         except:
-    #             sym_ratings = {}
-    #             for _ in response['data']:
-    #                 try:
-    #                     sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
-    #                 except Exception as e:
-    #                     quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
-    #                     continue
-    #             pass
-    #         if len(quant_ratings_errors) > 3000:
-    #             break
+            #Container for symbol and respective rating
+            quant_ratings_errors = {}
+            try:
+                sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
+            except:
+                sym_ratings = {}
+                for _ in response['data']:
+                    try:
+                        sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
+                    except Exception as e:
+                        quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
+                        continue
+                pass
+            if len(quant_ratings_errors) > 3000:
+                break
             
-    #         #Concatenate rating to dataframe
-    #         for sym in sym_ratings:
-    #             daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
+            #Concatenate rating to dataframe
+            for sym in sym_ratings:
+                daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
                     
-    #         #Increment counters
-    #         i += 50
-    #         if j == None:
-    #             break
-    #         j += 50
-    #         time.sleep(2)
+            #Increment counters
+            i += 50
+            if j == None:
+                break
+            j += 50
+            time.sleep(2)
 
-    # #*Temporarily commented out while fixing MySQL bugs
-    # # daily_quant_rating_df.reset_index(inplace=True)
-    # # # # write back, replace existing table
-    # # daily_quant_rating_df.to_sql("daily_quant_rating", 
-    # #         con=engine, 
-    # #         if_exists="replace", 
-    # #         index=False, 
-    # #         method="multi",
-    # #         chunksize=200,
-    # #         dtype={'date': DateTime})
-    # # daily_quant_rating_df.set_index('index', inplace=True)
-    # # daily_quant_rating_df.index.name = 'Symbol'
+    #*Temporarily commented out while fixing MySQL bugs
+    daily_quant_rating_df.reset_index(inplace=True)
+    # # write back, replace existing table
+    daily_quant_rating_df.to_sql("daily_quant_rating", 
+            con=engine, 
+            if_exists="replace", 
+            index=False, 
+            method="multi",
+            chunksize=200,
+            dtype={'date': DateTime})
+    daily_quant_rating_df.set_index('index', inplace=True)
+    daily_quant_rating_df.index.name = 'Symbol'
     # daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
     #########################################################################
@@ -511,7 +511,7 @@ if __name__ == "__main__":
     for thread in threads:
         thread.start()
 
-    for thread in tqdm(threads, desc="Waiting for snapshot completion"):
+    for thread in tqdm(threads, desc="Storing Variables"):
         thread.join()
 
     # #Pickling most used objects, so I don't have to rerun the script.
