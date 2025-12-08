@@ -52,7 +52,7 @@ if __name__ == "__main__":
         warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
         
     #*Temporarily commented out while fixing MySQL bugs
-    # daily_quant_rating_df.set_index('index', inplace=True)
+    daily_quant_rating_df.set_index('index', inplace=True)
     #Concatenate new column
     daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
 
