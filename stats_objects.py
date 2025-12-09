@@ -1412,8 +1412,7 @@ def signal_statistics_optimized(
     variance: int = 5,
     op: str = '>',
     bias: str = 'long',
-    lookback: int = 2000
-) -> pd.DataFrame:
+    lookback: int = 2000) -> Tuple[Dict[Tuple[int, int], Dict[str, Dict]], Dict[Tuple[int, int], Dict]]:
     """
     Compare two *instances of the same technical indicator* with different
     lookback windows (e.g. ``10DMA > 20DMA``, ``9DMA > 19DMA``) across a
