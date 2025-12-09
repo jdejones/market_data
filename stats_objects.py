@@ -7,6 +7,28 @@ import numpy as np
 
         
 def _add_intraday_with_avwap0(item):
+    """
+    Apply the standard intraday technicals pipeline plus a 0-offset AVWAP column.
+
+    This helper is designed for use inside multiprocessing executors. It takes a
+    ``(symbol, df)`` pair, appends an `add_avwap_by_offset` step with ``offset=0``
+    to the global ``intraday_pipeline``, runs the combined pipeline via
+    :func:`run_pipeline`, and returns the updated pair.
+
+    Parameters
+    ----------
+    item : tuple[str, pd.DataFrame]
+        Two-tuple ``(symbol, df)`` where ``df`` is an intraday OHLCV DataFrame
+        indexed by a DatetimeIndex and containing at least ``'Close'`` and
+        ``'Volume'`` columns.
+
+    Returns
+    -------
+    tuple[str, pd.DataFrame]
+        The same symbol together with a new DataFrame that includes all
+        columns produced by ``intraday_pipeline`` plus a ``'VWAP_0'`` column
+        from :func:`add_avwap_by_offset`.
+    """
     symbol, df = item
     # inject the extra step at the end
     steps = intraday_pipeline + [
