@@ -456,7 +456,7 @@ if __name__ == "__main__":
     interest_list_long.value_filter(qplus4, 100, '>=', 'Fundamental', 'Long', 'qplus4')
     quant_rating_interest = daily_quant_rating_df[daily_quant_rating_df.columns[-2]].reset_index()
     quant_rating_interest = [(sym, val) for sym, val in 
-                             zip(quant_rating_interest['index'], quant_rating_interest[quant_rating_interest.columns[-1]])
+                             zip(quant_rating_interest['Symbol'], quant_rating_interest[quant_rating_interest.columns[-1]])
                              if sym in symbols]
     interest_list_long.value_filter(quant_rating_interest, 4.9, '>=', 'Fundamental', 'Long', 'daily_quant_rating')
     
