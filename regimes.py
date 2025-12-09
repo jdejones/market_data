@@ -303,7 +303,8 @@ class Regimes:
         #     self.lower_upper_OHLC(self.symbols[sym].df)
         #     self.regime_args(self.symbols[sym].df)
         #     self.historical_swings(self.symbols[sym].df)
-        #     self.regime_floor_ceiling(self.symbols[sym].df)   
+        #     self.regime_floor_ceiling(self.symbols[sym].df)
+        errors = []
         if watchlist is None:
             watchlist = self.symbols.keys()
         if not single_symbol:
@@ -314,9 +315,15 @@ class Regimes:
                     try:
                         future.result()
                     except Exception as e:
-                        print(self.floor_ceiling_combo.__name__, sym, e, sep=': ')
+                        errors.append(e)
+                        # print(self.floor_ceiling_combo.__name__, sym, e, sep=': ')
         else:
             self._process_floor_ceiling_symbol(symbol)
+        _10percent_symbols = len(self.symbols) * 0.1    
+        if len(errors) > _10percent_symbols:
+            print('Too many errors in floor_ceiling_combo:')
+            for e in errors:
+                print(e)
 
     #Does not require utility functions, can be used as is.
     def regime_breakout(self, df ,_h= 'High',_l= 'Low', window=252):

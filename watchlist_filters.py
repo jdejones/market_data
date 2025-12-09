@@ -1533,7 +1533,9 @@ def ma_pullback(symbols:dict, ma: str='20', alert_pass_threshold: float=0.5, ale
                 continue
     _10percent_symbols = len(symbols) * 0.1
     if len(errors) > _10percent_symbols:
-        print('Too many errors in ma_pullback: ' + '\n'.join(errors))
+        print('Too many errors in ma_pullback:')
+        for e in errors:
+            print(e)
     for sym in syms:
         if (sym in symbols) and (-0.5 < symbols[sym].df['ATRs_from_'+ma+'DMA'].iloc[-1] < alert_pass_threshold):
             ma_pullback_alerts.append(sym)
