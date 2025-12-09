@@ -42,13 +42,37 @@ def _add_intraday_with_avwap0(item):
 
 def process_symbol_intraday_returns(items):
     """
-    Used with measure_intraday_returns.
+    Compute within-day and 1–5 day forward return metrics for all intraday signals of a symbol.
+ 
+    This is a worker function intended for use with :class:`IntradaySignalProcessing`
+    and is typically invoked by :meth:`IntradaySignalProcessing.measure_intraday_returns`.
 
-    Args:
-        sym (_type_): _description_
+    Given a tuple ``(symbol, intraday_signals, daily_df)``, it scans each intraday
+    DataFrame for 0/1 signal columns, and for every ``1`` event computes:
 
-    Returns:
-        _type_: _description_
+    - Within-day max/min excursions in percent from the signal price.
+    - Close-to-close same-day return.
+    - Max/Min/Close returns over the next 1–5 business days based on the
+      daily OHLC data in ``daily_df``.
+
+    Parameters
+    ----------
+    items : tuple
+        Three-tuple ``(sym, intraday_signals, daily_df)`` where:
+        - ``sym`` is the symbol string.
+        - ``intraday_signals`` is a list of intraday DataFrames with
+          OHLC columns and one or more 0/1 signal columns.
+        - ``daily_df`` is a daily OHLC DataFrame indexed by date or
+          DatetimeIndex (will be reindexed by ``.index.date``).
+
+    Returns
+    -------
+    tuple[pd.DataFrame, dict]
+        - A summary DataFrame indexed by signal name with columns like
+          ``'count'``, ``'mean_max_within'``, ``'mean_min_within'``,
+          ``'mean_ret_close0'``, and ``'mean_ret_{high,low,close}_{1..5}d'``.
+        - A nested metrics dictionary of the raw lists used to compute
+          those means for each signal.
     """
     sym, intraday_signals, daily_df = items
     import os
@@ -113,6 +137,41 @@ def process_symbol_intraday_returns(items):
     return df_ret, metrics
 
 def process_symbol_conditions(items):
+    """
+    Produce intraday signal columns for a symbol given comparison-based conditions.
+
+    This worker is used by :meth:`IntradaySignalProcessing.condition_statistics`.
+    For each intraday DataFrame, it either:
+
+    - Builds a fixed library of boolean conditions (``base_conditions``) when
+      ``conditions`` is falsy, or
+    - Interprets the user-provided mapping of condition names to comparison
+      descriptions and evaluates them.
+
+    The resulting boolean Series are written back into each DataFrame as
+    0/1 columns with the condition names.
+
+    Parameters
+    ----------
+    items : tuple
+        Three-tuple ``(sym, frames, conditions)`` where:
+        - ``sym`` is the symbol string.
+        - ``frames`` is a list of intraday OHLCV DataFrames with technical
+          columns (e.g. EMAs, bands, VWAP) already attached.
+        - ``conditions`` is either:
+          - ``None`` / empty, in which case built-in ``base_conditions`` are used.
+          - A mapping ``{name: desc}`` where:
+            * ``desc = [col1, col2, op]`` encodes a single comparison
+              ``df[col1] (op) df[col2]``; or
+            * ``desc = [[col1, col2, op], ...]`` encodes an AND-combination
+              of multiple comparisons.
+
+    Returns
+    -------
+    tuple[str, list[pd.DataFrame]]
+        The symbol and a list of the same DataFrames, each now containing
+        one column per condition with integer 1 where the condition is true.
+    """
     sym, frames, conditions = items
     result = []
     for df in frames:
