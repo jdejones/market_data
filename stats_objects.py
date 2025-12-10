@@ -293,13 +293,34 @@ def process_symbol_conditions(items):
 
 def calculate_symbol_rvol(symbol_data_tuple, target_date=None, lookback_days=20):
     """
-    Calculate intraday RVol for a single symbol.
-    
-    Args:
-        symbol_data_tuple (tuple): (symbol, dataframe) tuple
-        
-    Returns:
-        tuple: (symbol, rvol_data)
+    Calculate intraday relative volume (RVol) for a single symbol on a target date.
+
+    RVol is defined here as the ratio of the current day's **cumulative intraday
+    volume** at each timestamp to the average cumulative volume at the **same
+    clock time** over the previous ``lookback_days`` trading days.
+
+    Parameters
+    ----------
+    symbol_data_tuple : tuple[str, pd.DataFrame]
+        Two-tuple ``(symbol, df)`` where ``df`` is intraday OHLCV data indexed
+        by a DatetimeIndex and containing at least a ``'Volume'`` column.
+    target_date : datetime.date or str, optional
+        Calendar date for which RVol should be computed. If ``None``, the most
+        recent date present in ``df`` is used.
+    lookback_days : int, default 20
+        Number of prior trading days used to compute the average cumulative
+        volume profile.
+
+    Returns
+    -------
+    tuple[str, pd.DataFrame | None]
+        - The symbol string.
+        - A DataFrame indexed by intraday timestamps on ``target_date`` with
+          columns:
+          * ``'cumulative_volume'``
+          * ``'avg_historical_volume'``
+          * ``'intraday_rvol'``
+        or ``None`` if there is insufficient data.
     """
     symbol, df = symbol_data_tuple
     
