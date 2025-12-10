@@ -381,16 +381,53 @@ def calculate_symbol_rvol(symbol_data_tuple, target_date=None, lookback_days=20)
 
 @dataclass(slots=True)
 class IntradaySignalProcessing:
-    """_summary_
-
+    """
+    Orchestrate intraday data import, signal construction, and return/EV analysis.
     
     The dataframe in interday_signals was originally intended to be the frame object from sf.condition_statistics.
     It could be any dataframe  with columns of boolean values in which True represents an identified signal.
-    
-    
-    
-    Returns:
-        _type_: _description_
+
+    This class ties together:
+    - A mapping of daily price data per symbol (:class:`SymbolData` instances).
+    - Interday signal definitions (e.g. daily pattern flags).
+    - Intraday imports around those signal dates (fragmented or nonconsecutive).
+    - Computation of intraday technical indicators and 0/1 intraday signals.
+    - Aggregation of within-day and multi-day return statistics and EV metrics.
+
+    Attributes
+    ----------
+    symbols : dict[str, SymbolData]
+        Mapping from symbol to :class:`SymbolData` containing daily OHLCV
+        DataFrames in ``.df``.
+    interday_signals : dict[str, pd.DataFrame | pd.Series]
+        For each symbol, either a DataFrame of daily 0/1 signal columns or a
+        single signal Series indexed by date/DatetimeIndex.
+    signal_dates : dict[str, dict[str, list[datetime.date] | list[tuple[datetime.date, datetime.date]]]] | None
+        Populated by :meth:`identify_signal_dates`. For each symbol and signal
+        name, stores either a list of individual dates or a list of
+        (start_date, end_date) tuples when ``consecutive_signals=True``.
+    _intraday_frames : dict[str, list[pd.DataFrame]] | None
+        Raw intraday OHLCV frames fetched around ``signal_dates``.
+    intraday_frames : dict[str, list[pd.DataFrame]] | None
+        Intraday frames after technical indicator pipelines have been applied.
+    consecutive_signals : bool
+        If True, treat runs of consecutive business-day signals as multi-day
+        periods and import intraday data via :func:`fragmented_intraday_import`.
+        Otherwise, treat each signal date independently.
+    conditions : list[str] | dict | None
+        Set of intraday condition names (or explicit definitions) used to
+        create 0/1 intraday signal columns in :meth:`condition_statistics`.
+    intraday_signals : dict[str, list[pd.DataFrame]] | None
+        For each symbol, the intraday frames with signal columns written in.
+    intraday_returns_raw : dict[str, dict[str, dict[str, list[float]]]] | None
+        Raw per-symbol, per-signal return lists produced by
+        :meth:`measure_intraday_returns`.
+    intraday_returns : dict[str, pd.DataFrame] | None
+        Per-symbol summary DataFrames of average intraday / multi-day returns
+        by signal condition.
+    ev_by_symbol, ev_agg, expected_values_by_symbol, expected_values
+        Containers used by :meth:`compute_expected_signal_values` and
+        :meth:`compute_expected_signal_ev` for intraday EV analytics.
     """
     
     symbols: dict[str, SymbolData]
