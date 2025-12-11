@@ -521,7 +521,8 @@ class Regimes:
             
             # Reduce reduction
             reduction = reduction.dropna(subset= ['hilo'])
-            reduction.fillna(method='ffill', inplace = True)
+            # reduction.fillna(method='ffill', inplace = True)#! Changed because of deprecation warning. Remove if outputs are as expected.
+            reduction.ffill(inplace=True)
             highs = reduction[str(_h)[:2]+str(n)].values
             lows = -reduction[str(_l)[:2]+str(n)].values
             
