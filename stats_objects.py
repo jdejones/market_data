@@ -595,10 +595,29 @@ class IntradaySignalProcessing:
 
     def import_intraday_data(self, resample: str = '3min', timespan: str = 'second', multiplier: int = 10, limit: int = 50000):
         """
-        Import intraday price data for each symbol based on self.signal_dates.
-        Uses nonconsecutive_intraday_import when consecutive_signals is False,
-        otherwise uses fragmented_intraday_import. Results are stored in
-        self._intraday_frames as a dict[symbol, list[pd.DataFrame]].
+        Import intraday OHLCV data around each signal date or date-range.
+
+        This method consumes :attr:`signal_dates` and constructs a per-symbol
+        lookup list passed into either:
+
+        - :func:`fragmented_intraday_import` when ``self.consecutive_signals``
+          is True, using ``[(start_date, end_date), ...]`` periods; or
+        - :func:`nonconsecutive_intraday_import` when False, using a flat list
+          of individual dates.
+
+        The resulting intraday frames are stored in :attr:`_intraday_frames`
+        as ``{symbol: [df1, df2, ...]}``.
+
+        Parameters
+        ----------
+        resample : str, default '3min'
+            Pandas-style resampling rule applied to the raw intraday data.
+        timespan : str, default 'second'
+            Base timespan passed through to the data import layer.
+        multiplier : int, default 10
+            Timespan multiplier forwarded to the import functions.
+        limit : int, default 50000
+            Max number of intraday bars per request (API-dependent).
         """
         # Build a mapping from symbol to list of dates or date‐ranges
         dates_dict: dict[str, list] = {}
