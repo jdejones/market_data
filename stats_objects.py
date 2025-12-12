@@ -658,7 +658,26 @@ class IntradaySignalProcessing:
 
     def add_intraday_technicals(self):
         """
-        Add technical indicators to the intraday frames.
+        Enrich imported intraday frames with technical indicators (and optional AVWAP).
+
+        For each symbol and intraday DataFrame in :attr:`_intraday_frames`, this
+        method:
+
+        - Selects a worker function:
+          * ``_add_intraday_with_avwap0`` when ``consecutive_signals=True``,
+            which appends a 0-offset AVWAP column in addition to the standard
+            intraday pipeline.
+          * ``_add_intraday_technicals_worker`` otherwise.
+        - Dispatches all ``(symbol, df)`` pairs to a :class:`ProcessPoolExecutor`.
+        - Collects and stores the processed frames in :attr:`intraday_frames`.
+
+        The input DataFrames are not modified in-place; the processed copies
+        are stored in a new mapping.
+
+        Notes
+        -----
+        This step can be CPU-intensive; ``num_workers`` and ``chunksize`` can
+        be tuned for your environment.
         """
 
         
@@ -687,7 +706,30 @@ class IntradaySignalProcessing:
 
     def condition_statistics(self, conditions: None|dict[str, list[str]]=None):
         """
-        Calculate the condition statistics for each symbol.
+        Construct 0/1 intraday signal columns for each symbol according to conditions.
+
+        This method operates on :attr:`intraday_frames`, which are intraday OHLCV
+        DataFrames already enriched with technical indicators. It then:
+
+        - Determines the set of condition names:
+          * If ``conditions is None``, uses a built-in list of boolean
+            expressions over existing columns (e.g. ``'close_over_ema5'``).
+          * Otherwise, uses the supplied mapping of condition definitions.
+        - Dispatches each ``(symbol, frames, conditions)`` triplet to
+          :func:`process_symbol_conditions` using a :class:`ProcessPoolExecutor`.
+        - Collects the resulting frames with 0/1 signal columns into
+          :attr:`intraday_signals`.
+
+        Parameters
+        ----------
+        conditions : dict[str, list] or None, optional
+            Optional mapping defining custom conditions. See
+            :func:`process_symbol_conditions` for the supported formats.
+            If None, a fixed library of conditions is used.
+
+        Side Effects
+        ------------
+        Populates :attr:`conditions` and :attr:`intraday_signals`.
         """
         # result = {}
         
@@ -893,7 +935,34 @@ class IntradaySignalProcessing:
 
 
     def measure_intraday_returns(self):
-        """Compute return metrics for each symbol and each signal condition."""
+        """
+        Compute within-day and 1–5 day return distributions for all intraday signals.
+
+        This method assumes :attr:`intraday_signals` is populated with, for each
+        symbol, a list of intraday DataFrames that include both OHLC columns and
+        0/1 signal columns (as created in :meth:`condition_statistics`).
+
+        For each symbol, it submits a job to :func:`process_symbol_intraday_returns`,
+        passing the symbol, its list of intraday frames, and a copy of the
+        symbol's daily OHLCV DataFrame (from :attr:`symbols`). The worker
+        computes:
+
+        - ``'max_within'`` / ``'min_within'``: intraday peak and trough moves.
+        - ``'ret_close0'``: signal-close to close-of-day return.
+        - ``'ret_{high,low,close}_{1..5}d'``: multi-day forward returns based on
+          daily bars and a business-day calendar.
+
+        Results are aggregated into:
+
+        - :attr:`intraday_returns`: per-symbol summary DataFrames by signal.
+        - :attr:`intraday_returns_raw`: nested dicts of raw lists per symbol,
+          signal, and metric key.
+
+        Returns
+        -------
+        None
+            The results are stored on the instance attributes described above.
+        """
         from multiprocessing import Pool
         print("-> Starting measure_intraday_returns")
         results = {}
@@ -978,24 +1047,36 @@ class IntradaySignalProcessing:
         metric: str = 'max_within',
         return_full: bool = False) -> tuple[list[str], float] | dict:
         """
-        Perform Levene's test and the Kruskal–Wallis H-test across signals on a specified return metric.
+        Compare distributions of a chosen return metric across signals using non-parametric tests.
 
-        Args:
-            metric: the key in intraday_returns_raw[sym][signal] containing the list of returns
-            return_full: if False (default), returns (signals, kruskal_pvalue);
-                            if True, returns a dict with:
-                            {
-                                'signals': [...],
-                                'levene':   (stat, pvalue),
-                                'kruskal':  (H_stat, pvalue),
-                                'groups':   { signal: [values, ...], ... }
-                            }
+        The input groups are built from :attr:`intraday_returns_raw` by extracting
+        the list ``intraday_returns_raw[sym][signal][metric]`` for each signal
+        name in :attr:`conditions`. Typical metric keys include:
 
-        Returns:
-            Either a tuple (signals, kruskal_pvalue) or the full-results dict.
+        - ``'max_within'``, ``'min_within'``, ``'ret_close0'``
+        - ``'ret_{high,low,close}_{1..5}d'``
 
-        Raises:
-            ValueError: if fewer than 2 signals have data to compare.
+        After filtering out empty and constant groups, the function applies:
+
+        - Levene's test for equal variances across groups.
+        - The Kruskal–Wallis H-test (or, if its p-value is NaN, a median test).
+
+        Parameters
+        ----------
+        metric : str, default 'max_within'
+            Key into each signal's raw returns dictionary.
+        return_full : bool, default False
+            If True, return a dictionary with statistics and per-group data.
+            Otherwise, return a tuple ``(signals, p_value)``.
+
+        Returns
+        -------
+        tuple[list[str], float] or dict
+            Either:
+            - ``(signals, kruskal_pvalue)`` where ``signals`` is the list of
+              group labels and ``kruskal_pvalue`` is the p-value; or
+            - A dict with keys ``'signals'``, ``'levene'``, ``'kruskal'``,
+              and ``'groups'`` when ``return_full=True``.
         """
         # 1) Aggregate non-null returns across all symbols per signal
         groups = {
@@ -1055,14 +1136,25 @@ class IntradaySignalProcessing:
         metric: str = 'max_within',
         p_adjust: str = 'bonferroni') -> pd.DataFrame:
         """
-        Perform Dunn's post-hoc pairwise comparisons on the groups defined in self.conditions.
+        Perform Dunn's post-hoc pairwise comparisons on intraday return groups.
 
-        Args:
-            metric:   which return‐series to use (e.g. 'ret_close0')
-            p_adjust: method for multiple-testing correction (e.g. 'bonferroni', 'holm', 'fdr_bh')
+        Groups are built from :attr:`intraday_returns_raw` in the same way as
+        :meth:`perform_kruskal`, using ``metric`` as the key into each
+        signal's raw returns list. Empty and constant groups are discarded.
 
-        Returns:
-            A DataFrame whose (i, j) entry is the adjusted p-value for comparing group i vs. j.
+        Parameters
+        ----------
+        metric : str, default 'max_within'
+            Which return series to analyze (e.g. ``'ret_close0'``).
+        p_adjust : str, default 'bonferroni'
+            Multiple-testing correction method passed to
+            :func:`scikit_posthocs.posthoc_dunn`.
+
+        Returns
+        -------
+        pd.DataFrame
+            A symmetric DataFrame whose rows and columns are signal names and
+            whose entries are adjusted p-values for each pairwise comparison.
         """
 
         # 1) Build & clean groups (same as perform_kruskal did)
@@ -1113,6 +1205,31 @@ class IntradaySignalProcessing:
                             df: pd.DataFrame,
                             signal_date: datetime.date|str,
                             bias: str = 'long'):
+        """
+        Convenience wrapper to compute EV using a prior-day high/low as stop target.
+
+        Given a daily OHLCV DataFrame and a signal date, this method:
+
+        - Locates the previous business day (Mon–Fri) before ``signal_date``.
+        - Reads that day's ``Low`` and ``High``.
+        - Calls :meth:`compute_expected_signal_values` twice using each as the
+          ``stop_target``, with the specified trading ``bias``.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Daily OHLCV price data indexed by date/DatetimeIndex.
+        signal_date : datetime.date or str
+            Signal date for which the prior-day stop is derived.
+        bias : {'long', 'short'}, default 'long'
+            Trading bias used when interpreting EV calculations.
+
+        Returns
+        -------
+        tuple[dict, dict]
+            The pair of dictionaries returned by
+            :meth:`compute_expected_signal_values` for each stop choice.
+        """
         ts = pd.to_datetime(signal_date)
 
         # Find the previous business‐day:
@@ -1138,8 +1255,40 @@ class IntradaySignalProcessing:
         return ev_sym, ev_agg
     def compute_expected_signal_values(self, stop_target: float = None, bias: str = 'long'):
         """
-        Compute expected values for each signal within-day and up to 5 days after signal.
-        Results stored in self.expected_values_by_symbol and self.expected_values.
+        Compute horizon-based expected values (EV) per signal using a hard stop level.
+
+        For every symbol and intraday signal in :attr:`intraday_signals`, this
+        method:
+
+        - Locates the earliest signal time within each day.
+        - Defines a stop price either from ``stop_target`` or from the pre-signal
+          intraday range (min Low for long, max High for short).
+        - For horizon ``h = 0``:
+          * Uses intraday data from signal time to the end of that day.
+        - For horizons ``h = 1..5``:
+          * Uses daily data from the signal date plus the next ``h`` business
+            days (via :meth:`next_business_day`).
+        - Computes the realized return assuming:
+          * If the stop is never hit, take the best favourable move (High for
+            long, Low for short).
+          * If the stop is hit, take the stop price instead.
+        - Aggregates these returns into an EV per signal and horizon.
+
+        Parameters
+        ----------
+        stop_target : float, optional
+            Explicit stop price to use for all signals. If None, a dynamic stop
+            is taken from the pre-signal intraday range as described above.
+        bias : {'long', 'short'}, default 'long'
+            Direction of the trade, determining whether peaks or troughs
+            represent favourable moves.
+
+        Returns
+        -------
+        tuple[dict, dict]
+            - ``ev_per_symbol``: mapping ``{symbol: {signal: {horizon: EV}}}``.
+            - ``ev_agg``: mapping ``{signal: {horizon: EV}}`` aggregated
+              across all symbols.
         """
         ev_per_symbol: dict[str, dict[str, dict[int, float]]] = {}
         agg_metrics = {sig: {'count': 0, 'sum_ev': {h: 0.0 for h in range(6)}} for sig in (self.conditions or [])}
@@ -1213,15 +1362,33 @@ class IntradaySignalProcessing:
                                 stop_target: float = None,
                                 bias: str = 'long'):
         """
-        For each symbol → signal → horizon (0–5), compute:
-            P_pos = prob(return ≥ 0)
-            R_pos = avg(return | return ≥ 0)
-            P_neg = prob(return < 0)
-            R_neg = avg(return | return < 0)
-            EV    = [P_pos, P_neg] · [R_pos, R_neg]
-        Stores:
-            self.ev_by_symbol[sym][sig][h] = EV
-            self.ev_agg      [sig][h]        = EV across all symbols
+        Compute EV per signal and horizon from empirical positive/negative return buckets.
+
+        For each symbol, signal, and horizon ``h ∈ {0..5}``, this method:
+
+        - Collects realized returns under a stop rule (similar to
+          :meth:`compute_expected_signal_values`).
+        - Splits them into:
+          * ``pos``: returns ``>= 0``
+          * ``neg``: returns ``< 0``
+        - Computes:
+          * ``P_pos``, ``P_neg``: empirical frequencies of each bucket.
+          * ``R_pos``, ``R_neg``: mean return within each bucket.
+        - Defines EV as ``EV = P_pos * R_pos + P_neg * R_neg``.
+
+        Parameters
+        ----------
+        stop_target : float, optional
+            Explicit stop price to use for all signals. If None, a dynamic stop
+            is computed per signal as in :meth:`compute_expected_signal_values`.
+        bias : {'long', 'short'}, default 'long'
+            Trade direction determining whether highs or lows are favourable.
+
+        Returns
+        -------
+        tuple[dict, dict]
+            - ``ev_by_symbol``: nested ``{symbol: {signal: {h: EV}}}``.
+            - ``ev_agg``: nested ``{signal: {h: EV}}`` aggregated over symbols.
         """
         # prepare containers
         ev_lists_sym = {
