@@ -452,8 +452,22 @@ class IntradaySignalProcessing:
     @staticmethod
     def next_business_day(d: datetime.date) -> datetime.date:
         """
-        Return the next business (weekday) date after d,
-        skipping Saturdays and Sundays.
+        Return the next weekday (Mon–Fri) strictly after the given date.
+
+        The function skips Saturdays and Sundays but does not account for
+        exchange holidays. It is used throughout this module to advance
+        from a signal date to future trading days when computing returns.
+        #TODO Add exchange holiday handling.
+
+        Parameters
+        ----------
+        d : datetime.date
+            Anchor date.
+
+        Returns
+        -------
+        datetime.date
+            The next calendar date such that ``weekday() < 5``.
         """
         d += timedelta(days=1)
         # 0 = Monday, …, 4 = Friday, 5 = Saturday, 6 = Sunday
@@ -463,11 +477,24 @@ class IntradaySignalProcessing:
 
     def is_consecutive_business_days(dates: List[datetime.date]) -> bool:
         """
-        Return True if:
-        - dates is empty or has a single element, or
-        - for every i > 0, dates[i] == next_business_day(dates[i-1])
-            and the list is strictly increasing.
-        Otherwise, return False.
+        Check whether a sequence of dates forms a strictly increasing run of business days.
+
+        A list is considered consecutive if:
+        - It has 0 or 1 element, or
+        - For every adjacent pair ``(prev, curr)``:
+          * ``curr > prev``, and
+          * ``curr`` equals :meth:`next_business_day(prev)`.
+
+        Parameters
+        ----------
+        dates : list[datetime.date]
+            Ordered sequence of dates to check.
+
+        Returns
+        -------
+        bool
+            True if the list is empty, length-one, or a contiguous chain of
+            business days; False otherwise.
         """
         if len(dates) < 2:
             return True
@@ -485,7 +512,25 @@ class IntradaySignalProcessing:
     
     def identify_signal_dates(self):
         """
-        Populate self.signal_dates based on self.interday_signals and self.consecutive_signals.
+        Derive per-symbol signal dates (or date ranges) from `interday_signals`.
+
+        For each symbol:
+        - If ``interday_signals[sym]`` is a DataFrame, each column is treated
+          as a separate 0/1 signal series.
+        - If it is a Series, its ``name`` (or the fallback ``"signal"``) is
+          used as the signal key.
+
+        Dates are extracted wherever the signal equals 1. When
+        ``self.consecutive_signals`` is:
+
+        - False: each signal produces a flat list of :class:`datetime.date`
+          objects.
+        - True: each signal produces a list of ``(start_date, end_date)``
+          tuples representing contiguous runs of business days (using
+          :meth:`next_business_day`).
+
+        The result is stored in ``self.signal_dates`` as a nested mapping
+        ``{symbol: {signal_name: dates_or_runs}}``.
         """
         result: dict[str, dict[str, list[datetime.date] | list[tuple[datetime.date, datetime.date]]]] = {}
         for sym, signals in self.interday_signals.items():
