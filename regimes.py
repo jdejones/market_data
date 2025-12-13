@@ -1,5 +1,52 @@
-from market_data import np, pd, plt, datetime, ThreadPoolExecutor, as_completed
+from market_data import np, pd, plt, datetime, ProcessPoolExecutor, as_completed
 from scipy.signal import find_peaks
+
+
+def _regime_breakout_worker(args):
+    """
+    ProcessPoolExecutor worker (must be top-level / picklable).
+    Returns (symbol, updated_df).
+    """
+    sym, df = args
+    r = Regimes({})
+    r.regime_breakout(df)
+    r.turtle_trader(df)
+    r.turtle_trader(df, slow=20, fast=10)
+    r.turtle_trader(df, slow=10, fast=5)
+    return sym, df
+
+
+def _regime_ma_worker(args):
+    """
+    ProcessPoolExecutor worker (must be top-level / picklable).
+    Returns (symbol, updated_df).
+    """
+    sym, df = args
+    r = Regimes({})
+    r.regime_sma(df)
+    r.regime_ema(df)
+    r.regime_ema(df, st=20, lt=50)
+    r.regime_ema(df, st=10, lt=20)
+    r.regime_macross(df)
+    r.regime_macross(df, ma=[10, 20, 50])
+    r.regime_triple_moving_average(df)
+    return sym, df
+
+
+def _floor_ceiling_worker(args):
+    """
+    ProcessPoolExecutor worker (must be top-level / picklable).
+    Returns (symbol, updated_df).
+    """
+    sym, df = args
+    df = df.copy()  # Performance warning workaround; keep worker side effects local.
+    r = Regimes({})
+    r.reset_variables()
+    r.lower_upper_OHLC(df)
+    r.regime_args(df)
+    r.historical_swings(df)
+    r.regime_floor_ceiling(df)
+    return sym, df
 
 
 
@@ -191,6 +238,7 @@ class Regimes:
         self.turtle_trader(df)
         self.turtle_trader(df, slow=20, fast=10)
         self.turtle_trader(df, slow=10, fast=5)
+        return df
 
     # helper to do one symbol for MA combo
     def _process_regime_ma_symbol(self, sym):
@@ -202,15 +250,17 @@ class Regimes:
         self.regime_macross(df)
         self.regime_macross(df, ma=[10,20,50])
         self.regime_triple_moving_average(df)
+        return df
 
     # helper to do one symbol for floor/ceiling combo
     def _process_floor_ceiling_symbol(self, sym):
-        df = self.symbols[sym].df = self.symbols[sym].df.copy() #Performance warning workaround.
+        df = self.symbols[sym].df.copy() # Performance warning workaround.
         self.reset_variables()
         self.lower_upper_OHLC(df)
         self.regime_args(df)
         self.historical_swings(df)
         self.regime_floor_ceiling(df)
+        return df
 
     def regime_breakout_combo(self, single_symbol=False, symbol=None, watchlist=None):
         # if watchlist == None:
@@ -234,16 +284,19 @@ class Regimes:
         if watchlist is None:
             watchlist = self.symbols.keys()
         if not single_symbol:
-            with ThreadPoolExecutor() as executor:
-                futures = {executor.submit(self._process_regime_breakout_symbol, sym): sym for sym in watchlist}
+            with ProcessPoolExecutor() as executor:
+                items = [(sym, self.symbols[sym].df) for sym in watchlist]
+                futures = {executor.submit(_regime_breakout_worker, item): item[0] for item in items}
                 for future in as_completed(futures):
                     sym = futures[future]
                     try:
-                        future.result()
+                        sym_out, df = future.result()
+                        self.symbols[sym_out].df = df
                     except Exception as e:
                         print(self.regime_breakout_combo.__name__, sym, e, sep=': ')
         else:
-            self._process_regime_breakout_symbol(symbol)        
+            df = self._process_regime_breakout_symbol(symbol)
+            self.symbols[symbol].df = df        
 
     def regime_ma_combo(self, single_symbol=False, symbol=None, watchlist=None):
         # if watchlist == None:
@@ -273,16 +326,19 @@ class Regimes:
         if watchlist is None:
             watchlist = self.symbols.keys()
         if not single_symbol:
-            with ThreadPoolExecutor() as executor:
-                futures = {executor.submit(self._process_regime_ma_symbol, sym): sym for sym in watchlist}
+            with ProcessPoolExecutor() as executor:
+                items = [(sym, self.symbols[sym].df) for sym in watchlist]
+                futures = {executor.submit(_regime_ma_worker, item): item[0] for item in items}
                 for future in as_completed(futures):
                     sym = futures[future]
                     try:
-                        future.result()
+                        sym_out, df = future.result()
+                        self.symbols[sym_out].df = df
                     except Exception as e:
                         print(self.regime_ma_combo.__name__, sym, e, sep=': ')
         else:
-            self._process_regime_ma_symbol(symbol)             
+            df = self._process_regime_ma_symbol(symbol)
+            self.symbols[symbol].df = df             
 
     def floor_ceiling_combo(self, single_symbol=False, symbol=None, watchlist=None):
         # if watchlist == None:
@@ -308,17 +364,20 @@ class Regimes:
         if watchlist is None:
             watchlist = self.symbols.keys()
         if not single_symbol:
-            with ThreadPoolExecutor() as executor:
-                futures = {executor.submit(self._process_floor_ceiling_symbol, sym): sym for sym in watchlist}
+            with ProcessPoolExecutor() as executor:
+                items = [(sym, self.symbols[sym].df) for sym in watchlist]
+                futures = {executor.submit(_floor_ceiling_worker, item): item[0] for item in items}
                 for future in as_completed(futures):
                     sym = futures[future]
                     try:
-                        future.result()
+                        sym_out, df = future.result()
+                        self.symbols[sym_out].df = df
                     except Exception as e:
                         errors.append(e)
                         # print(self.floor_ceiling_combo.__name__, sym, e, sep=': ')
         else:
-            self._process_floor_ceiling_symbol(symbol)
+            df = self._process_floor_ceiling_symbol(symbol)
+            self.symbols[symbol].df = df
         _10percent_symbols = len(self.symbols) * 0.1    
         if len(errors) > _10percent_symbols:
             print('Too many errors in floor_ceiling_combo:')
