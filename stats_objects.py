@@ -1706,29 +1706,46 @@ def signal_statistics(
     lookback: int = 2000
     ) -> Tuple[Dict[int, Dict], Dict]:
     """
-    Calculate statistics for signals across multiple dataframes.
-    
+    Calculate horizon-based return statistics for a given 0/1 signal across symbols.
+
+    For each symbol's daily OHLCV DataFrame:
+
+    - Restrict to the last ``lookback`` rows.
+    - Identify all dates where ``df[signal_column] == 1``.
+    - For each signal date:
+      * Compute same-day open→close return (``'1day'``).
+      * For each horizon in {5, 10, 20} calendar bars:
+        - Take the slice from the signal index to ``signal_idx + days``.
+        - For long bias:
+          + If the maximum High exceeds the signal-day Close, use that High as
+            the exit; otherwise use the minimum Low.
+        - For short bias, invert the logic using Low/High.
+        - Express the resultant exit vs signal-day Close as a percentage return.
+
+    All returns are aggregated per symbol and across all symbols.
+
     Parameters
     ----------
-    dataframes : list of pd.DataFrame
-        List of OHLCV dataframes with signal columns.
+    dataframes : dict[str, pd.DataFrame]
+        Mapping from symbol to OHLCV DataFrame including the signal column.
     signal_column : str
-        Name of the column containing the signal (boolean or 1/0).
+        Name of the 0/1 signal column.
     bias : {'long', 'short'}, default 'long'
-        Trading bias for return calculation.
+        Direction in which favourable moves are measured.
     lookback : int, default 2000
-        Number of periods to look back for analysis.
-        
+        Number of most recent rows to retain per symbol before analysis.
+
     Returns
     -------
     symbol_stats : dict
-        Dictionary with keys as symbol indices, values as dicts containing:
-        - 'num_signals': int
-        - 'returns': dict with keys '5days', '10days', '20days'
-        - 'mean_returns': dict with keys '5days', '10days', '20days'
-        - 'signal_dates': list of signal dates
+        Mapping ``{symbol: {...}}`` with keys:
+        - ``'num_signals'``
+        - ``'returns'``: {'1day', '5days', '10days', '20days'} → list[float]
+        - ``'mean_returns'``: same keys → float
+        - ``'signal_dates'``: list of dates.
     aggregate_stats : dict
-        Aggregate statistics across all symbols with same structure.
+        Same structure as a single ``symbol_stats`` entry but aggregated across
+        all symbols.
     """
     
     symbol_stats = {}
