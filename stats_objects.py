@@ -1496,9 +1496,12 @@ class IntradaySignalProcessing:
     
 #Interday EV objects
 def exit_stop_rel_entry(df, entry_signal, l_operand, r_operand, bias='long'):
-    """This function is to be used with the compute_expected_interday_values function
+    """
+    Describing this function was difficult to articulate so I kept my description and added the LLM generated description:
+    My description:
+    This function is intended to be used with the compute_expected_interday_values function
     and is only needed if the exit and stop signals are the same conditions, and the
-    only difference is the relationship between their occurrnce and the value of 
+    only difference is the relationship between their occurrence and the value of 
     the entry signal.
     For example, the function was originally used to find EV with episodic pivots.
     In the case of the episodic pivot the l_operand would be the Close price and 
@@ -1512,16 +1515,44 @@ def exit_stop_rel_entry(df, entry_signal, l_operand, r_operand, bias='long'):
     The bias is the long or short bias of the trade.
     The function returns the exit and stop signals for the given entry signal, l_operand, r_operand, and bias.
     
+    LLM description:
+    Derive exit and stop signals based on how price evolves after an entry condition.
 
-    Args:
-        df (_type_): _description_
-        entry_signal (_type_): _description_
-        l_operand (_type_): _description_
-        r_operand (_type_): _description_
-        bias (str, optional): _description_. Defaults to 'long'.
+    This helper is intended for interday EV analysis when the **same** structural
+    condition (e.g. ``Close < 20DMA``) can represent either an exit or a stop,
+    depending on whether price moved favourably before the condition was met.
 
-    Returns:
-        _type_: _description_
+    For each row where ``df[entry_signal]`` is True:
+
+    - Let ``start_close`` be the closing price on the entry day.
+    - Scan forward in time for the first day where the comparison
+      ``df[l_operand] < df[r_operand]`` (for long bias) or the opposite
+      inequality (for short bias) holds:
+      * If the comparison holds and ``df[l_operand]`` is **favourable**
+        vs ``start_close`` (above for long, below for short), mark an exit.
+      * If the comparison holds and ``df[l_operand]`` is **unfavourable``
+        vs ``start_close``, mark a stop.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Daily price/indicator DataFrame indexed by date and containing:
+        ``'Close'`` plus columns referenced by ``l_operand`` and ``r_operand``.
+    entry_signal : str
+        Column name that is True/1 on entry dates.
+    l_operand : str
+        Column name for the left-hand side of the comparison (e.g. 'Close').
+    r_operand : str
+        Column name for the right-hand side (e.g. '20DMA').
+    bias : {'long', 'short'}, default 'long'
+        Trading bias; determines which side of ``start_close`` is favourable.
+
+    Returns
+    -------
+    tuple[pd.Series, pd.Series]
+        Two 0/1 Series indexed like ``df``:
+        - ``exit_signals``: first favourable comparison date per entry.
+        - ``stop_signals``: first unfavourable comparison date per entry.
     """
     exit_signals = pd.Series(0, index=df.index)
     stop_signals = pd.Series(0, index=df.index)
@@ -1565,30 +1596,53 @@ def exit_stop_rel_signal_price(
     result_col: str
     ):
     """
+    Describing this function was difficult to articulate so I kept my description and added the LLM generated description:
+    My description:
     This is for use with the compute_interday_expected_values function.
-    It's is needed if the stop price is dependent on a price from the day the signal occurs.
+    It is needed if the stop price is dependent on a price from the day the signal occurs.
     For example, if the stop price is greater than the high of the the day the day the signal occurs
     the level would be 'High' and _operator would be '>'.
     Add a column `stop_signal` marking the first day AFTER each `entry_signal` where
     the comparison between the current row's `stop_day_col` and the ENTRY-DAY value of
     `signal_day_col` is satisfied. The scan stops at the next entry if one occurs.
+
+    LLM description:
+    Mark the first post-entry day where a stop condition relative to the entry-day price is met.
+
+    This function is designed for interday EV workflows where the stop threshold
+    is defined in terms of a price observed on the **entry day**. For each
+    occurrence of ``entry_signal == 1``:
+
+    - Capture the entry-day value ``entry_price = df.at[entry_date, signal_day_col]``.
+    - Scan strictly after ``entry_date`` (and before any subsequent entry) for
+      the first row where the comparison
+      ``op(df[stop_day_col], entry_price)`` is True, where ``op`` is defined by
+      ``_operator``.
+    - Mark that date with a 1 in ``result_col``.
+
     Parameters
     ----------
     df : pd.DataFrame
-        Daily OHLCV DataFrame containing `entry_signal`, `signal_day_col`, and `stop_day_col`.
+        Daily OHLCV DataFrame containing the specified columns.
     entry_signal : str
-        Column name that is True/1 on entry days.
+        Column name that is 1/True on entry dates.
     signal_day_col : str
-        Column whose value on the entry day is used as the reference price.
+        Column whose entry-day value defines the reference price (e.g. 'High').
     stop_day_col : str
-        Column compared on subsequent days against the entry-day `signal_day_col` value.
+        Column compared on subsequent days against the entry-day reference
+        (e.g. 'Low').
     _operator : str or callable
-        One of {'>', '<', '>=', '<=', '==', '!='} or a callable (x, y) -> bool.
+        One of {'>', '<', '>=', '<=', '==', '!='} or a binary callable
+        ``(current, reference) -> bool``.
+    result_col : str
+        Name of the new 0/1 column to write stop signals into.
 
     Returns
     -------
     pd.DataFrame
-        Copy of df with a new integer column `stop_signal` (1 on first stop day per entry, else 0).
+        The same DataFrame with a new integer column ``result_col`` set to 1
+        on the first stop date per entry, and 0 elsewhere.
+        
     """
     # Validate inputs and work on a copy
     required_cols = [entry_signal, signal_day_col, stop_day_col]
