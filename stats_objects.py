@@ -2058,27 +2058,49 @@ def compute_interday_expected_values(
     stop_signal: Union[str, List[str]],
     bias: str = 'long') -> Tuple[Dict[str, float], float]:
     """
-    Compute per-symbol and aggregate expected values on a daily timeframe.
+    Compute per-symbol and aggregate expected values (EV) on a daily timeframe.
+
+    For each symbol:
+
+    - Iterate all dates in ``interday_signals[sym]``.
+    - Whenever ``entry_signal`` is True:
+      * Record the entry-day closing price.
+      * Consider only future rows strictly after the entry date, up until the
+        next entry (if any).
+      * Find the earliest date where ``exit_signal`` is True.
+      * Find the earliest date where any of the ``stop_signal`` columns is True.
+      * If an exit occurs before or on the same date as the first stop, treat
+        it as a positive outcome; otherwise, treat the first stop as a negative
+        outcome.
+      * Compute the realized return based on ``bias`` and append it to either
+        ``pos_returns`` or ``neg_returns``.
+
+    EV per symbol is defined as:
+
+    .. math::
+        EV = P_{pos} R_{pos} + P_{neg} R_{neg}
+
+    using the empirical proportions and means of positive and negative returns.
 
     Parameters
     ----------
-    interday_signals : dict
-        Mapping symbol -> DataFrame of boolean signals (indexed by date).
-    price_data : dict
-        Mapping symbol -> DataFrame with at least a 'Close' column (same index).
+    interday_signals : dict[str, pd.DataFrame]
+        Mapping symbol → DataFrame of boolean signals indexed by date.
+    price_data : dict[str, pd.DataFrame]
+        Mapping symbol → daily OHLCV DataFrame (same index as signals).
     entry_signal : str
-        Column name in each signals-DataFrame marking entry events.
+        Column name marking entry events.
     exit_signal : str
-        Column name marking positive-exit events.
-    stop_signals : str or list of str
+        Column name marking positive exits.
+    stop_signal : str or list[str]
         Column name(s) marking stop-loss events.
     bias : {'long', 'short'}, default 'long'
         Direction of the trade.
 
     Returns
     -------
-    ev_by_symbol : dict
-        Mapping symbol -> EV (float) for that symbol.
+    ev_by_symbol : dict[str, float]
+        Expected value per symbol.
     ev_aggregate : float
         EV pooled across all symbols.
     """
