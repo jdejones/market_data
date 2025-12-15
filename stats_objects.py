@@ -2257,18 +2257,38 @@ def conditional_probability(df, condition_col, outcome_col, condition_value=True
 def intraday_rvol(symbols_list, date=None, lookback_days=20, 
                   timespan='second', multiplier=30, market_open_only=True):
     """
-    Calculate intraday relative volume for a list of symbols.
-    
-    Args:
-        symbols_list (list): List of stock symbols to analyze
-        date (str or datetime, optional): Date to measure intraday RVol for. 
-                                        Defaults to most recent trading day.
-        lookback_days (int): Number of days to use for average calculation. Default is 20.
-        multiplier (int): Time interval multiplier for intraday data import. Default is 30 (30 seconds).
-        market_open_only (bool): Whether to only use market open data. Default is True.
-    
-    Returns:
-        dict: Dictionary with symbol as key and intraday RVol data as value
+    Calculate intraday relative volume (RVol) profiles for a list of symbols.
+
+    For each symbol, this function:
+
+    - Imports intraday OHLCV data over a window ending at ``date`` (or the
+      most recent trading day if None).
+    - Computes cumulative volume by day and timestamp.
+    - For the target date, divides cumulative volume at each timestamp by the
+      average cumulative volume at the same clock time across the previous
+      ``lookback_days`` trading days.
+
+    Parameters
+    ----------
+    symbols_list : list[str]
+        List of stock symbols to analyze.
+    date : str or datetime, optional
+        Target date. If None, inferred from the most recent intraday data.
+    lookback_days : int, default 20
+        Number of prior trading days used to build the average volume profile.
+    timespan : str, default 'second'
+        Base timespan for intraday imports.
+    multiplier : int, default 30
+        Timespan multiplier for intraday imports.
+    market_open_only : bool, default True
+        Whether to restrict imports to regular market hours.
+
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        Mapping from symbol to a DataFrame (as returned by
+        :func:`calculate_symbol_rvol`) containing cumulative volume and
+        intraday RVol columns for the target date.
     """
     # from market_data.price_data_import import intraday_import
     # from concurrent.futures import ProcessPoolExecutor
@@ -2331,8 +2351,34 @@ def intraday_rvol(symbols_list, date=None, lookback_days=20,
 def compute_cycle_strength(price: pd.Series,
                            trend_penalty_weight: float = 1.0) -> float:
     """
-    Given a price series, returns a scalar score ∝ cycle consistency / (1 + trend strength).
-    Higher ⇒ more evenly-sized cycles and weaker trend.
+    Quantify how "cyclical" a price series is, penalizing strong trends.
+
+    The score is higher when:
+
+    - Peaks and troughs (after detrending) have relatively consistent sizes
+      (low coefficient of variation), and
+    - The underlying linear trend slope is small relative to the average price.
+
+    The algorithm:
+
+    - Fits and removes a linear trend.
+    - Finds peaks and troughs in the detrended series.
+    - Computes the coefficients of variation of peak and trough heights.
+    - Forms a cycle-consistency score from their inverse.
+    - Penalizes this score by an increasing function of the residual trend.
+
+    Parameters
+    ----------
+    price : pd.Series
+        Price series indexed by time.
+    trend_penalty_weight : float, default 1.0
+        Multiplier on the trend-strength penalty term.
+
+    Returns
+    -------
+    float
+        Scalar cycle-strength score (rounded to two decimals) or NaN if the
+        series is too short or lacks sufficient peaks/troughs.
     """
     # 1) Clean up
     price = price.dropna()
@@ -2373,8 +2419,23 @@ def rank_symbols_by_cycle_strength(data_dict: dict[str, pd.Series],
                                    trend_penalty_weight: float = 1.0
                                    ) -> pd.DataFrame:
     """
-    Given a dict of {symbol: price_series}, returns a DataFrame
-    sorted by descending cycle strength score.
+    Rank symbols by the cycle strength of their price series.
+
+    Parameters
+    ----------
+    data_dict : dict[str, pd.Series]
+        Mapping from symbol to price series.
+    trend_penalty_weight : float, default 1.0
+        Passed through to :func:`compute_cycle_strength`.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns:
+        - ``'symbol'``
+        - ``'cycle_strength'``
+
+        Sorted in descending order by ``cycle_strength``.
     """
     scores = {}
     for sym, series in data_dict.items():
@@ -2395,6 +2456,31 @@ def rank_symbols_by_cycle_strength(data_dict: dict[str, pd.Series],
 
 
 def drawdown_current(df: pd.DataFrame, start: str|int):
+    """
+    Compute the current absolute drawdown since a given starting point.
+
+    Starting from the row indicated by ``start``, this function:
+
+    - Finds the maximum High price observed in ``df['High']``.
+    - Compares it to the most recent closing price.
+    - Returns the absolute price difference (peak minus last Close).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Daily OHLCV DataFrame with at least ``'High'`` and ``'Close'`` columns.
+    start : str or int
+        Either:
+        - A label key (e.g. date string) usable with ``df.loc[start:]``, or
+        - A positional index usable with ``df.loc[start:]`` when ``start`` is
+          an integer.
+
+    Returns
+    -------
+    float
+        Absolute drawdown in price units from the maximum High since ``start``
+        to the latest Close.
+    """
     if isinstance(start, str):
         high = df['High'].loc[start:].max()
         low = df['Close'].iloc[-1]
@@ -2405,6 +2491,35 @@ def drawdown_current(df: pd.DataFrame, start: str|int):
         return high - low
     
 def drawdown_max(df: pd.DataFrame, start: str|int|datetime.date):
+    """
+    Compute the maximum historical drawdown and its start/end dates.
+
+    For all dates on or after ``start``, this function:
+
+    - Scans all pairs of days ``(i, j)`` with ``j > i``.
+    - For each pair where ``Low_j < High_i``, computes the drop
+      ``High_i - Low_j``.
+    - Tracks the largest such drop and records the corresponding
+      start and end dates.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Daily OHLCV DataFrame with columns ``'High'`` and ``'Low'`` and a
+        date-like index.
+    start : str or int or datetime.date
+        Starting point for the analysis. May be:
+        - A label key (e.g. date string) for ``df.loc[start:]``,
+        - A :class:`datetime.date`, or
+        - A positional index integer.
+
+    Returns
+    -------
+    dict
+        A dict mapping ``"start_date:end_date"`` (concatenated string key) to
+        the maximum drawdown magnitude over that period. If no valid pairs are
+        found, the dict will be empty.
+    """
     if isinstance(start, str):
         df = df[['High', 'Low']].loc[start:]
         df['Date'] = df.index
