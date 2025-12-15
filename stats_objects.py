@@ -2195,20 +2195,33 @@ def compute_interday_expected_values(
 
 def conditional_probability(df, condition_col, outcome_col, condition_value=True, outcome_value=True, periods_ahead=1):
     """
-    Calculate conditional probability of an outcome occurring in the next period(s) given a condition.
-    
-    P(outcome_t+n | condition_t) = Count(condition_t=True AND outcome_t+n=True) / Count(condition_t=True)
-    
-    Args:
-        df (pd.DataFrame): DataFrame containing the data
-        condition_col (str): Column name for the condition
-        outcome_col (str): Column name for the outcome
-        condition_value: Value that represents the condition being met. Default is True.
-        outcome_value: Value that represents the outcome occurring. Default is True.
-        periods_ahead (int): Number of periods ahead to check for outcome. Default is 1.
-    
-    Returns:
-        float: Conditional probability (0.0 to 1.0), or NaN if no condition occurrences
+    Compute P(outcome_{t+n} = outcome_value | condition_t = condition_value).
+
+    The function looks at each row ``t`` where ``df[condition_col] ==
+    condition_value`` and the shifted outcome ``df[outcome_col].shift(-n)``
+    is non-NaN, and estimates the conditional probability that the shifted
+    outcome equals ``outcome_value``.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data containing the condition and outcome columns.
+    condition_col : str
+        Column representing the condition at time t.
+    outcome_col : str
+        Column representing the outcome at time t.
+    condition_value :
+        Value treated as "condition holds". Default is True.
+    outcome_value :
+        Value treated as "outcome occurs". Default is True.
+    periods_ahead : int, default 1
+        How many rows ahead to look for the outcome.
+
+    Returns
+    -------
+    float
+        Estimated conditional probability in [0, 1], or NaN if the condition
+        never occurs with a valid future outcome.
     """
     
     # Validate inputs
