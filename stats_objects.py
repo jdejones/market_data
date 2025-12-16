@@ -256,6 +256,7 @@ def process_symbol_conditions(items):
             }
             conditions = base_conditions
         else:
+            # Map textual comparison operators to the corresponding numpy/pandas-aware functions.
             _ops = {
                 '>':  operator.gt,
                 '<':  operator.lt,
@@ -268,7 +269,7 @@ def process_symbol_conditions(items):
             # conditions = {k: compare(df[v[0]], df[v[1]], v[2]) for k, v in conditions.items()}
             new_conditions: dict[str, pd.Series] = {}
             for name, desc in conditions.items():
-                # if desc[0] is itself a list/tuple, interpret as multiple comparisons
+                # Support multi-clause conditions by AND-ing multiple (col1, col2, op) comparisons.
                 if isinstance(desc[0], (list, tuple)):
                     # e.g. desc = [['ema9','VWAP','>'], ['ema5','ema9','>']]
                     combined = None
@@ -282,7 +283,7 @@ def process_symbol_conditions(items):
                     new_conditions[name] = _ops[op](df[col1], df[col2])
 
             _conditions = new_conditions
-        # detect only the points where each condition turns true (preceded by false)
+        # Write boolean conditions directly into the intraday DataFrame as 0/1 signal columns.
         for name, cond in _conditions.items():
         #     prev = cond.shift(1).fillna(False) 
         #     event = cond & ~prev
