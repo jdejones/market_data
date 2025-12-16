@@ -5,7 +5,7 @@ from market_data.add_technicals import intraday_pipeline, add_avwap_by_offset, r
 from market_data import ProcessPoolExecutor, as_completed, tqdm, ThreadPoolExecutor, levene, kruskal, median_test, sp, Union, Dict, List, partial, find_peaks, linregress
 import numpy as np
 
-        
+
 def _add_intraday_with_avwap0(item):
     """
     Apply the standard intraday technicals pipeline plus a 0-offset AVWAP column.
@@ -30,7 +30,7 @@ def _add_intraday_with_avwap0(item):
         from :func:`add_avwap_by_offset`.
     """
     symbol, df = item
-    # inject the extra step at the end
+    # Clone the global intraday pipeline and append a 0-offset AVWAP step.
     steps = intraday_pipeline + [
         Step(add_avwap_by_offset,
                 kwargs={'offset': 0},
@@ -77,7 +77,7 @@ def process_symbol_intraday_returns(items):
     sym, intraday_signals, daily_df = items
     import os
     print(f"[PID {os.getpid()}] starting {sym!r}")
-    # re‐index daily data by date for easy lookup
+    # Reindex daily data by plain date so intraday date slices can look up forward days.
     daily_by_date = daily_df.copy()
     daily_by_date.index = daily_by_date.index.date
     # discover all signal names for this symbol
@@ -99,7 +99,7 @@ def process_symbol_intraday_returns(items):
             metrics[cond][f'ret_close_{k}d'] = []
     # loop through each intraday frame and collect returns
     for df in intraday_signals:
-        # group by calendar day
+        # Iterate calendar days inside each intraday DataFrame.
         for day, intraday in df.groupby(df.index.date):
             for cond in conds:
                 times = intraday.index[intraday[cond] == 1]
