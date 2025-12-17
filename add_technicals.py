@@ -19,8 +19,7 @@ def SMA(df, base, target, period):
     Returns :
         df : Pandas DataFrame with new column added with name 'target'
     """
-    df[target] = df[base].rolling(window=period).mean()
-    df[target].fillna(0, inplace=True)
+    df[target] = df[base].rolling(window=period).mean().fillna(0)
     return df
 
 
@@ -62,13 +61,15 @@ def ATR(df, period, ohlc=['Open', 'High', 'Low', 'Close']):
     atr = 'ATR_' + str(period)
     # Compute true range only if it is not computed and stored earlier in the df
     if not 'TR' in df.columns:
-        df['h-l'] = df[ohlc[1]] - df[ohlc[2]]
-        df['h-yc'] = abs(df[ohlc[1]] - df[ohlc[3]].shift())
-        df['l-yc'] = abs(df[ohlc[2]] - df[ohlc[3]].shift())
-         
-        df['TR'] = df[['h-l', 'h-yc', 'l-yc']].max(axis=1)
-         
-        df.drop(['h-l', 'h-yc', 'l-yc'], inplace=True, axis=1)
+        tr = pd.concat(
+            [
+                (df[ohlc[1]] - df[ohlc[2]]),
+                (df[ohlc[1]] - df[ohlc[3]].shift()).abs(),
+                (df[ohlc[2]] - df[ohlc[3]].shift()).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        df["TR"] = tr
     # Compute EMA of true range using ATR formula after ignoring first row
     EMA(df, 'TR', atr, period, alpha=True)
     
@@ -92,12 +93,11 @@ def EMA(df, base, target, period, alpha=False):
     
     if (alpha == True):
         # (1 - alpha) * previous_val + alpha * current_val where alpha = 1 / period
-        df[target] = con.ewm(alpha=1 / period, adjust=False).mean()
+        df[target] = con.ewm(alpha=1 / period, adjust=False).mean().fillna(0)
     else:
         # ((current_val - previous_val) * coeff) + previous_val where coeff = 2 / (period + 1)
-        df[target] = con.ewm(span=period, adjust=False).mean()
+        df[target] = con.ewm(span=period, adjust=False).mean().fillna(0)
     
-    df[target].fillna(0, inplace=True)
     return df
 
 def RSI(df, base="Close", period=21):
@@ -123,8 +123,7 @@ def RSI(df, base="Close", period=21):
     rUp = up.ewm(com=period - 1,  adjust=False).mean()
     rDown = down.ewm(com=period - 1, adjust=False).mean().abs()
 
-    df['RSI_' + str(period)] = 100 - (100 / (1 + (rUp / rDown)))
-    df['RSI_' + str(period)].fillna(0, inplace=True)
+    df['RSI_' + str(period)] = 100 - (100 / (1 + (rUp / rDown))).fillna(0)
 
     return df
 
@@ -168,10 +167,8 @@ def MACD(df, base, short_period, long_period, ma_type='simple'):
         #df['Short_SMA'] = SMA(df, base, target=str(short_period) + 'SMA', period = short_period)
         #df['Long_SMA'] = SMA(df, base, target = str(long_period) + 'SMA', period = long_period)
         #df['MACD'] = float(df[base].rolling(window=short_period).mean().fillna(0, inplace=True)) - float(df[base].rolling(window=long_period).mean().fillna(0, inplace=True))
-        df[str(short_period) + 'SMA'] = df[base].rolling(window=short_period).mean()
-        df[str(short_period) + 'SMA'].fillna(0, inplace=True)
-        df[str(long_period) + 'SMA'] = df[base].rolling(window=long_period).mean()
-        df[str(long_period) + 'SMA'].fillna(0, inplace=True)
+        df[str(short_period) + 'SMA'] = df[base].rolling(window=short_period).mean().fillna(0)
+        df[str(long_period) + 'SMA'] = df[base].rolling(window=long_period).mean().fillna(0)
         df[f'sMACD{short_period}{long_period}'] = df[str(short_period) + 'SMA'].sub(df[str(long_period) + 'SMA'])
         
         return df
