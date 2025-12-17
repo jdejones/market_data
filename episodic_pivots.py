@@ -55,10 +55,10 @@ class Episodic_Pivots:
         
         #Days when the Closing price is greater than the 20DMA
         df['c_over_under_20DMA'] = np.nan
-        df['c_over_under_20DMA'].loc[(df['Close'].shift(1) > df['20DMA'].shift(1)) & (df['Close'] < df['20DMA'])] = 1
+        df.loc[(df['Close'].shift(1) > df['20DMA'].shift(1)) & (df['Close'] < df['20DMA']), 'c_over_under_20DMA'] = 1
 
         #These for loops may not account for episodic pivots that occur while a previous episodic pivot is still true.
-        dates = df['c_over_under_20DMA'].loc[pd.notnull(df['c_over_under_20DMA'])].index
+        dates = df.loc[pd.notnull(df['c_over_under_20DMA']), 'c_over_under_20DMA'].index
         df['ep'] = np.nan
         # for date in ep_initialized:
         #     try:
