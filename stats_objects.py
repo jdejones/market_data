@@ -331,17 +331,17 @@ def calculate_symbol_rvol(symbol_data_tuple, target_date=None, lookback_days=20)
     try:
         # Ensure datetime index
         if not isinstance(df.index, pd.DatetimeIndex):
+            df = df.copy()
             df.index = pd.to_datetime(df.index)
         
-        # Split DatetimeIndex into separate 'date' and 'time' columns for grouping.
-        df['date'] = df.index.date
-        
-        # Calculate cumulative volume by day and time
-        df['time'] = df.index.time
         df = df.sort_index()
+        idx = df.index
+        date = idx.date
+        time = idx.time
+        
         
         # Group by date and calculate cumulative sum within each day
-        df['cumulative_volume'] = df.groupby('date')['Volume'].cumsum()
+        cumvol = df["Volume"].groupby(date).cumsum()
         
         # Get unique dates and ensure we have enough data
         unique_dates = sorted(df['date'].unique())
@@ -350,7 +350,11 @@ def calculate_symbol_rvol(symbol_data_tuple, target_date=None, lookback_days=20)
             return symbol, None
         
         # Get the target date data
-        target_date_data = df[df['date'] == target_date].copy()
+        target_mask = (date == target_date)
+        target_date_data = pd.DataFrame(
+            {"time": time[target_mask], "cumulative_volume": cumvol[target_mask]},
+            index=idx[target_mask],
+        )
         
         if target_date_data.empty:
             return symbol, None
@@ -2266,7 +2270,7 @@ def intraday_rvol(symbols_list, date=None, lookback_days=20,
     For each symbol, this function:
 
     - Imports intraday OHLCV data over a window ending at ``date`` (or the
-      most recent trading day if None).
+      most recent trading day soif None).
     - Computes cumulative volume by day and timestamp.
     - For the target date, divides cumulative volume at each timestamp by the
       average cumulative volume at the same clock time across the previous
