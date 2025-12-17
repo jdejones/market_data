@@ -86,9 +86,9 @@ def load_data( file_path=None):
     sa_fundamental_data['sector'] = sa_fundamental_data['Symbol'].map({y:list(z.values())[-1] for y,z in sectors_industries.items()})
     sa_fundamental_data['industry'] = sa_fundamental_data['Symbol'].map({y:list(z.values())[-0] for y,z in sectors_industries.items()})
     sa_fundamental_data['hq'] = sa_fundamental_data['Symbol'].map({y:z for y,z in company_headquarters.items()})
-    sa_fundamental_data.replace(to_replace='(^-|NM)',value=0,regex=True,inplace=True)
+    sa_fundamental_data.replace(to_replace='(^-|NM)',value=0,regex=True)
     sa_fundamental_data.replace(to_replace=['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D+', 'D', 'D-', 'F'],
-                                                value=[13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1], inplace=True)
+                                                value=[13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
     sa_fundamental_data = sa_fundamental_data.loc[~sa_fundamental_data.Symbol.apply(lambda x: isinstance(x, int))]
     basic_materials_fa = sa_fundamental_data.loc[sa_fundamental_data.sector == 'Basic Materials']
     communication_services_fa = sa_fundamental_data.loc[sa_fundamental_data.sector == 'Communication Services']
