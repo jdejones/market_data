@@ -333,7 +333,7 @@ def calculate_symbol_rvol(symbol_data_tuple, target_date=None, lookback_days=20)
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
         
-        # Add date column for grouping
+        # Split DatetimeIndex into separate 'date' and 'time' columns for grouping.
         df['date'] = df.index.date
         
         # Calculate cumulative volume by day and time
@@ -500,6 +500,7 @@ class IntradaySignalProcessing:
         if len(dates) < 2:
             return True
 
+        # Enforce strictly increasing dates and exact 1-business-day spacing.
         for prev, curr in zip(dates, dates[1:]):
             # must be strictly increasing
             if curr <= prev:
@@ -689,12 +690,13 @@ class IntradaySignalProcessing:
         
         #*Add technicals.
         self.intraday_frames = {sym: [] for sym in self._intraday_frames}
+        # Flatten symbol → [frames] into a list of (symbol, frame) tasks.
         items = [(sym, frame) for sym, frames in self._intraday_frames.items() for frame in frames]
         # Tune the number of workers and chunk size
         num_workers = 8#1  # adjust as needed
         chunksize = 7#1    # adjust chunk size as needed
         #! Temporary fix for ProcessPoolExecutor not being available. Change back to ProcessPoolExecutor when available.
-        # with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Parallelize technical indicator computation across symbols and frames.
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             for symbol, df in tqdm(
                 executor.map(worker, items, chunksize=chunksize),
@@ -919,7 +921,7 @@ class IntradaySignalProcessing:
         #     ):
         #         results[sym] = result
 
-        # Create tasks
+        # Package each symbol's intraday frames with the shared conditions for parallel evaluation.
         tasks = [(sym, frames, conditions) for sym, frames in self.intraday_frames.items()]
         
         results = {}        
@@ -1018,13 +1020,14 @@ class IntradaySignalProcessing:
         #     ):
         #         results[sym] = df_r
 
-    
+        # Prepare parallel jobs: one per symbol, each with its intraday signals and daily data.
         syms = list(self.intraday_signals)
         signals = [self.intraday_signals[s] for s in syms]
         daily_dfs = [self.symbols[s].df.copy() for s in syms]
         max_workers = min(8, len(syms))
 
         print(f"→ Dispatching {len(syms)} symbols to the pool")
+        # Run symbol-level return computations in parallel using a process pool.
         with ProcessPoolExecutor(max_workers=max_workers) as exe:
             futures = {
                 exe.submit(process_symbol_intraday_returns, (sym, sig, df)): sym
@@ -2105,7 +2108,7 @@ def compute_interday_expected_values(
     ev_aggregate : float
         EV pooled across all symbols.
     """
-    # Ensure stop_signals is a list
+    # Ensure stop_signals is a list to support multiple stop columns.
     if isinstance(stop_signal, str):
         stop_signals = [stop_signal]
 
@@ -2583,3 +2586,4 @@ def drawdown_max(df: pd.DataFrame, start: str|int|datetime.date):
         return max_diff_dict
     else:
         raise ValueError(f"Invalid type for start: {type(start)}")
+
