@@ -86,17 +86,23 @@ def vwap_handoff(df: pd.DataFrame, bias: str = 'long') -> pd.DataFrame:
         recent = [d for d in anchors[1:] if d >= threshold]
         if len(recent) > 5:
             # cleanup: drop all but the initial VWAP
+            cols_to_drop = []
             for d in anchors[1:]:
                 col = f"VWAP {d}"
                 if col in df.columns: 
-                    df.drop(columns=[col], inplace=True)
+                    cols_to_drop.append(col)
+            if cols_to_drop:
+                df.drop(columns=cols_to_drop, inplace=True)
             break
     # Rename VWAP columns to use only the date portion
+    rename_map = {}
     for anchor in anchors:
         old_col = f"VWAP {anchor}"
         if old_col in df.columns:
-            new_col = f"VWAP {anchor.date()}"
-            df.rename(columns={old_col: new_col}, inplace=True)
+            rename_map[old_col] = f"VWAP {anchor.date()}"            
+    if rename_map:
+        df.rename(columns=rename_map, inplace=True)
+        
     return df
 
 #Make filters using the results of vwap_handoff
