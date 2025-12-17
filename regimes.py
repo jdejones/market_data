@@ -579,8 +579,8 @@ class Regimes:
             df[str(_l)[:2]+str(n)] = reduction.loc[reduction['hilo']>0 ,_l]
             
             # Reduce reduction
-            reduction = reduction.dropna(subset= ['hilo'])
-            reduction.ffill(inplace=True)
+            reduction = reduction.dropna(subset=['hilo'])
+            reduction.ffill()
             highs = reduction[str(_h)[:2]+str(n)].values
             lows = -reduction[str(_l)[:2]+str(n)].values
             
