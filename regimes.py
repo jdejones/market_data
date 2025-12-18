@@ -580,7 +580,7 @@ class Regimes:
             
             # Reduce reduction
             reduction = reduction.dropna(subset=['hilo'])
-            reduction.ffill()
+            reduction = reduction.ffill()
             highs = reduction[str(_h)[:2]+str(n)].values
             lows = -reduction[str(_l)[:2]+str(n)].values
             
