@@ -1,9 +1,18 @@
 if __name__ == "__main__":
+    # Windows multiprocessing safety:
+    # When running from some interactive environments, __main__.__spec__ may not exist.
+    # ProcessPoolExecutor (spawn) expects it to exist (it can be None).
+    import __main__ as _main
+    if not hasattr(_main, "__spec__"):
+        _main.__spec__ = None
+    import multiprocessing as _mp
+    _mp.freeze_support()
+
     import warnings
     # Suppress all warnings
     warnings.filterwarnings('ignore')
     # I added the try/except block as a quick fix to avoid conflicts with the
-    # interactive interpreter and the github repo. There should be a
+    # interactive interpreter and the github repo. There may be a
     # cleaner way to do this.
     try:
         from market_data.Symbol_Data import SymbolData
@@ -30,7 +39,22 @@ if __name__ == "__main__":
     from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip
     from market_data.api_keys import database_password, seeking_alpha_api_key
     from market_data.interest_list import InterestList as il
-    
+    import time
+
+    # Timer utilities to measure time between tqdm progress bars
+    # section_timer_start = time.perf_counter()
+    # print_section_time("Starting daily after close study")    
+
+    def print_section_time(label: str) -> None:
+        """
+        Print elapsed time since the last section timer reset, then reset it.
+        Used to track time spent in code segments between tqdm progress bars.
+        """
+        global section_timer_start
+        now = time.perf_counter()
+        print(f"{label} took {now - section_timer_start:.2f} seconds")
+        section_timer_start = now
+
     #*Import price data.
     #hadv == high average dollar volume
     hadv = make_watchlist(hadv)
@@ -38,25 +62,24 @@ if __name__ == "__main__":
     symbols = {k: SymbolData(k, v) for k,v in data.items()}
     
     #########################################################################
+    #Market as a reminder to monitor daily api usage.
     #Connect to database
-    #*Temporarily commented out while fixing MySQL bugs
     url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
     engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
 
-    # query a database -> DataFrame
+    # query database -> DataFrame
     daily_quant_rating_df = pd.read_sql("SELECT * FROM daily_quant_rating", con=engine)
     # daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
     if len(daily_quant_rating_df.columns) > 1000:
         warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
         
-    #*Temporarily commented out while fixing MySQL bugs
     daily_quant_rating_df.set_index('index', inplace=True)
     #Concatenate new column
     daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
 
-    #Request and add new rows
+    #Request and add new values
     #list of symbols
     syms = list(symbols.keys())
 
@@ -116,7 +139,7 @@ if __name__ == "__main__":
             if len(quant_ratings_errors) > 3000:
                 break
             
-            #Concatenate rating to dataframe
+            #Insert rating to dataframe
             for sym in sym_ratings:
                 daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
                     
@@ -127,9 +150,8 @@ if __name__ == "__main__":
             j += 50
             time.sleep(2)
 
-    #*Temporarily commented out while fixing MySQL bugs
     daily_quant_rating_df.reset_index(inplace=True)
-    # # write back, replace existing table
+    # write back, replace existing table
     daily_quant_rating_df.to_sql("daily_quant_rating", 
             con=engine, 
             if_exists="replace", 
@@ -157,11 +179,12 @@ if __name__ == "__main__":
             # re‐attach the processed DataFrame back to SymbolData
             symbols[symbol].df = df
     
+
     #TODO Add concurrency for regimes               
     r = rg.Regimes(symbols)
     r.run_all_combos()
     wf.run_all(symbols)
-
+    
     #Sector and industry indices
     #TODO Add concurrency for sector and industry indices instantiation.
     sec = {k: SymbolData(k,v) for k,v in sf.create_index(symbols).items() if len(v) > 0}#TODO: Add error handling for symbols that do not have data in sa.key_data.
@@ -174,12 +197,13 @@ if __name__ == "__main__":
             run_pipeline(ind[symbol].df)
         except Exception as e:
             print(f"Error adding technicals for {symbol}: {e}")
+    
 
     #Market Cap weighted ETFs
     sp500 = {k: SymbolData(k,v) for k,v in api_import(make_watchlist(sp500), transfer={k:v.df for k,v in symbols.items()}).items()}
     mdy = {k: SymbolData(k,v) for k,v in api_import(make_watchlist(mdy), transfer={k:v.df for k,v in symbols.items()}).items()}
     iwm = {k: SymbolData(k,v) for k,v in api_import(make_watchlist(iwm), transfer={k:v.df for k,v in symbols.items()}).items()}
-
+    
     for sym in tqdm(sp500, desc='Adding technicals to SPY stocks'):
         if len(sp500[sym].df.columns) <= 10:
             run_pipeline(sp500[sym].df)
@@ -193,10 +217,10 @@ if __name__ == "__main__":
     #All ETFs
     etfs = {k: SymbolData(k,v) for k,v in api_import(make_watchlist(etfs)).items()}
     for sym in tqdm(etfs, desc='Adding technicals to ETFs'):
-        run_pipeline(etfs[sym].df)
+        run_pipeline(etfs[sym].df)      
     r_etfs = rg.Regimes(etfs)
-    r_etfs.run_all_combos()
-    
+    r_etfs.run_all_combos() 
+
     #Stock Stats
     stock_stats = {}
     symbols_list = list(symbols.keys())
@@ -208,7 +232,7 @@ if __name__ == "__main__":
             desc="Calculating Stock Stats"
         ):
             stock_stats[sym] = stats
-    
+
     # Calculate expected value (EV) for each condition across all symbols
     ev = {}
     
@@ -226,7 +250,6 @@ if __name__ == "__main__":
                 if days in stock_stats[sym]['returns'][condition] and stock_stats[sym]['returns'][condition][days]:
                     all_returns[condition][days].extend(stock_stats[sym]['returns'][condition][days])
     
-    # Calculate expected value for each condition
     for condition in tqdm(all_returns, desc="Calculating Expected Values by Condition"):
         ev[condition] = {}
         
@@ -265,6 +288,7 @@ if __name__ == "__main__":
             
             ev[condition][days] = round(expected_value, 4)
         
+
     sector_close_vwap_count = {sector: [0, 0] for sector in sec}
     industry_close_vwap_count = {industry: [0, 0] for industry in ind}
     for sym in tqdm(symbols, desc=f'Close Over VWAP Ratio'):
@@ -295,18 +319,18 @@ if __name__ == "__main__":
             pass
     sector_close_vwap_ratio = {sector: (sector_close_vwap_count[sector][0]/sector_close_vwap_count[sector][1]) * 100 for sector in sec}
     industry_close_vwap_ratio = {industry: (industry_close_vwap_count[industry][0]/industry_close_vwap_count[industry][1]) * 100 for industry in ind}
-
+    
     #Episodic Pivots
     ep = Episodic_Pivots(symbols)
     ep.load_all()
     ep_curdur = {}
-    #TODO Add concurrency for to compute the following two loops in parallel?
     for sym in tqdm(ep.current_duration_dict, desc=f'Episodic Pivots Current Duration'):
         try:
             ep_curdur[sym] = [ep.current_duration_dict[sym], round(fu.sa_fundamental_data['quantRating'].loc[fu.sa_fundamental_data.Symbol == sym].values[0].item(), 3)]
         except Exception as e:
             #TODO print(sym, ': ', e) update error handling
             continue
+
     ep_rr = {}
     for sym in tqdm([item[0] for item in sorted(ep.reward_risk_dict.items(), key=lambda x: x[1])], desc=f'Episodic Pivots Reward Risk'):
         try:
@@ -314,8 +338,7 @@ if __name__ == "__main__":
         except Exception as e:
             #TODO print(sym, e, sep=': ') update error handling
             continue
-
-
+    
     rel_stren_obj = sf.relative_strength(symbols)
     rel_stren = rel_stren_obj()
     prev_perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-04-11')
@@ -383,6 +406,7 @@ if __name__ == "__main__":
             f.write(sym + '\n')
     shortable = [sym.replace('\n', '') for sym in open(r"E:\Market Research\Studies\Sector Studies\Watchlists\shortable.txt").readlines()]
     hist_short_int = pd.read_csv(r"E:\Market Research\Dataset\Fundamental Data\historic_short_interest.txt")
+    hist_short_int.set_index('Ticker', inplace=True)
 
     tsc = Technical_Score_Calculator()
     tsc.technical_score_calculator(symbols)
@@ -463,7 +487,7 @@ if __name__ == "__main__":
     with open(fr"{wl.systematic_watchlists_root}\interest_list_long.txt", "w") as f:
         for sym in interest_list_long.interest_list:
             f.write(sym + '\n')
-
+    
     #Pickling most used objects, so I don't have to rerun the script.
     def save_snapshots(obj, name):
         base = r"E:\Market Research\Dataset\daily_after_close_study"
@@ -512,133 +536,7 @@ if __name__ == "__main__":
         thread.start()
 
     for thread in tqdm(threads, desc="Storing Variables"):
-        thread.join()
-
-    # #Pickling most used objects, so I don't have to rerun the script.
-    # def save_snapshots(symbols, sec, ind, sp500, mdy, iwm, etfs, stock_stats):
-    #     base = r"E:\Market Research\Dataset\daily_after_close_study"
-    #     with open(fr"{base}\symbols.pkl", "wb") as f:
-    #         pickle.dump(symbols, f, protocol=pickle.HIGHEST_PROTOCOL)
-    #     with open(fr"{base}\sec.pkl", "wb") as f:
-    #         pickle.dump(sec, f, protocol=pickle.HIGHEST_PROTOCOL)
-    #     with open(fr"{base}\ind.pkl", "wb") as f:
-    #         pickle.dump(ind, f, protocol=pickle.HIGHEST_PROTOCOL)
-    #     with open(fr"{base}\sp500.pkl", "wb") as f:
-    #         pickle.dump(sp500, f, protocol=pickle.HIGHEST_PROTOCOL)
-    #     with open(fr"{base}\mdy.pkl", "wb") as f:
-    #         pickle.dump(mdy, f, protocol=pickle.HIGHEST_PROTOCOL)
-    #     with open(fr"{base}\iwm.pkl", "wb") as f:
-    #         pickle.dump(iwm, f, protocol=pickle.HIGHEST_PROTOCOL)
-    #     with open(fr"{base}\etfs.pkl", "wb") as f:
-    #         pickle.dump(etfs, f, protocol=pickle.HIGHEST_PROTOCOL)
-    #     with open(fr"{base}\stock_stats.pkl", "wb") as f:
-    #         pickle.dump(stock_stats, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # t = threading.Thread(
-    #     target=save_snapshots,
-    #     args=(symbols, sec, ind, sp500, mdy, iwm, etfs, stock_stats),
-    #     daemon=True,
-    # )
-    # t.start()
-
-    #TODO Remove the following code once the previous threading is working.
-    #Pickling most used objects, so I don't have to rerun the script.
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\symbols.pkl", "wb") as f:
-    #     pickle.dump(symbols, f)
-
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\sec.pkl", "wb") as f:
-    #     pickle.dump(sec, f)
-
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\ind.pkl", "wb") as f:
-    #     pickle.dump(ind, f)
-
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\sp500.pkl", "wb") as f:
-    #     pickle.dump(sp500, f)
-
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\mdy.pkl", "wb") as f:
-    #     pickle.dump(mdy, f)
-
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\iwm.pkl", "wb") as f:
-    #     pickle.dump(iwm, f)
-
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\etfs.pkl", "wb") as f:
-    #     pickle.dump(etfs, f)
-
-    # with open(r"E:\Market Research\Dataset\daily_after_close_study\stock_stats.pkl", "wb") as f:
-    #     pickle.dump(stock_stats, f)
-
-
-    
-    #Redis storage
-    #Symbols
-    # r = redis.Redis(host="localhost", port=6379, decode_responses=True, 
-    #                 socket_keepalive=True, retry_on_timeout=True) 
-    # i=0
-    # j=1000
-    # while True:
-    #     symbols_redis = {}
-    #     for sym in list(symbols.keys())[i:j]:
-    #         symbols_redis[sym] = symbols[sym].to_redis()
-    #     from itertools import islice
-    #     def batched(iterable, n):
-    #         it = iter(iterable)
-    #         while True:
-    #             batch = list(islice(it, n))
-    #             if not batch:
-    #                 break
-    #             yield batch
-    #     BATCH_SIZE = 50  # or even 20 if needed
-    #     for batch in batched(list(symbols_redis.items()), BATCH_SIZE):
-    #         pipe = r.pipeline(transaction=False)
-    #         for sym, data in batch:
-    #             pipe.hset(f"symbols", sym, json.dumps(data, default=str))
-    #         pipe.execute()
-    #     i += 1000
-    #     if i > len(list(symbols.keys())):
-    #         break
-    #     if ((j+1000) > len(list(symbols.keys()))):
-    #         j = None
-    #     if j is not None:
-    #         j += 1000
-    # #Sec
-    # sec_redis = {}
-    # for s in sec:
-    #     sec_redis[s] = sec[s].to_redis()
-    #     r.hset("sec", mapping={s:json.dumps(sec_redis[s], default=str)})
-    # #Ind
-    # ind_redis = {}
-    # for i in ind:
-    #     ind_redis[i] = ind[i].to_redis()
-    #     r.hset("ind", mapping={i:json.dumps(ind_redis[i], default=str)})
-    # #sp500
-    # sp500_redis = {}
-    # sp500_redis['in_symbols'] = [sym for sym in sp500 if sym in symbols]
-    # for sym in sp500:
-    #     if sym not in symbols:
-    #         sp500_redis[sym] = sp500[sym].to_redis()
-    #         r.hset("sp500", mapping={sym:json.dumps(sp500_redis[sym], default=str)})
-    # r.hset("sp500", mapping={'in_symbols':json.dumps(sp500_redis['in_symbols'], default=str)})
-    # #mdy
-    # mdy_redis = {}
-    # mdy_redis['in_symbols'] = [sym for sym in mdy if sym in symbols]
-    # for sym in mdy:
-    #     if sym not in symbols:
-    #         mdy_redis[sym] = mdy[sym].to_redis()
-    #         r.hset("mdy", mapping={sym:json.dumps(mdy_redis[sym], default=str)})
-    # r.hset("mdy", mapping={'in_symbols':json.dumps(mdy_redis['in_symbols'], default=str)})
-    # #iwm
-    # iwm_redis = {}
-    # iwm_redis['in_symbols'] = [sym for sym in iwm if sym in symbols]
-    # for sym in iwm:
-    #     if sym not in symbols:
-    #         iwm_redis[sym] = iwm[sym].to_redis()
-    #         r.hset("iwm", mapping={sym:json.dumps(iwm_redis[sym], default=str)})
-    # r.hset("iwm", mapping={'in_symbols':json.dumps(iwm_redis['in_symbols'], default=str)})
-    # #etfs
-    # etfs_redis = {}
-    # for sym in etfs:
-    #     etfs_redis[sym] = etfs[sym].to_redis()
-    #     r.hset("etfs", mapping={sym:json.dumps(etfs_redis[sym], default=str)})        
+        thread.join()        
 
 
     from IPython.display import display, HTML
@@ -697,7 +595,7 @@ if __name__ == "__main__":
           '\nDays With Consecutive Range Expansion',
           sorted(days_range_expansion.items(), key=lambda x: x[1], reverse=True),
           '\nRecent Short Interest',
-          hist_short_int[['Ticker', hist_short_int.columns[-1]]].sort_values(by=hist_short_int.columns[-1], ascending=False).head(100).set_index('Ticker').to_dict()[hist_short_int.columns[-1]],
+          hist_short_int[hist_short_int.columns[-1]].sort_values(ascending=False).head(100).to_dict(),
           '\nDollar Volume Over Market Cap All',
           dv_cap.tail(30),
           '\nDollar Volume Over Market Cap hadv',
