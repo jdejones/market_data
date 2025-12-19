@@ -30,6 +30,9 @@ class Technical_Score_Calculator:
     review_symbols_status: List = field(default_factory=list)
     ts_elevated_results: List = field(default_factory=list)
     ts_depressed_results: List = field(default_factory=list)
+    
+    def __getitem__(self, key):
+        return self.sent_dict[key]
 
     def technical_score_calculator(self, saved_dict: dict) -> None:
         """Compute technical sentiment scores and store in attributes."""
