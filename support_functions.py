@@ -436,7 +436,7 @@ def close_over_vwap_ratio(symbols: dict) -> int:
 
 
 
-def trend_bias(symbol: SymbolData):
+def trend_bias(symbol: SymbolData) -> tuple[str, str, str]:
     
     #Variables
     long_term_low = str(symbol.df.Lo3.loc[symbol.df.Lo3.notnull()].index[-1]).split(' ')[0]
