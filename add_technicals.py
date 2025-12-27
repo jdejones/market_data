@@ -231,7 +231,7 @@ def dollar_volume(df, base):
 
 def percent_change(df, base):
     df['Percent_Change'] = ((df['Close'] - df['Close'].shift(1)) / df['Close'].shift(1)) * 100
-    df['O_C'] = ((df['Close'] - df['Open']) / df['Open']) * 100
+    df['C-O'] = ((df['Close'] - df['Open']) / df['Open']) * 100
     
     return df
 
