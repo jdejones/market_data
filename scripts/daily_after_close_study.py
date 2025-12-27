@@ -369,6 +369,7 @@ if __name__ == "__main__":
                 days_range_expansion[sym] = n
         except Exception as e:
             print(sym, e, sep=': ')
+            
     from finvizfinance.screener.custom import Custom
     custom = Custom()
     cols = [col for col in custom.get_columns()]
@@ -389,6 +390,15 @@ if __name__ == "__main__":
             results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'].str.replace('%', '')
             results_finvizsearch[f'{col}(%)'] = pd.to_numeric(results_finvizsearch[f'{col}(%)'], errors='coerce')
             results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'] / 100
+    rfs_url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/results_finvizsearch"
+    rfs_engine = create_engine(rfs_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+    results_finvizsearch.to_sql(datetime.datetime.today().date().strftime("%Y_%m_%d"),
+                                con=rfs_engine,
+                                if_exists="replace",
+                                index=False,
+                                method="multi",
+                                chunksize=200)
+    
     top_rstren = [item[0] for item in rel_stren if (item[1] > 70) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     top_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] > 50) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     top_perfearn = [item[0] for item in perf_since_earnings if (item[1] > 30) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
