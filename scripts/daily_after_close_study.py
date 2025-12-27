@@ -34,12 +34,23 @@ if __name__ == "__main__":
     import market_data.stats_objects as so
     import market_data.anchored_vwap as av
     from market_data.episodic_pivots import Episodic_Pivots
-    from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading
+    from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading, argparse
     from market_data.stats_objects import IntradaySignalProcessing as isp
-    from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip
+    from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time
     from market_data.api_keys import database_password, seeking_alpha_api_key
     from market_data.interest_list import InterestList as il
-    import time
+
+    parser = argparse.ArgumentParser(description="Run the daily after close study pipeline.")
+    parser.add_argument(
+        "--skip-quant-rating-update",
+        action="store_true",
+        help=(
+            "Skip Seeking Alpha quant_rating API calls and skip updating the "
+            "`daily_quant_rating` MySQL table. Downstream logic will use whatever "
+            "is already in the table."
+        ),
+    )
+    args = parser.parse_args()
 
     # Timer utilities to measure time between tqdm progress bars
     # section_timer_start = time.perf_counter()
@@ -72,97 +83,99 @@ if __name__ == "__main__":
     daily_quant_rating_df = pd.read_sql("SELECT * FROM daily_quant_rating", con=engine)
     # daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
-    if len(daily_quant_rating_df.columns) > 1000:
-        warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
-        
-    daily_quant_rating_df.set_index('index', inplace=True)
-    #Concatenate new column
-    daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
-
-    #Request and add new values
-    #list of symbols
-    syms = list(symbols.keys())
-
-    #api requests
-    #assign counters
-    i=0
-    j=50
-    while True:
-            #break when list is exhausted
-            if i > len(syms):
-                break
-            #assign None near end of list
-            if j > len(syms):
-                j = None
-            #API call
-            url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
-
-            querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
-
-            headers = {
-                "x-rapidapi-key": f"{seeking_alpha_api_key}",
-                "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
-            }
-
-            response_request = requests.get(url, headers=headers, params=querystring)
-
-            if response_request.status_code != 200:
-                if response_request.status_code == 504:
-                    print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
-                    time.sleep(30)
-                    response_request = requests.get(url, headers=headers, params=querystring)
-                    response = response_request.json()
-                else:
-                    print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
-                    time.sleep(30)
-                    response_request = requests.get(url, headers=headers, params=querystring)
-                    response = response_request.json()
-
-            response = response_request.json()
-                    
-            if response_request.status_code != 200:
-                break
+    if not args.skip_quant_rating_update:
+        if len(daily_quant_rating_df.columns) > 1000:
+            warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
             
-            #Container for symbol and respective rating
-            quant_ratings_errors = {}
-            try:
-                sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
-            except:
-                sym_ratings = {}
-                for _ in response['data']:
-                    try:
-                        sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
-                    except Exception as e:
-                        quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
-                        continue
-                pass
-            if len(quant_ratings_errors) > 3000:
-                break
-            
-            #Insert rating to dataframe
-            for sym in sym_ratings:
-                daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
-                    
-            #Increment counters
-            i += 50
-            if j == None:
-                break
-            j += 50
-            time.sleep(2)
+        daily_quant_rating_df.set_index('index', inplace=True)
+        #Concatenate new column
+        daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
 
-    daily_quant_rating_df.reset_index(inplace=True)
-    # write back, replace existing table
-    daily_quant_rating_df.to_sql("daily_quant_rating", 
-            con=engine, 
-            if_exists="replace", 
-            index=False, 
-            method="multi",
-            chunksize=200,
-            dtype={'date': DateTime})
+        #Request and add new values
+        #list of symbols
+        syms = list(symbols.keys())
+
+        #api requests
+        #assign counters
+        i=0
+        j=50
+        while True:
+                #break when list is exhausted
+                if i > len(syms):
+                    break
+                #assign None near end of list
+                if j > len(syms):
+                    j = None
+                #API call
+                url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
+
+                querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
+
+                headers = {
+                    "x-rapidapi-key": f"{seeking_alpha_api_key}",
+                    "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
+                }
+
+                response_request = requests.get(url, headers=headers, params=querystring)
+
+                if response_request.status_code != 200:
+                    if response_request.status_code == 504:
+                        print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
+                        time.sleep(30)
+                        response_request = requests.get(url, headers=headers, params=querystring)
+                        response = response_request.json()
+                    else:
+                        print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
+                        time.sleep(30)
+                        response_request = requests.get(url, headers=headers, params=querystring)
+                        response = response_request.json()
+
+                response = response_request.json()
+                        
+                if response_request.status_code != 200:
+                    break
+                
+                #Container for symbol and respective rating
+                quant_ratings_errors = {}
+                try:
+                    sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
+                except:
+                    sym_ratings = {}
+                    for _ in response['data']:
+                        try:
+                            sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
+                        except Exception as e:
+                            quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
+                            continue
+                    pass
+                if len(quant_ratings_errors) > 3000:
+                    break
+                
+                #Insert rating to dataframe
+                for sym in sym_ratings:
+                    daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
+                        
+                #Increment counters
+                i += 50
+                if j == None:
+                    break
+                j += 50
+                time.sleep(2)
+
+        daily_quant_rating_df.reset_index(inplace=True)
+        # write back, replace existing table
+        daily_quant_rating_df.to_sql("daily_quant_rating", 
+                con=engine, 
+                if_exists="replace", 
+                index=False, 
+                method="multi",
+                chunksize=200,
+                dtype={'date': DateTime})
     daily_quant_rating_df.set_index('index', inplace=True)
     daily_quant_rating_df.index.name = 'Symbol'
     # daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
+
     #########################################################################
     
     #*Add technicals.

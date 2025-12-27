@@ -33,6 +33,7 @@ import warnings
 import redis
 import threading
 import gzip
+import argparse
 
 #Local imports
 from . import fundamentals as fu
