@@ -42,12 +42,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run the daily after close study pipeline.")
     parser.add_argument(
-        "--skip-quant-rating-update",
+        "--skip-daily-storage",
         action="store_true",
         help=(
-            "Skip Seeking Alpha quant_rating API calls and skip updating the "
-            "`daily_quant_rating` MySQL table. Downstream logic will use whatever "
-            "is already in the table."
+            "Skip daily storage of variables to MySQL database."
+            """Variables skipped:
+            daily_quant_rating_df
+            results_finvizsearch"""
         ),
     )
     args = parser.parse_args()
@@ -83,7 +84,7 @@ if __name__ == "__main__":
     daily_quant_rating_df = pd.read_sql("SELECT * FROM daily_quant_rating", con=engine)
     # daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
-    if not args.skip_quant_rating_update:
+    if not args.skip_daily_storage:
         if len(daily_quant_rating_df.columns) > 1000:
             warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
             
@@ -403,14 +404,15 @@ if __name__ == "__main__":
             results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'].str.replace('%', '')
             results_finvizsearch[f'{col}(%)'] = pd.to_numeric(results_finvizsearch[f'{col}(%)'], errors='coerce')
             results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'] / 100
-    rfs_url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/results_finvizsearch"
-    rfs_engine = create_engine(rfs_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
-    results_finvizsearch.to_sql(datetime.datetime.today().date().strftime("%Y_%m_%d"),
-                                con=rfs_engine,
-                                if_exists="replace",
-                                index=False,
-                                method="multi",
-                                chunksize=200)
+    if not args.skip_daily_storage:
+        rfs_url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/results_finvizsearch"
+        rfs_engine = create_engine(rfs_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+        results_finvizsearch.to_sql(datetime.datetime.today().date().strftime("%Y_%m_%d"),
+                                    con=rfs_engine,
+                                    if_exists="replace",
+                                    index=False,
+                                    method="multi",
+                                    chunksize=200)
     
     top_rstren = [item[0] for item in rel_stren if (item[1] > 70) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     top_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] > 50) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
