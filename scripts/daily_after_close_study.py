@@ -385,8 +385,9 @@ if __name__ == "__main__":
             print(sym, e, sep=': ')
             
     from finvizfinance.screener.custom import Custom
+    from finvizfinance.constants import CUSTOM_SCREENER_COLUMNS
     custom = Custom()
-    cols = [col for col in custom.get_columns()]
+    cols = list(CUSTOM_SCREENER_COLUMNS.keys())
     try:
         results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
     except ConnectionError:
