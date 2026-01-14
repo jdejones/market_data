@@ -355,8 +355,8 @@ if __name__ == "__main__":
     
     rel_stren_obj = sf.relative_strength(symbols)
     rel_stren = rel_stren_obj()
-    prev_perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-04-11')
-    perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start='2025-07-15')
+    prev_perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start=sa.earnings_dict['JPM']['revenue_actual']['0'][0]['effectivedate'].split('T')[0])
+    perf_since_earnings = sf.perf_since_earnings(symbols, earnings_season_start=sa.earnings_dict['JPM']['revenue_actual']['-1'][0]['effectivedate'].split('T')[0])
     days_elevated_rvol = {}
     days_range_expansion = {}
     for sym in symbols:
