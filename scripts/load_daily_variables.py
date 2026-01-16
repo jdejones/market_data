@@ -108,3 +108,11 @@ if __name__ == "__main__":
     qplus1 = loaded["qplus1"]
     qplus4 = loaded["qplus4"]
     interest_list_long = loaded["interest_list_long"]
+    
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+    daily_quant_rating_df = pd.read_sql("SELECT * FROM daily_quant_rating", con=engine)
+    daily_quant_rating_df.set_index('index', inplace=True)
+    daily_quant_rating_df.index.name = 'Symbol'
+    daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
+    
