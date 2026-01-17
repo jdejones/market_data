@@ -136,6 +136,7 @@ print(float_df.tail())
 ```
 
 - **5) Seeking Alpha ratings (RapidAPI)**
+- Quant ratings are an aggregated score for stock fundamental and technical performance compared to peers. Seeking Alpha provides details here: https://seekingalpha.com/article/4263303-quant-ratings-and-factor-grades-faq
 ```python
 import market_data.seeking_alpha as sa
 
