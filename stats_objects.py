@@ -2591,3 +2591,64 @@ def drawdown_max(df: pd.DataFrame, start: str|int|datetime.date):
     else:
         raise ValueError(f"Invalid type for start: {type(start)}")
 
+def price_volume_analysis(
+    symbols: dict[str, pd.DataFrame],
+    target: str = 'Close') -> dict[str, float]:
+    """
+    Statistical price-volume analysis via correlation of log changes.
+
+    For each symbol, computes:
+    - log return of `target`: diff(log(price))
+    - log change in Volume: diff(log(volume))
+    Then returns their Pearson correlation.
+
+    Parameters
+    ----------
+    symbols : dict[str, pd.DataFrame]
+        Mapping of ticker -> OHLCV DataFrame. Must contain `target` and `Volume`.
+    target : str, default 'Close'
+        Column name used as the price series for log returns.
+
+    Returns
+    -------
+    dict[str, float]
+        Dictionary sorted descending by correlation (NaNs last).
+    """
+    results: dict[str, float] = {}
+
+    for sym, df in symbols.items():
+        if df is None or getattr(df, "empty", True):
+            results[sym] = np.nan
+            continue
+
+        if target not in df.columns or 'Volume' not in df.columns:
+            results[sym] = np.nan
+            continue
+
+        # Ensure numeric and avoid invalid log inputs.
+        price = pd.to_numeric(df[target], errors='coerce').astype('float64')
+        vol = pd.to_numeric(df['Volume'], errors='coerce').astype('float64')
+
+        price = price.where(price > 0)
+        vol = vol.where(vol > 0)
+
+        log_ret = np.log(price).diff()
+        log_vol_chg = np.log(vol).diff()
+
+        aligned = pd.concat(
+            [log_ret.rename('log_ret'), log_vol_chg.rename('log_vol_chg')],
+            axis=1
+        ).dropna()
+
+        if len(aligned) < 2:
+            results[sym] = np.nan
+        else:
+            results[sym] = float(aligned['log_ret'].corr(aligned['log_vol_chg']))
+
+    # Descending sort by correlation, placing NaNs last.
+    return dict(
+        sorted(
+            results.items(),
+            key=lambda kv: (pd.isna(kv[1]), -(kv[1] if not pd.isna(kv[1]) else 0.0)),
+        )
+    )
