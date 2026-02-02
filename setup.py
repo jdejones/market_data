@@ -5,6 +5,7 @@ setup(
     version="0.1.0",
     packages=find_packages(),    # will pick up the `market_data` package
     install_requires=[
+        "backtesting",
         # e.g. "pandas>=1.2", "numpy"
     ],
     entry_points={
