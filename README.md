@@ -40,7 +40,8 @@ source .venv/bin/activate
 pip install \
   pandas numpy matplotlib tqdm requests ratelimit yfinance \
   scipy scikit-posthocs plotly sec-api beautifulsoup4 \
-  polygon-api-client SQLAlchemy mysql-connector-python finvizfinance
+  polygon-api-client SQLAlchemy mysql-connector-python finvizfinance \
+  backtesting
 ```
 
 3) Make the package importable
@@ -146,6 +147,18 @@ print(ratings)
 ```
 Note: The `seeking_alpha` module loads local caches on import in its current state. See Caveats to run it without Windows paths.
 
+- **6) Simple backtest with the `backtesting` library**
+```python
+from market_data.backtesting_module import run_backtest, SmaCross
+from market_data.price_data_import import api_import
+
+data = api_import(["AAPL"], from_date="2024-01-01")
+df = data["AAPL"]
+
+backtest, stats = run_backtest(df, strategy=SmaCross)
+print(stats[["Return [%]", "Sharpe Ratio", "# Trades"]])
+```
+
 
 ## Modules
 - `price_data_import.py`
@@ -168,6 +181,7 @@ Note: The `seeking_alpha` module loads local caches on import in its current sta
 
 - Additional modules
   - `anchored_vwap.py`: Utilities for anchored VWAP calculations.
+  - `backtesting_module.py`: Helpers for running strategy backtests using the `backtesting` library.
   - `watchlist_filters.py`: Plotting and screening utilities (uses `finvizfinance`, `plotly`, and `matplotlib`).
   - `regimes.py`, `episodic_pivots.py`, `intraday_study.py`, etc.: Exploratory studies and specialized analytics.
 
@@ -202,4 +216,3 @@ Note: The `seeking_alpha` module loads local caches on import in its current sta
 - Yahoo Finance (via `yfinance`) and Finviz tooling.
 
 If you have questions or need help adapting paths for your environment, consider opening an issue with details about your OS, Python version, and the exact error/traceback.
-
