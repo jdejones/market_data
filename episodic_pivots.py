@@ -190,7 +190,7 @@ class Episodic_Pivots:
     def ep_count(self, include_spy=True):
         df_dict = {}
         for sym in self.symbols:
-            df_dict[sym] = symbols[sym].df.ep
+            df_dict[sym] = self.symbols[sym].df.ep
         df = pd.DataFrame(df_dict)
         df['total'] = df.sum(axis=1)
         if include_spy:
@@ -199,3 +199,4 @@ class Episodic_Pivots:
             return ep_spy.plot()
         df.rename(columns={'total': 'EP Count'}, inplace=True)
         return df['EP Count'].plot()
+
