@@ -3,8 +3,8 @@ import json
 import os
 import logging
 from datetime import datetime, timedelta
-from market_data.api_keys import seeking_alpha_api_key
-from market_data import fu, pd, bs
+from market_data.api_keys import seeking_alpha_api_key, database_password
+from market_data import fu, pd, bs, create_engine
 import sys
 
 
@@ -23,23 +23,47 @@ analyst_ratings_dict = None
 sec_ind_ids = json.load(open(r"E:\Market Research\Dataset\seeking_alpha_api\sector_industry_ids.txt"))
 sym_by_id = json.load(open(r"E:\Market Research\Dataset\seeking_alpha_api\get_sym_by_id.txt"))
 
+url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
 def meta_data_load():
     global meta_data
-    with open(r"E:\Market Research\Dataset\seeking_alpha_api\seeking_alpha_meta_data.txt", "r") as f:
-        meta_data = json.load(f)
-    meta_data = meta_data  
+    # with open(r"E:\Market Research\Dataset\seeking_alpha_api\seeking_alpha_meta_data.txt", "r") as f:
+    #     meta_data = json.load(f)
+    # meta_data = meta_data
+    global engine
+    df = pd.read_sql("SELECT symbol, meta_data FROM sa_meta_data", con=engine)
+    meta_data_dict = {
+        row.symbol: (row.meta_data if isinstance(row.meta_data, dict) else json.loads(row.meta_data))
+        for row in df.itertuples(index=False)
+    }
+    meta_data = meta_data_dict
 
 def key_data_load():
     global key_data
-    with open(r"E:\Market Research\Dataset\seeking_alpha_api\get_key_data.txt", "r") as f:
-        key_data = json.load(f)
-    key_data = key_data
+    # with open(r"E:\Market Research\Dataset\seeking_alpha_api\get_key_data.txt", "r") as f:
+    #     key_data = json.load(f)
+    # key_data = key_data
+    global engine
+    df = pd.read_sql("SELECT symbol, key_data FROM sa_key_data", con=engine)
+    key_data_dict = {
+        row.symbol: (row.key_data if isinstance(row.key_data, dict) else json.loads(row.key_data))
+        for row in df.itertuples(index=False)
+    }
+    key_data = key_data_dict
 
 def summary_data_load():
     global summary_dict
     with open(r"E:\Market Research\Dataset\seeking_alpha_api\get_summary.txt") as f:
         summary_data = json.load(f)
     summary_dict = summary_data
+    # global engine
+    # df = pd.read_sql("SELECT symbol, summary_data FROM sa_summary_data", con=engine)
+    # summary_data_dict = {
+    #     row.symbol: (row.summary_data if isinstance(row.summary_data, dict) else json.loads(row.summary_data))
+    #     for row in df.itertuples(index=False)
+    # }
+    # summary_dict = summary_data_dict
 
 def get_ratings_load():
     global ratings_dict
@@ -52,19 +76,40 @@ def earnings_load():
     global earnings_revisions_dict
     # with open(r"E:\Market Research\Dataset\seeking_alpha_api\seeking_alpha_earnings.txt", "r") as f:
     #     earnings_dict = json.load(f)
-    available_earnings_folders = [item.name for item in os.scandir(r"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\estimates")]
-    available_revisions_folders = [item.name for item in os.scandir(r"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\revisions")]
-    for sym in available_earnings_folders:
-        with open(f"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\estimates\{sym}\earnings_estimates.txt") as f:
-            earnings_dict[sym] = json.load(f)
-    for sym in available_revisions_folders:
-        with open(f"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\\revisions\{sym}\earnings_revisions.txt") as f:
-            earnings_revisions_dict[sym] = json.load(f)
+    # available_earnings_folders = [item.name for item in os.scandir(r"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\estimates")]
+    # available_revisions_folders = [item.name for item in os.scandir(r"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\revisions")]
+    # for sym in available_earnings_folders:
+    #     with open(f"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\estimates\{sym}\earnings_estimates.txt") as f:
+    #         earnings_dict[sym] = json.load(f)
+    # for sym in available_revisions_folders:
+    #     with open(f"E:\Market Research\Dataset\seeking_alpha_api\earnings_dataset\\revisions\{sym}\earnings_revisions.txt") as f:
+    #         earnings_revisions_dict[sym] = json.load(f)
+    global engine
+    df = pd.read_sql("SELECT symbol, earnings_data FROM sa_earnings_data", con=engine)
+    earnings_data_dict = {
+        row.symbol: (row.earnings_data if isinstance(row.earnings_data, dict) else json.loads(row.earnings_data))
+        for row in df.itertuples(index=False)
+    }
+    earnings_dict = earnings_data_dict
+    
+    df = pd.read_sql("SELECT symbol, earnings_revisions_data FROM sa_earnings_revisions_data", con=engine)
+    earnings_revisions_data_dict = {
+        row.symbol: (row.earnings_revisions_data if isinstance(row.earnings_revisions_data, dict) else json.loads(row.earnings_revisions_data))
+        for row in df.itertuples(index=False)
+    }
+    earnings_revisions_dict = earnings_revisions_data_dict    
 
 def analyst_price_targets_load():
     global analyst_price_targets_dict
-    with open(r"E:\Market Research\Dataset\seeking_alpha_api\analyst_price_targets.txt") as f:
-        analyst_price_targets_dict = json.load(f)
+    # with open(r"E:\Market Research\Dataset\seeking_alpha_api\analyst_price_targets.txt") as f:
+    #     analyst_price_targets_dict = json.load(f)
+    global engine
+    df = pd.read_sql("SELECT symbol, analysts_price_targets_data FROM sa_analysts_price_targets_data", con=engine)
+    analysts_price_targets_data_dict = {
+        row.symbol: (row.analysts_price_targets_data if isinstance(row.analysts_price_targets_data, dict) else json.loads(row.analysts_price_targets_data))
+        for row in df.itertuples(index=False)
+    }
+    analyst_price_targets_dict = analysts_price_targets_data_dict
 
 def analyst_ratings_load():
     global analyst_ratings_dict

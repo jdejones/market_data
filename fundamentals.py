@@ -2,8 +2,8 @@
 The next functions that I should work on are those that access the SEC API.
 """
 
-from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi, find_peaks
-from market_data.api_keys import sec_api_key, polygon_api_key
+from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi, find_peaks, create_engine, text
+from market_data.api_keys import sec_api_key, polygon_api_key, database_password
 from market_data.price_data_import import api_import
 from polygon.rest import RESTClient
 # from audioop import reverse
@@ -55,9 +55,46 @@ standard_columns = ['Symbol','quantRating','Wall St.','Valuation Grade',
                             'Current Ratio','Quick Ratio','Debt to Equity',
                             'LT Debt to Total Capital','EBITDA','Sector','Industry'
                             ]
-sectors_industries = json.load(open(r"E:\Market Research\Dataset\Fundamental Data\symbol_sector_industry.txt"))
-company_headquarters = json.load(open(r"E:\Market Research\Dataset\Fundamental Data\company_headquarters.txt"))
-bsum = json.load(open(r"E:\Market Research\Dataset\Fundamental Data\business_summary.txt"))
+
+def load_sectors_industries_from_mysql() -> dict[str, dict[str, str]]:
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+    df = pd.read_sql(
+        "SELECT symbol, sector, industry FROM symbol_sector_industry",
+        con=engine
+    )
+
+    # If you keep your current list(z.values()) logic, preserve key order as industry then sector.
+    return {
+        row.symbol: {"industry": row.industry, "sector": row.sector}
+        for row in df.itertuples(index=False)
+    }
+sectors_industries = load_sectors_industries_from_mysql()
+
+def load_company_headquarters_from_mysql() -> dict[str, str]:
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+    df = pd.read_sql(
+        "SELECT symbol, headquarters FROM symbol_headquarters",
+        con=engine
+    )
+
+    return {row.symbol: row.headquarters for row in df.itertuples(index=False)}
+company_headquarters = load_company_headquarters_from_mysql()
+
+def load_bsum_from_mysql() -> dict[str, str]:
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+    df = pd.read_sql(
+        "SELECT symbol, business_summary FROM symbol_business_summary",
+        con=engine
+    )
+
+    return {row.symbol: row.business_summary for row in df.itertuples(index=False)}
+bsum = load_bsum_from_mysql()
 # f = Filings()
 
 ####################################################################################
