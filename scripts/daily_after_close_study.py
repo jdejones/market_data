@@ -37,7 +37,7 @@ if __name__ == "__main__":
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading, argparse
     from market_data.stats_objects import IntradaySignalProcessing as isp
     from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time
-    from market_data.api_keys import database_password, seeking_alpha_api_key
+    from market_data.api_keys import database_password, seeking_alpha_api_key, SA_ACCESS_TOKEN
     from market_data.interest_list import InterestList as il
 
     parser = argparse.ArgumentParser(description="Run the daily after close study pipeline.")
@@ -114,7 +114,8 @@ if __name__ == "__main__":
 
                 headers = {
                     "x-rapidapi-key": f"{seeking_alpha_api_key}",
-                    "x-rapidapi-host": "seeking-alpha.p.rapidapi.com"
+                    "x-rapidapi-host": "seeking-alpha.p.rapidapi.com",
+                    "accessToken": SA_ACCESS_TOKEN
                 }
 
                 response_request = requests.get(url, headers=headers, params=querystring)
