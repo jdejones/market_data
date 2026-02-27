@@ -137,6 +137,9 @@ if __name__ == "__main__":
                 if response_request.status_code != 200:
                     break
                 
+                if (j is not None) and (len(response == 0)):
+                    raise ValueError('No response from Seeking Alpha API')
+                
                 #Container for symbol and respective rating
                 quant_ratings_errors = {}
                 try:
