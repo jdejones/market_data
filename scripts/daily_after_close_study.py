@@ -37,7 +37,7 @@ if __name__ == "__main__":
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading, argparse
     from market_data.stats_objects import IntradaySignalProcessing as isp
     from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time
-    from market_data.api_keys import database_password, seeking_alpha_api_key, SA_ACCESS_TOKEN
+    from market_data.api_keys import database_password, seeking_alpha_api_key, seeking_alpha_access_token
     from market_data.interest_list import InterestList as il
 
     parser = argparse.ArgumentParser(description="Run the daily after close study pipeline.")
@@ -115,7 +115,7 @@ if __name__ == "__main__":
                 headers = {
                     "x-rapidapi-key": f"{seeking_alpha_api_key}",
                     "x-rapidapi-host": "seeking-alpha.p.rapidapi.com",
-                    "accessToken": SA_ACCESS_TOKEN
+                    "accessToken": seeking_alpha_access_token
                 }
 
                 response_request = requests.get(url, headers=headers, params=querystring)
@@ -137,7 +137,7 @@ if __name__ == "__main__":
                 if response_request.status_code != 200:
                     break
                 
-                if (j is not None) and (len(response == 0)):
+                if (j is not None) and (len(response['data']) == 0):
                     raise ValueError('No response from Seeking Alpha API')
                 
                 #Container for symbol and respective rating
