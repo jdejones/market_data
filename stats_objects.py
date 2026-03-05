@@ -2683,7 +2683,7 @@ def avg_liquid_vol_plot(
     relatr_col: str = "Relative_ATR",
     min_symbols_per_industry: int = 1,
     figsize: tuple[int, int] = (11, 6),
-):
+    ):
     
     def _as_quantile(q: float) -> float:
         # Accept 0–1 or 0–100 inputs
@@ -2796,3 +2796,4 @@ def avg_liquid_vol_plot(
     plt.show()
 
     return ind_df.sort_values(["avgdv", "relative_atr"], ascending=False).reset_index(drop=True)
+
