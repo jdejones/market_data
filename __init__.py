@@ -10,8 +10,10 @@ import datetime
 from datetime import date, timedelta
 from typing import List, Iterable
 import time
+from __future__ import annotations
+from collections.abc import Iterable, Mapping
 import yfinance as yf
-import matplotlib.pyplot as plt
+import seaborn as sns
 from tqdm import tqdm
 import requests
 import re

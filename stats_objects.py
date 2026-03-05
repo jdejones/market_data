@@ -1,11 +1,31 @@
-from market_data import date, timedelta, List, dataclass, pd, datetime, Tuple, timedelta, operator, Union
+from market_data import (date, 
+                         timedelta, 
+                         List, 
+                         dataclass, 
+                         pd, 
+                         datetime, 
+                         Tuple, 
+                         timedelta, 
+                         operator, 
+                         Union, 
+                         plt, 
+                         sns,
+                         annotations,
+                         Iterable,
+                         Mapping)
 from market_data.Symbol_Data import SymbolData
-from market_data.price_data_import import fragmented_intraday_import, nonconsecutive_intraday_import, intraday_import
-from market_data.add_technicals import intraday_pipeline, add_avwap_by_offset, run_pipeline, Step, _add_intraday_technicals_worker, SMA, EMA
-from market_data import ProcessPoolExecutor, as_completed, tqdm, ThreadPoolExecutor, levene, kruskal, median_test, sp, Union, Dict, List, partial, find_peaks, linregress
+import market_data.fundamentals as fu
+from market_data.price_data_import import (fragmented_intraday_import, 
+                                          nonconsecutive_intraday_import, 
+                                          intraday_import)
+from market_data.add_technicals import (intraday_pipeline, 
+                                       add_avwap_by_offset, 
+                                       run_pipeline, 
+                                       Step, 
+                                       _add_intraday_technicals_worker, 
+                                       SMA, EMA)
+from market_data import (ProcessPoolExecutor, as_completed, tqdm, ThreadPoolExecutor, levene, kruskal, median_test, sp, Union, Dict, List, partial, find_peaks, linregress)
 import numpy as np
-
-
 def _add_intraday_with_avwap0(item):
     """
     Apply the standard intraday technicals pipeline plus a 0-offset AVWAP column.
@@ -2652,3 +2672,127 @@ def price_volume_analysis(
             key=lambda kv: (pd.isna(kv[1]), -(kv[1] if not pd.isna(kv[1]) else 0.0)),
         )
     )
+
+def avg_liquid_vol_plot(
+    watchlist: Iterable[str],
+    symbols: Mapping[str, SymbolData],
+    *,
+    annotate_quant: float = 0.7,
+    plot_quant: float = 0.5,
+    avgdv_col: str = "AvgDV20",
+    relatr_col: str = "Relative_ATR",
+    min_symbols_per_industry: int = 1,
+    figsize: tuple[int, int] = (11, 6),
+):
+    
+    def _as_quantile(q: float) -> float:
+        # Accept 0–1 or 0–100 inputs
+        q = float(q)
+        if q > 1:
+            q = q / 100
+        if not (0 <= q <= 1):
+            raise ValueError(f"Quantile must be in [0, 1] (or [0, 100]); got {q}")
+        return q
+
+    def _resolve_col(df: pd.DataFrame, preferred: str, *aliases: str) -> str | None:
+        for c in (preferred, *aliases):
+            if c in df.columns:
+                return c
+        return None
+    # 1) Industry lookup (single call, not per-symbol)
+    watchlist = list(watchlist)
+    sec_ind = fu.get_sym_sector_industry(watchlist)
+
+    # 2) Build symbol-level frame: one row per symbol
+    rows: list[dict] = []
+    for sym in watchlist:
+        sd = symbols.get(sym)
+        if sd is None or sd.df is None or sd.df.empty:
+            continue
+
+        # allow legacy names too, in case your notebook still uses them
+        xcol = _resolve_col(sd.df, avgdv_col, "AvgDV", "AvgDV20")
+        ycol = _resolve_col(sd.df, relatr_col, "Relative ATR", "Relative_ATR")
+
+        if xcol is None or ycol is None:
+            continue
+
+        industry = (sd.industry or (sec_ind.get(sym, {}) or {}).get("industry") or "").strip()
+        if not industry:
+            continue
+
+        rows.append(
+            {
+                "Symbol": sym,
+                "industry": industry,
+                "avgdv": sd.df[xcol].iloc[-1],
+                "relative_atr": sd.df[ycol].iloc[-1],
+            }
+        )
+
+    sym_df = pd.DataFrame(rows)
+    if sym_df.empty:
+        raise ValueError(
+            "No usable symbol rows. Check: (1) `fu.get_sym_sector_industry` returns industries, "
+            "(2) your `SymbolData.df` contains AvgDV/Relative_ATR columns (run the technicals pipeline)."
+        )
+
+    sym_df["avgdv"] = pd.to_numeric(sym_df["avgdv"], errors="coerce")
+    sym_df["relative_atr"] = pd.to_numeric(sym_df["relative_atr"], errors="coerce")
+    sym_df = sym_df.dropna(subset=["avgdv", "relative_atr"])
+
+    # 3) Industry-level means
+    ind_df = (
+        sym_df.groupby("industry", as_index=False)
+        .agg(
+            avgdv=("avgdv", "mean"),
+            relative_atr=("relative_atr", "mean"),
+            n_symbols=("Symbol", "count"),
+        )
+        .query("n_symbols >= @min_symbols_per_industry")
+    )
+    if ind_df.empty:
+        raise ValueError("No industries left after grouping/min_symbols_per_industry filtering.")
+
+    # 4) Quantile filters (use >= to avoid empty at quantile=1.0 / constant series)
+    plot_q = _as_quantile(plot_quant)
+    ann_q = _as_quantile(annotate_quant)
+
+    x_thr_plot = ind_df["avgdv"].quantile(plot_q)
+    y_thr_plot = ind_df["relative_atr"].quantile(plot_q)
+    plot_df = ind_df[(ind_df["avgdv"] >= x_thr_plot) & (ind_df["relative_atr"] >= y_thr_plot)].copy()
+    if plot_df.empty:
+        raise ValueError(f"No industries pass the plot filter at plot_quant={plot_q:.2f}. Lower plot_quant.")
+
+    x_thr_ann = ind_df["avgdv"].quantile(ann_q)
+    y_thr_ann = ind_df["relative_atr"].quantile(ann_q)
+    annotate_df = plot_df[(plot_df["avgdv"] >= x_thr_ann) & (plot_df["relative_atr"] >= y_thr_ann)]
+
+    # 5) Plot
+    try:
+        import colorcet as cc
+        palette = sns.color_palette(cc.glasbey, n_colors=plot_df["industry"].nunique())
+    except Exception:
+        palette = sns.color_palette("husl", n_colors=plot_df["industry"].nunique())
+
+    plt.figure(figsize=figsize)
+    ax = sns.scatterplot(
+        data=plot_df,
+        x="avgdv",
+        y="relative_atr",
+        hue="industry",
+        palette=palette,
+    )
+    ax.legend(loc="center left", bbox_to_anchor=(1.25, 0.5), ncol=1, title="Industry")
+    leg = ax.legend()
+    leg.remove()
+
+    for r in annotate_df.itertuples(index=False):
+        ax.text(r.avgdv, r.relative_atr, r.industry, ha="left", va="center", fontsize="x-small", color="black")
+
+    ax.set_xlabel("Industry mean AvgDV ($)")
+    ax.set_ylabel("Industry mean Relative ATR (%)")
+    plt.tight_layout()
+    plt.show()
+
+    return ind_df.sort_values(["avgdv", "relative_atr"], ascending=False).reset_index(drop=True)
