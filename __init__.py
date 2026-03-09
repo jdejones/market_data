@@ -1,4 +1,5 @@
 #Third-party imports
+from __future__ import annotations
 from dataclasses import dataclass, field
 import pandas as pd
 import numpy as np
@@ -10,7 +11,6 @@ import datetime
 from datetime import date, timedelta
 from typing import List, Iterable
 import time
-from __future__ import annotations
 from collections.abc import Iterable, Mapping
 import yfinance as yf
 import seaborn as sns
