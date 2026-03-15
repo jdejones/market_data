@@ -5,21 +5,22 @@ from typing import List
 @dataclass(slots=True)
 class SymbolData:
     """
-    Store per-symbol tabular market data together with lightweight metadata.
+    Store a symbol-level DataFrame and associated metadata.
 
-    This dataclass wraps a symbol identifier, a pandas DataFrame, and several
-    optional descriptive fields used elsewhere in the codebase. Attribute lookup
-    falls back to DataFrame columns through `__getattr__`, so dataclass field
-    names should not conflict with column names in `df`.
+    This dataclass groups a symbol identifier, a pandas DataFrame, and several
+    optional descriptive fields on one object. Attribute lookup falls back to
+    DataFrame columns through `__getattr__`, so field names on the dataclass
+    should not collide with column names in `df`.
 
     Parameters
     ----------
     symbol : str
         Symbol identifier associated with `df`.
     df : pd.DataFrame
-        Tabular data for the symbol. Column names are used by `__getattr__`
-        and `__getitem__` for convenience access. The class stores the same
-        DataFrame object that is passed in.
+        Tabular data for the symbol. The class stores the same DataFrame object
+        that is passed in. No required columns, sort order, or index type are
+        enforced by the dataclass itself, but column names are used by
+        `__getattr__` and `__getitem__` for convenience access.
     sector : str or None, default None
         Optional sector label.
     industry : str or None, default None
@@ -55,9 +56,10 @@ class SymbolData:
         Return a DataFrame column when normal attribute lookup fails.
 
         This method is only called after standard attribute resolution does not
-        find `item` on the instance. It reads `df` via `object.__getattribute__`
-        to avoid recursive lookup during initialization or unpickling, then
-        returns `self.df[item]` when `item` matches a column name.
+        find `item` on the instance. The implementation reads `df` via
+        `object.__getattribute__` to avoid recursive lookup during
+        initialization or unpickling, then returns `self.df[item]` when `item`
+        matches a column name.
 
         Parameters
         ----------
@@ -93,7 +95,7 @@ class SymbolData:
 
         This convenience method forwards `key` directly to `self.df[key]` and
         returns the pandas result unchanged. The method does not copy `self.df`
-        or modify the stored DataFrame.
+        and does not modify the stored DataFrame.
 
         Parameters
         ----------
@@ -124,8 +126,10 @@ class SymbolData:
         dict
             Mapping with keys `symbol`, `df`, `sector`, `industry`,
             `market_cap`, `interest_factor`, `interest_direction`, and `theme`.
-            The `df` value is the result of `df_copy.to_dict()` after index reset
-            and datetime string conversion.
+            The `df` value is the default `DataFrame.to_dict()` output for the
+            reset DataFrame, so each column name maps to a nested
+            ``{row_position: value}`` dictionary and the original index values
+            appear in the first column.
 
         Notes
         -----
@@ -158,13 +162,20 @@ class SymbolData:
         `%Y-%m-%d %H:%M:%S`, restores the first column as the index, and passes
         the remaining metadata fields into the dataclass constructor.
 
+        The reconstruction logic has two notable behaviors:
+
+        - Only columns with pandas string dtype are tested for datetime parsing.
+        - The first column of the reconstructed DataFrame is always treated as
+          the index, regardless of its name.
+
         Parameters
         ----------
         payload : dict
             Mapping produced by `to_redis()` with keys `symbol`, `df`, `sector`,
             `industry`, `market_cap`, `interest_factor`, `interest_direction`,
             and `theme`. The `df` entry must be compatible with
-            `pd.DataFrame(payload["df"])`.
+            `pd.DataFrame(payload["df"])` and is expected to contain the saved
+            index values in its first column.
 
         Returns
         -------
@@ -174,10 +185,9 @@ class SymbolData:
         Notes
         -----
         Any string column that does not parse with the exact datetime format is
-        left unchanged. The method restores the index from the first column of
-        the reconstructed DataFrame, regardless of that column's name.
-        `interest_source` is not read from `payload` and therefore falls back to
-        the dataclass default empty list on the returned instance.
+        left unchanged. `interest_source` is not read from `payload` and
+        therefore falls back to the dataclass default empty list on the returned
+        instance.
         """
         df = pd.DataFrame(payload["df"])
         # Convert string datetime columns back to datetime
@@ -208,18 +218,19 @@ class SymbolData:
 @dataclass(slots=True)
 class Intraday_SymbolData:
     """
-    Store intraday symbol data and related derived metrics.
+    Store intraday data and optional derived metrics for one symbol.
 
-    This dataclass is a lightweight container for an intraday DataFrame plus a
-    small set of optional metadata and summary objects. The class defines fields 
-    only and does not add custom accessors or serialization logic.
+    This dataclass groups an intraday DataFrame with a small set of optional
+    metadata and derived objects. The class defines fields only and does not add
+    custom accessors, validation, or serialization behavior.
 
     Parameters
     ----------
     symbol : str
         Symbol identifier associated with `df`.
     df : pd.DataFrame
-        Intraday data stored on the instance without copying.
+        Intraday data stored on the instance without copying. The dataclass does
+        not enforce required columns, bar frequency, sort order, or index type.
     sector : str or None, default None
         Optional sector label.
     market_cap : float or None, default None
@@ -240,7 +251,7 @@ class Intraday_SymbolData:
 
 def full_report():
     """
-    Act as a placeholder for a future report-building routine.
+    Serve as a placeholder for a report-building routine.
 
     The function currently contains only outline comments and a `pass`
     statement. Calling the function performs no computation and returns `None`.
@@ -266,3 +277,4 @@ def full_report():
     
     #Technicals
     pass
+
