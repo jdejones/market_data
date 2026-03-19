@@ -4,32 +4,50 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from shlex import quote as shell_quote
 
 try:
+    from market_data import tqdm
     from market_data.api_keys import database_password
 except ModuleNotFoundError:
     sys.path.insert(0, r"C:\Users\jdejo\Market_Data_Processing")
+    from market_data import tqdm
     from market_data.api_keys import database_password
 
 
 DEFAULT_MYSQLDUMP_PATH = Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe")
 DEFAULT_MYSQL_CLIENT_PATH = Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe")
 DEFAULT_REMOTE_DIR = PurePosixPath("/home/openclaw/.openclaw/workspace/data_transfer/incoming")
+DEFAULT_DATABASES = ("stocks", "results_finvizsearch", "news")
+DEFAULT_WORKERS = max(1, min(4, os.cpu_count() or 1))
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert a MySQL database to SQLite and upload it to OpenClaw over Tailscale SSH."
+        description="Convert one or more MySQL databases to SQLite and upload them to OpenClaw over Tailscale SSH."
     )
-    parser.add_argument("--database", default="stocks", help="MySQL database to export.")
+    parser.add_argument(
+        "--database",
+        default="",
+        help="Single MySQL database to export. Overrides --databases when provided.",
+    )
+    parser.add_argument(
+        "--databases",
+        nargs="+",
+        default=list(DEFAULT_DATABASES),
+        help="MySQL databases to export into the SQLite file.",
+    )
     parser.add_argument("--host", default="127.0.0.1", help="MySQL host.")
     parser.add_argument("--port", type=int, default=3306, help="MySQL port.")
     parser.add_argument("--user", default="root", help="MySQL user.")
@@ -59,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sqlite-name",
         default="",
-        help="Optional local SQLite filename. Defaults to '<database>_YYYYMMDD_HHMMSS.sqlite'.",
+        help="Optional local SQLite filename. Defaults to '<database>_YYYYMMDD_HHMMSS.sqlite' for a single database or '<db1>_<db2>_..._YYYYMMDD_HHMMSS.sqlite' for multiple databases.",
     )
     parser.add_argument(
         "--skip-mysqldump",
@@ -76,6 +94,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5_000,
         help="Number of rows per chunk when copying MySQL tables to SQLite.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help="Worker processes used while building the SQLite database.",
     )
     parser.add_argument(
         "--ssh-target",
@@ -98,6 +122,15 @@ def parse_args() -> argparse.Namespace:
         help="Build the local artifacts but do not upload them to OpenClaw.",
     )
     return parser.parse_args()
+
+
+def selected_databases(args: argparse.Namespace) -> list[str]:
+    requested = [args.database] if args.database else args.databases
+    databases = [database.strip() for database in requested if database and database.strip()]
+    databases = list(dict.fromkeys(databases))
+    if not databases:
+        raise ValueError("At least one MySQL database must be provided.")
+    return databases
 
 
 def ensure_exists(path: Path, label: str) -> None:
@@ -127,11 +160,34 @@ def local_sqlite_name(args: argparse.Namespace) -> str:
     if args.sqlite_name:
         return args.sqlite_name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{args.database}_{timestamp}.sqlite"
+    name_prefix = "_".join(args.databases)
+    return f"{name_prefix}_{timestamp}.sqlite"
+
+
+def sqlite_table_name(database_name: str, object_name: str, *, prefix_database: bool) -> str:
+    if prefix_database:
+        return f"{database_name}__{object_name}"
+    return object_name
+
+
+def open_sqlite_connection(sqlite_path: Path) -> sqlite3.Connection:
+    sqlite_conn = sqlite3.connect(sqlite_path)
+    sqlite_conn.execute("PRAGMA journal_mode = DELETE;")
+    sqlite_conn.execute("PRAGMA synchronous = OFF;")
+    return sqlite_conn
+
+
+@contextmanager
+def managed_sqlite_connection(sqlite_path: Path):
+    sqlite_conn = open_sqlite_connection(sqlite_path)
+    try:
+        yield sqlite_conn
+    finally:
+        sqlite_conn.close()
 
 
 def create_mysql_dump(args: argparse.Namespace, sql_dump_path: Path) -> None:
-    print(f"Creating MySQL dump: {sql_dump_path}")
+    print(f"Creating MySQL dump for {', '.join(args.databases)}: {sql_dump_path}")
     command = [
         str(args.mysqldump_path),
         f"--host={args.host}",
@@ -144,13 +200,14 @@ def create_mysql_dump(args: argparse.Namespace, sql_dump_path: Path) -> None:
         "--events",
         "--triggers",
         "--column-statistics=0",
-        args.database,
+        "--databases",
+        *args.databases,
     ]
     with sql_dump_path.open("wb") as dump_handle:
         subprocess.run(command, check=True, stdout=dump_handle)
 
 
-def mysql_base_command(args: argparse.Namespace) -> list[str]:
+def mysql_base_command(args: argparse.Namespace, database_name: str) -> list[str]:
     return [
         str(args.mysql_client_path),
         f"--host={args.host}",
@@ -160,12 +217,12 @@ def mysql_base_command(args: argparse.Namespace) -> list[str]:
         "--batch",
         "--skip-column-names",
         "--default-character-set=utf8mb4",
-        args.database,
+        database_name,
     ]
 
 
-def run_mysql_query(args: argparse.Namespace, query: str) -> subprocess.CompletedProcess[str]:
-    command = mysql_base_command(args) + ["--execute", query]
+def run_mysql_query(args: argparse.Namespace, database_name: str, query: str) -> subprocess.CompletedProcess[str]:
+    command = mysql_base_command(args, database_name) + ["--execute", query]
     return subprocess.run(
         command,
         check=True,
@@ -176,8 +233,8 @@ def run_mysql_query(args: argparse.Namespace, query: str) -> subprocess.Complete
     )
 
 
-def stream_mysql_query(args: argparse.Namespace, query: str) -> subprocess.Popen[str]:
-    command = mysql_base_command(args) + ["--quick", "--raw", "--execute", query]
+def stream_mysql_query(args: argparse.Namespace, database_name: str, query: str) -> subprocess.Popen[str]:
+    command = mysql_base_command(args, database_name) + ["--quick", "--raw", "--execute", query]
     return subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -192,27 +249,27 @@ def mysql_lines(result: subprocess.CompletedProcess[str]) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
-def get_mysql_object_names(args: argparse.Namespace, table_type: str) -> list[str]:
+def get_mysql_object_names(args: argparse.Namespace, database_name: str, table_type: str) -> list[str]:
     query = (
         "SELECT TABLE_NAME "
         "FROM information_schema.TABLES "
-        f"WHERE TABLE_SCHEMA = {mysql_string_literal(args.database)} "
+        f"WHERE TABLE_SCHEMA = {mysql_string_literal(database_name)} "
         f"AND TABLE_TYPE = {mysql_string_literal(table_type)} "
         "ORDER BY TABLE_NAME"
     )
-    return mysql_lines(run_mysql_query(args, query))
+    return mysql_lines(run_mysql_query(args, database_name, query))
 
 
-def get_mysql_columns(args: argparse.Namespace, table_name: str) -> list[dict[str, str]]:
+def get_mysql_columns(args: argparse.Namespace, database_name: str, table_name: str) -> list[dict[str, str]]:
     query = (
         "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE "
         "FROM information_schema.COLUMNS "
-        f"WHERE TABLE_SCHEMA = {mysql_string_literal(args.database)} "
+        f"WHERE TABLE_SCHEMA = {mysql_string_literal(database_name)} "
         f"AND TABLE_NAME = {mysql_string_literal(table_name)} "
         "ORDER BY ORDINAL_POSITION"
     )
     columns: list[dict[str, str]] = []
-    for line in mysql_lines(run_mysql_query(args, query)):
+    for line in mysql_lines(run_mysql_query(args, database_name, query)):
         column_name, data_type, is_nullable = line.split("\t")
         columns.append(
             {
@@ -238,11 +295,6 @@ def sqlite_type_for_mysql(mysql_type: str) -> str:
     return "TEXT"
 
 
-def table_row_count(args: argparse.Namespace, table_name: str) -> int:
-    query = f"SELECT COUNT(*) FROM {mysql_identifier(table_name)}"
-    return int(run_mysql_query(args, query).stdout.strip() or "0")
-
-
 def create_sqlite_table(
     sqlite_conn: sqlite3.Connection,
     table_name: str,
@@ -262,6 +314,7 @@ def create_sqlite_table(
 
 def iter_mysql_json_rows(
     args: argparse.Namespace,
+    database_name: str,
     table_name: str,
     columns: list[dict[str, str]],
 ):
@@ -274,7 +327,7 @@ def iter_mysql_json_rows(
             select_parts.append(column_ref)
 
     query = f"SELECT JSON_ARRAY({', '.join(select_parts)}) FROM {mysql_identifier(table_name)}"
-    process = stream_mysql_query(args, query)
+    process = stream_mysql_query(args, database_name, query)
 
     assert process.stdout is not None
     assert process.stderr is not None
@@ -306,20 +359,22 @@ def normalize_mysql_row(row: list[object], columns: list[dict[str, str]]) -> tup
 def copy_table_to_sqlite(
     args: argparse.Namespace,
     sqlite_conn: sqlite3.Connection,
-    table_name: str,
+    database_name: str,
+    source_table_name: str,
+    destination_table_name: str,
     chunk_size: int,
 ) -> int:
-    columns = get_mysql_columns(args, table_name)
+    columns = get_mysql_columns(args, database_name, source_table_name)
     if not columns:
-        raise RuntimeError(f"No columns found for MySQL object '{table_name}'.")
+        raise RuntimeError(f"No columns found for MySQL object '{database_name}.{source_table_name}'.")
 
-    create_sqlite_table(sqlite_conn, table_name, columns)
+    create_sqlite_table(sqlite_conn, destination_table_name, columns)
     placeholders = ", ".join(["?"] * len(columns))
-    insert_sql = f"INSERT INTO {sqlite_identifier(table_name)} VALUES ({placeholders})"
+    insert_sql = f"INSERT INTO {sqlite_identifier(destination_table_name)} VALUES ({placeholders})"
 
     batch: list[tuple[object, ...]] = []
     rows_written = 0
-    for row in iter_mysql_json_rows(args, table_name, columns):
+    for row in iter_mysql_json_rows(args, database_name, source_table_name, columns):
         batch.append(normalize_mysql_row(row, columns))
         if len(batch) >= chunk_size:
             sqlite_conn.executemany(insert_sql, batch)
@@ -333,32 +388,180 @@ def copy_table_to_sqlite(
     return rows_written
 
 
+def collect_table_tasks(args: argparse.Namespace) -> list[tuple[str, str, str]]:
+    prefix_database = len(args.databases) > 1
+    table_tasks: list[tuple[str, str, str]] = []
+    for database_name in args.databases:
+        object_names = get_mysql_object_names(args, database_name, "BASE TABLE")
+        if args.include_views:
+            object_names.extend(get_mysql_object_names(args, database_name, "VIEW"))
+        object_names = sorted(dict.fromkeys(object_names))
+
+        if not object_names:
+            raise RuntimeError(f"No tables found in MySQL database '{database_name}'.")
+
+        for object_name in object_names:
+            table_tasks.append(
+                (
+                    database_name,
+                    object_name,
+                    sqlite_table_name(
+                        database_name,
+                        object_name,
+                        prefix_database=prefix_database,
+                    ),
+                )
+            )
+    return table_tasks
+
+
+def table_task_batches(
+    table_tasks: list[tuple[str, str, str]],
+    workers: int,
+) -> list[list[tuple[str, str, str]]]:
+    target_batch_count = max(1, workers * 4)
+    batch_size = max(1, min(25, (len(table_tasks) + target_batch_count - 1) // target_batch_count))
+    return [table_tasks[index:index + batch_size] for index in range(0, len(table_tasks), batch_size)]
+
+
+def copy_table_batch_to_shard(
+    args: argparse.Namespace,
+    shard_path: str,
+    table_tasks: list[tuple[str, str, str]],
+) -> list[tuple[str, str, str, int]]:
+    copied_tables: list[tuple[str, str, str, int]] = []
+    with managed_sqlite_connection(Path(shard_path)) as sqlite_conn:
+        for database_name, source_table_name, destination_table_name in table_tasks:
+            rows_written = copy_table_to_sqlite(
+                args,
+                sqlite_conn,
+                database_name,
+                source_table_name,
+                destination_table_name,
+                args.chunk_size,
+            )
+            copied_tables.append(
+                (
+                    database_name,
+                    source_table_name,
+                    destination_table_name,
+                    rows_written,
+                )
+            )
+        sqlite_conn.commit()
+    return copied_tables
+
+
+def merge_sqlite_shard(sqlite_conn: sqlite3.Connection, shard_path: Path) -> None:
+    sqlite_conn.execute("ATTACH DATABASE ? AS shard_db", (str(shard_path),))
+    shard_tables = sqlite_conn.execute(
+        "SELECT name, sql FROM shard_db.sqlite_master "
+        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+        "ORDER BY name"
+    ).fetchall()
+    for table_name, create_sql in shard_tables:
+        sqlite_conn.execute(create_sql)
+        sqlite_conn.execute(
+            f"INSERT INTO {sqlite_identifier(table_name)} "
+            f"SELECT * FROM shard_db.{sqlite_identifier(table_name)}"
+        )
+    sqlite_conn.commit()
+    sqlite_conn.execute("DETACH DATABASE shard_db")
+
+
+def build_sqlite_database_serial(
+    args: argparse.Namespace,
+    sqlite_path: Path,
+    table_tasks: list[tuple[str, str, str]],
+) -> list[str]:
+    copied_objects: list[str] = []
+    with managed_sqlite_connection(sqlite_path) as sqlite_conn:
+        with tqdm(
+            total=len(table_tasks),
+            desc="Building SQLite",
+            unit="table",
+            dynamic_ncols=True,
+        ) as progress_bar:
+            for database_name, source_table_name, destination_table_name in table_tasks:
+                copy_table_to_sqlite(
+                    args,
+                    sqlite_conn,
+                    database_name,
+                    source_table_name,
+                    destination_table_name,
+                    args.chunk_size,
+                )
+                copied_objects.append(destination_table_name)
+                progress_bar.update(1)
+                progress_bar.set_postfix_str(
+                    f"{database_name}.{source_table_name}",
+                    refresh=False,
+                )
+        sqlite_conn.commit()
+    return copied_objects
+
+
+def build_sqlite_database_parallel(
+    args: argparse.Namespace,
+    sqlite_path: Path,
+    table_tasks: list[tuple[str, str, str]],
+) -> list[str]:
+    copied_objects: list[str] = []
+    worker_count = min(args.workers, len(table_tasks))
+    batches = table_task_batches(table_tasks, worker_count)
+    print(
+        f"Copying {len(table_tasks):,} tables with {worker_count} worker "
+        f"processes across {len(batches):,} shard batches"
+    )
+    with tempfile.TemporaryDirectory(prefix=f"{sqlite_path.stem}_parts_", dir=str(args.output_dir)) as temp_dir:
+        # SQLite only supports one writer at a time, so workers write to shard
+        # databases in parallel and the parent merges those shards serially.
+        with managed_sqlite_connection(sqlite_path) as sqlite_conn:
+            with tqdm(
+                total=len(table_tasks),
+                desc="Building SQLite",
+                unit="table",
+                dynamic_ncols=True,
+            ) as progress_bar:
+                with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                    futures = {}
+                    for batch_index, batch in enumerate(batches):
+                        shard_path = Path(temp_dir) / f"shard_{batch_index:05d}.sqlite"
+                        future = executor.submit(copy_table_batch_to_shard, args, str(shard_path), batch)
+                        futures[future] = shard_path
+
+                    for future in as_completed(futures):
+                        shard_path = futures[future]
+                        copied_batch = future.result()
+                        merge_sqlite_shard(sqlite_conn, shard_path)
+                        shard_path.unlink(missing_ok=True)
+                        copied_objects.extend(
+                            destination_table_name
+                            for _, _, destination_table_name, _ in copied_batch
+                        )
+                        progress_bar.update(len(copied_batch))
+                        if copied_batch:
+                            last_database_name, last_source_table_name, _, _ = copied_batch[-1]
+                            progress_bar.set_postfix_str(
+                                f"{last_database_name}.{last_source_table_name}",
+                                refresh=False,
+                            )
+            sqlite_conn.commit()
+    return copied_objects
+
+
 def build_sqlite_database(args: argparse.Namespace, sqlite_path: Path) -> list[str]:
-    print(f"Converting MySQL database '{args.database}' to SQLite: {sqlite_path}")
+    print(f"Converting MySQL databases {', '.join(args.databases)} to SQLite: {sqlite_path}")
     if sqlite_path.exists():
         sqlite_path.unlink()
 
-    object_names = get_mysql_object_names(args, "BASE TABLE")
-    if args.include_views:
-        object_names.extend(get_mysql_object_names(args, "VIEW"))
-    object_names = sorted(dict.fromkeys(object_names))
+    table_tasks = collect_table_tasks(args)
+    print(f"Discovered {len(table_tasks):,} tables/views to copy")
 
-    if not object_names:
-        raise RuntimeError(f"No tables found in MySQL database '{args.database}'.")
+    if args.workers <= 1 or len(table_tasks) <= 1:
+        return build_sqlite_database_serial(args, sqlite_path, table_tasks)
 
-    copied_objects: list[str] = []
-    with sqlite3.connect(sqlite_path) as sqlite_conn:
-        sqlite_conn.execute("PRAGMA journal_mode = DELETE;")
-        sqlite_conn.execute("PRAGMA synchronous = OFF;")
-        for object_name in object_names:
-            expected_rows = table_row_count(args, object_name)
-            print(f"Copying {object_name} ({expected_rows:,} rows expected)")
-            rows_written = copy_table_to_sqlite(args, sqlite_conn, object_name, args.chunk_size)
-            print(f"Finished {object_name}: {rows_written:,} rows written")
-            copied_objects.append(object_name)
-        sqlite_conn.commit()
-
-    return copied_objects
+    return build_sqlite_database_parallel(args, sqlite_path, table_tasks)
 
 
 def sha256_file(path: Path) -> str:
@@ -426,6 +629,9 @@ def upload_file(args: argparse.Namespace, local_path: Path, remote_path: PurePos
 
 def main() -> None:
     args = parse_args()
+    args.databases = selected_databases(args)
+    if args.workers < 1:
+        raise ValueError("--workers must be at least 1.")
 
     ensure_command_available("tailscale")
     ensure_exists(args.mysql_client_path, "mysql client")
@@ -440,7 +646,7 @@ def main() -> None:
     remote_name = args.remote_name or sqlite_filename
     remote_path = PurePosixPath(args.remote_dir) / remote_name
 
-    print(f"MySQL source: {args.user}@{args.host}:{args.port}/{args.database}")
+    print(f"MySQL sources: {args.user}@{args.host}:{args.port} ({', '.join(args.databases)})")
     print(f"Local SQLite output: {sqlite_path}")
     print(f"Remote target: {args.ssh_target}:{remote_path}")
 
