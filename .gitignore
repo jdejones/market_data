@@ -3,3 +3,5 @@
 api_keys.py
 working_notebook.ipynb
 __pycache__/
+
+db_exports/
