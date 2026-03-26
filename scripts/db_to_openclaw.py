@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from shlex import quote as shell_quote
+import time
 
 try:
     from market_data import tqdm
@@ -31,6 +32,14 @@ DEFAULT_REMOTE_DIR = PurePosixPath("/home/openclaw/.openclaw/workspace/data_tran
 DEFAULT_DATABASES = ("stocks", "results_finvizsearch", "news")
 DEFAULT_WORKERS = max(1, min(4, os.cpu_count() or 1))
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+SSH_COMMON_OPTIONS = (
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ConnectTimeout=15",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,6 +124,15 @@ def parse_args() -> argparse.Namespace:
         "--remote-name",
         default="",
         help="Optional remote filename. Defaults to the local SQLite filename.",
+    )
+    parser.add_argument(
+        "--upload-transport",
+        default="auto",
+        choices=("auto", "ssh-scp", "tailscale-ssh"),
+        help=(
+            "Upload method to use. 'auto' tries standard ssh/scp first and "
+            "falls back to tailscale ssh."
+        ),
     )
     parser.add_argument(
         "--skip-upload",
@@ -577,7 +595,154 @@ def run_tailscale_ssh(args: argparse.Namespace, remote_command: str, *, capture_
     return subprocess.run(command, check=True, text=True, capture_output=capture_output)
 
 
-def upload_file(args: argparse.Namespace, local_path: Path, remote_path: PurePosixPath) -> None:
+def run_ssh_command(args: argparse.Namespace, remote_command: str, *, capture_output: bool = False) -> subprocess.CompletedProcess:
+    command = ["ssh", *SSH_COMMON_OPTIONS, args.ssh_target, remote_command]
+    return subprocess.run(command, check=True, text=True, capture_output=capture_output)
+
+
+def run_remote_command(
+    args: argparse.Namespace,
+    remote_command: str,
+    *,
+    transport: str,
+    capture_output: bool = False,
+) -> subprocess.CompletedProcess:
+    if transport == "ssh-scp":
+        return run_ssh_command(args, remote_command, capture_output=capture_output)
+    if transport == "tailscale-ssh":
+        return run_tailscale_ssh(args, remote_command, capture_output=capture_output)
+    raise ValueError(f"Unsupported upload transport: {transport}")
+
+
+def available_upload_transports(args: argparse.Namespace) -> list[str]:
+    if args.upload_transport == "auto":
+        return ["ssh-scp", "tailscale-ssh"]
+    return [args.upload_transport]
+
+
+def summarize_called_process_error(error: subprocess.CalledProcessError) -> str:
+    output_chunks = []
+    if error.stdout:
+        output_chunks.append(error.stdout.strip())
+    if error.stderr:
+        output_chunks.append(error.stderr.strip())
+    output_text = "\n".join(chunk for chunk in output_chunks if chunk)
+    if output_text:
+        return output_text
+    return f"exit code {error.returncode}"
+
+
+def is_tailscale_additional_check_error(error: subprocess.CalledProcessError) -> bool:
+    details = summarize_called_process_error(error).lower()
+    return (
+        "requires an additional check" in details
+        or "failed to fetch next ssh action" in details
+    )
+
+
+def ensure_upload_tools_available(args: argparse.Namespace) -> None:
+    transports = available_upload_transports(args)
+    if "ssh-scp" in transports:
+        ensure_command_available("ssh")
+        ensure_command_available("scp")
+    if "tailscale-ssh" in transports:
+        ensure_command_available("tailscale")
+
+
+def select_upload_transport(args: argparse.Namespace, remote_dir: PurePosixPath) -> str:
+    preflight_command = (
+        f"mkdir -p {shell_quote(remote_dir.as_posix())} "
+        f"&& test -d {shell_quote(remote_dir.as_posix())}"
+    )
+    failures: list[tuple[str, str]] = []
+
+    for transport in available_upload_transports(args):
+        try:
+            print(f"Checking remote access via {transport}")
+            run_remote_command(args, preflight_command, transport=transport, capture_output=True)
+            return transport
+        except subprocess.CalledProcessError as error:
+            detail = summarize_called_process_error(error)
+            failures.append((transport, detail))
+            if transport == "tailscale-ssh" and is_tailscale_additional_check_error(error):
+                print("Tailscale SSH requires an interactive approval check; trying the next upload transport.")
+            else:
+                print(f"{transport} preflight failed: {detail}")
+
+    failure_text = "\n".join(f"- {transport}: {detail}" for transport, detail in failures)
+    raise RuntimeError(
+        "Unable to establish remote upload access before starting the export.\n"
+        f"{failure_text}"
+    )
+
+
+def verify_and_finalize_remote_upload(
+    args: argparse.Namespace,
+    local_path: Path,
+    remote_path: PurePosixPath,
+    remote_temp_path: PurePosixPath,
+    *,
+    transport: str,
+) -> None:
+    local_hash = sha256_file(local_path)
+    remote_hash_result = run_remote_command(
+        args,
+        f"sha256sum {shell_quote(remote_temp_path.as_posix())}",
+        transport=transport,
+        capture_output=True,
+    )
+    remote_hash = remote_hash_result.stdout.strip().split()[0]
+    if remote_hash != local_hash:
+        raise RuntimeError(
+            "SHA256 mismatch after upload "
+            f"(local={local_hash}, remote={remote_hash}, remote_path={remote_temp_path})"
+        )
+
+    run_remote_command(
+        args,
+        f"mv {shell_quote(remote_temp_path.as_posix())} {shell_quote(remote_path.as_posix())}",
+        transport=transport,
+    )
+    print(f"Upload verified and finalized at {remote_path}")
+
+
+def upload_file_via_ssh_scp(
+    args: argparse.Namespace,
+    local_path: Path,
+    remote_path: PurePosixPath,
+) -> None:
+    remote_dir = remote_path.parent
+    remote_temp_path = PurePosixPath(f"{remote_path}.partial")
+
+    print(f"Ensuring remote directory exists: {remote_dir}")
+    run_ssh_command(args, f"mkdir -p {shell_quote(remote_dir.as_posix())}")
+
+    print(f"Uploading SQLite database to {args.ssh_target}:{remote_path} via scp")
+    remote_spec = f"{args.ssh_target}:{remote_temp_path.as_posix()}"
+    upload_command = ["scp", *SSH_COMMON_OPTIONS, str(local_path), remote_spec]
+    upload_result = subprocess.run(upload_command, check=False, text=True, capture_output=True)
+    if upload_result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            upload_result.returncode,
+            upload_command,
+            output=upload_result.stdout,
+            stderr=upload_result.stderr,
+        )
+
+    verify_and_finalize_remote_upload(
+        args,
+        local_path,
+        remote_path,
+        remote_temp_path,
+        transport="ssh-scp",
+    )
+
+
+def upload_file_via_tailscale_ssh(
+    args: argparse.Namespace,
+    local_path: Path,
+    remote_path: PurePosixPath,
+) -> None:
     remote_dir = remote_path.parent
     remote_temp_path = PurePosixPath(f"{remote_path}.partial")
 
@@ -607,33 +772,45 @@ def upload_file(args: argparse.Namespace, local_path: Path, remote_path: PurePos
             if return_code != 0:
                 raise subprocess.CalledProcessError(return_code, upload_command)
 
-    local_hash = sha256_file(local_path)
-    remote_hash_result = run_tailscale_ssh(
+    verify_and_finalize_remote_upload(
         args,
-        f"sha256sum {shell_quote(remote_temp_path.as_posix())}",
-        capture_output=True,
+        local_path,
+        remote_path,
+        remote_temp_path,
+        transport="tailscale-ssh",
     )
-    remote_hash = remote_hash_result.stdout.strip().split()[0]
-    if remote_hash != local_hash:
-        raise RuntimeError(
-            "SHA256 mismatch after upload "
-            f"(local={local_hash}, remote={remote_hash}, remote_path={remote_temp_path})"
-        )
 
-    run_tailscale_ssh(
-        args,
-        f"mv {shell_quote(remote_temp_path.as_posix())} {shell_quote(remote_path.as_posix())}",
-    )
-    print(f"Upload verified and finalized at {remote_path}")
 
+def upload_file(args: argparse.Namespace, local_path: Path, remote_path: PurePosixPath, *, transport: str) -> None:
+    if transport == "ssh-scp":
+        upload_file_via_ssh_scp(args, local_path, remote_path)
+        return
+    if transport == "tailscale-ssh":
+        upload_file_via_tailscale_ssh(args, local_path, remote_path)
+        return
+    raise ValueError(f"Unsupported upload transport: {transport}")
+
+def disconnect_vpn():
+    subprocess.run(r'cd /d "C:\Program Files\NordVPN" && nordvpn -d', 
+                shell=True, 
+                check=True)
+    print("VPN disconnected")
+
+def connect_vpn():
+    subprocess.run(r'cd /d "C:\Program Files\NordVPN" && nordvpn -c', 
+                shell=True, 
+                check=True)
+    print("VPN reconnected")
 
 def main() -> None:
+    disconnect_vpn()
+    time.sleep(5)
+    
     args = parse_args()
     args.databases = selected_databases(args)
     if args.workers < 1:
         raise ValueError("--workers must be at least 1.")
 
-    ensure_command_available("tailscale")
     ensure_exists(args.mysql_client_path, "mysql client")
     if not args.skip_mysqldump:
         ensure_exists(args.mysqldump_path, "mysqldump")
@@ -650,6 +827,12 @@ def main() -> None:
     print(f"Local SQLite output: {sqlite_path}")
     print(f"Remote target: {args.ssh_target}:{remote_path}")
 
+    upload_transport = ""
+    if not args.skip_upload:
+        ensure_upload_tools_available(args)
+        upload_transport = select_upload_transport(args, remote_path.parent)
+        print(f"Using upload transport: {upload_transport}")
+
     if not args.skip_mysqldump:
         create_mysql_dump(args, sql_dump_path)
         print(f"Raw SQL backup saved to: {sql_dump_path}")
@@ -661,9 +844,9 @@ def main() -> None:
         print("Upload skipped by request.")
         return
 
-    upload_file(args, sqlite_path, remote_path)
+    upload_file(args, sqlite_path, remote_path, transport=upload_transport)
     print("Database transfer complete.")
-
+    connect_vpn()
 
 if __name__ == "__main__":
     main()
