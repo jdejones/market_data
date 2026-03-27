@@ -357,7 +357,12 @@ def iter_mysql_json_rows(
     stderr = process.stderr.read()
     return_code = process.wait()
     if return_code != 0:
-        raise subprocess.CalledProcessError(return_code, process.args, output=None, stderr=stderr)
+        # raise subprocess.CalledProcessError(return_code, process.args, output=None, stderr=stderr)
+        raise RuntimeError(
+        f"MySQL query failed for {database_name}.{table_name}\n"
+        f"query: {query}\n"
+        f"stderr: {stderr or '<empty>'}"
+        )
 
 
 def normalize_mysql_row(row: list[object], columns: list[dict[str, str]]) -> tuple[object, ...]:
@@ -790,6 +795,19 @@ def upload_file(args: argparse.Namespace, local_path: Path, remote_path: PurePos
         return
     raise ValueError(f"Unsupported upload transport: {transport}")
 
+
+def cleanup_local_artifacts(paths: list[tuple[str, Path]]) -> None:
+    for label, path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            print(f"Warning: unable to delete local {label.lower()} at {path}: {error}")
+        else:
+            print(f"Deleted local {label.lower()}: {path}")
+
+
 def disconnect_vpn():
     subprocess.run(r'cd /d "C:\Program Files\NordVPN" && nordvpn -d', 
                 shell=True, 
@@ -804,7 +822,7 @@ def connect_vpn():
 
 def main() -> None:
     disconnect_vpn()
-    time.sleep(5)
+    time.sleep(10)
     
     args = parse_args()
     args.databases = selected_databases(args)
@@ -846,6 +864,12 @@ def main() -> None:
 
     upload_file(args, sqlite_path, remote_path, transport=upload_transport)
     print("Database transfer complete.")
+    cleanup_local_artifacts(
+        [
+            ("SQLite export", sqlite_path),
+            ("MySQL dump", sql_dump_path),
+        ]
+    )
     connect_vpn()
 
 if __name__ == "__main__":
