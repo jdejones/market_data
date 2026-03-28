@@ -711,6 +711,26 @@ def verify_and_finalize_remote_upload(
     print(f"Upload verified and finalized at {remote_path}")
 
 
+def cleanup_remote_partial_upload(
+    args: argparse.Namespace,
+    remote_temp_path: PurePosixPath,
+    *,
+    transport: str,
+) -> None:
+    try:
+        run_remote_command(
+            args,
+            f"rm -f {shell_quote(remote_temp_path.as_posix())}",
+            transport=transport,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = summarize_called_process_error(error)
+        print(f"Warning: unable to delete remote partial upload at {remote_temp_path}: {detail}")
+    else:
+        print(f"Deleted remote partial upload: {remote_temp_path}")
+
+
 def upload_file_via_ssh_scp(
     args: argparse.Namespace,
     local_path: Path,
@@ -725,22 +745,26 @@ def upload_file_via_ssh_scp(
     print(f"Uploading SQLite database to {args.ssh_target}:{remote_path} via scp")
     remote_spec = f"{args.ssh_target}:{remote_temp_path.as_posix()}"
     upload_command = ["scp", *SSH_COMMON_OPTIONS, str(local_path), remote_spec]
-    upload_result = subprocess.run(upload_command, check=False, text=True, capture_output=True)
-    if upload_result.returncode != 0:
-        raise subprocess.CalledProcessError(
-            upload_result.returncode,
-            upload_command,
-            output=upload_result.stdout,
-            stderr=upload_result.stderr,
-        )
+    try:
+        upload_result = subprocess.run(upload_command, check=False, text=True, capture_output=True)
+        if upload_result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                upload_result.returncode,
+                upload_command,
+                output=upload_result.stdout,
+                stderr=upload_result.stderr,
+            )
 
-    verify_and_finalize_remote_upload(
-        args,
-        local_path,
-        remote_path,
-        remote_temp_path,
-        transport="ssh-scp",
-    )
+        verify_and_finalize_remote_upload(
+            args,
+            local_path,
+            remote_path,
+            remote_temp_path,
+            transport="ssh-scp",
+        )
+    except Exception:
+        cleanup_remote_partial_upload(args, remote_temp_path, transport="ssh-scp")
+        raise
 
 
 def upload_file_via_tailscale_ssh(
@@ -764,26 +788,30 @@ def upload_file_via_tailscale_ssh(
 
     bytes_sent = 0
     total_size = local_path.stat().st_size
-    with local_path.open("rb") as source_handle:
-        with subprocess.Popen(upload_command, stdin=subprocess.PIPE) as process:
-            assert process.stdin is not None
-            for chunk in iter(lambda: source_handle.read(UPLOAD_CHUNK_SIZE), b""):
-                process.stdin.write(chunk)
-                bytes_sent += len(chunk)
-                progress = (bytes_sent / total_size) * 100 if total_size else 100.0
-                print(f"Uploaded {bytes_sent:,} / {total_size:,} bytes ({progress:.1f}%)")
-            process.stdin.close()
-            return_code = process.wait()
-            if return_code != 0:
-                raise subprocess.CalledProcessError(return_code, upload_command)
+    try:
+        with local_path.open("rb") as source_handle:
+            with subprocess.Popen(upload_command, stdin=subprocess.PIPE) as process:
+                assert process.stdin is not None
+                for chunk in iter(lambda: source_handle.read(UPLOAD_CHUNK_SIZE), b""):
+                    process.stdin.write(chunk)
+                    bytes_sent += len(chunk)
+                    progress = (bytes_sent / total_size) * 100 if total_size else 100.0
+                    print(f"Uploaded {bytes_sent:,} / {total_size:,} bytes ({progress:.1f}%)")
+                process.stdin.close()
+                return_code = process.wait()
+                if return_code != 0:
+                    raise subprocess.CalledProcessError(return_code, upload_command)
 
-    verify_and_finalize_remote_upload(
-        args,
-        local_path,
-        remote_path,
-        remote_temp_path,
-        transport="tailscale-ssh",
-    )
+        verify_and_finalize_remote_upload(
+            args,
+            local_path,
+            remote_path,
+            remote_temp_path,
+            transport="tailscale-ssh",
+        )
+    except Exception:
+        cleanup_remote_partial_upload(args, remote_temp_path, transport="tailscale-ssh")
+        raise
 
 
 def upload_file(args: argparse.Namespace, local_path: Path, remote_path: PurePosixPath, *, transport: str) -> None:
@@ -821,56 +849,71 @@ def connect_vpn():
     print("VPN reconnected")
 
 def main() -> None:
-    disconnect_vpn()
-    time.sleep(10)
-    
-    args = parse_args()
-    args.databases = selected_databases(args)
-    if args.workers < 1:
-        raise ValueError("--workers must be at least 1.")
+    vpn_disconnected = False
+    cleanup_local_on_success = False
+    local_artifacts: list[tuple[str, Path]] = []
 
-    ensure_exists(args.mysql_client_path, "mysql client")
-    if not args.skip_mysqldump:
-        ensure_exists(args.mysqldump_path, "mysqldump")
+    try:
+        disconnect_vpn()
+        vpn_disconnected = True
+        time.sleep(10)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+        args = parse_args()
+        args.databases = selected_databases(args)
+        if args.workers < 1:
+            raise ValueError("--workers must be at least 1.")
 
-    sqlite_filename = local_sqlite_name(args)
-    sqlite_path = args.output_dir / sqlite_filename
-    sql_dump_path = args.output_dir / f"{Path(sqlite_filename).stem}.sql"
-    remote_name = args.remote_name or sqlite_filename
-    remote_path = PurePosixPath(args.remote_dir) / remote_name
+        ensure_exists(args.mysql_client_path, "mysql client")
+        if not args.skip_mysqldump:
+            ensure_exists(args.mysqldump_path, "mysqldump")
 
-    print(f"MySQL sources: {args.user}@{args.host}:{args.port} ({', '.join(args.databases)})")
-    print(f"Local SQLite output: {sqlite_path}")
-    print(f"Remote target: {args.ssh_target}:{remote_path}")
+        args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    upload_transport = ""
-    if not args.skip_upload:
-        ensure_upload_tools_available(args)
-        upload_transport = select_upload_transport(args, remote_path.parent)
-        print(f"Using upload transport: {upload_transport}")
+        sqlite_filename = local_sqlite_name(args)
+        sqlite_path = args.output_dir / sqlite_filename
+        sql_dump_path = args.output_dir / f"{Path(sqlite_filename).stem}.sql"
+        remote_name = args.remote_name or sqlite_filename
+        remote_path = PurePosixPath(args.remote_dir) / remote_name
 
-    if not args.skip_mysqldump:
-        create_mysql_dump(args, sql_dump_path)
-        print(f"Raw SQL backup saved to: {sql_dump_path}")
+        print(f"MySQL sources: {args.user}@{args.host}:{args.port} ({', '.join(args.databases)})")
+        print(f"Local SQLite output: {sqlite_path}")
+        print(f"Remote target: {args.ssh_target}:{remote_path}")
 
-    copied_objects = build_sqlite_database(args, sqlite_path)
-    print(f"SQLite export complete. Objects copied: {len(copied_objects)}")
+        upload_transport = ""
+        if not args.skip_upload:
+            ensure_upload_tools_available(args)
+            upload_transport = select_upload_transport(args, remote_path.parent)
+            print(f"Using upload transport: {upload_transport}")
+            cleanup_local_on_success = True
 
-    if args.skip_upload:
-        print("Upload skipped by request.")
-        return
+        if not args.skip_mysqldump:
+            local_artifacts.append(("MySQL dump", sql_dump_path))
+            create_mysql_dump(args, sql_dump_path)
+            print(f"Raw SQL backup saved to: {sql_dump_path}")
 
-    upload_file(args, sqlite_path, remote_path, transport=upload_transport)
-    print("Database transfer complete.")
-    cleanup_local_artifacts(
-        [
-            ("SQLite export", sqlite_path),
-            ("MySQL dump", sql_dump_path),
-        ]
-    )
-    connect_vpn()
+        local_artifacts.append(("SQLite export", sqlite_path))
+        copied_objects = build_sqlite_database(args, sqlite_path)
+        print(f"SQLite export complete. Objects copied: {len(copied_objects)}")
+
+        if args.skip_upload:
+            print("Upload skipped by request.")
+            return
+
+        upload_file(args, sqlite_path, remote_path, transport=upload_transport)
+        print("Database transfer complete.")
+    finally:
+        encountered_error = sys.exc_info()[0] is not None
+        if local_artifacts and (cleanup_local_on_success or encountered_error):
+            cleanup_local_artifacts(local_artifacts)
+
+        if vpn_disconnected:
+            try:
+                connect_vpn()
+            except Exception as error:
+                if encountered_error:
+                    print(f"Warning: unable to reconnect VPN: {error}")
+                else:
+                    raise
 
 if __name__ == "__main__":
     main()
