@@ -32,6 +32,19 @@ DEFAULT_REMOTE_DIR = PurePosixPath("/home/openclaw/.openclaw/workspace/data_tran
 DEFAULT_DATABASES = ("stocks", "results_finvizsearch", "news")
 DEFAULT_WORKERS = max(1, min(4, os.cpu_count() or 1))
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+TABLE_CHANGE_RETRY_ATTEMPTS = 3
+TABLE_CHANGE_RETRY_DELAY_SECONDS = 0.5
+TABLE_CHANGE_ERROR_MARKERS = (
+    "table definition has changed",
+    "please retry transaction",
+    "doesn't exist",
+    "unknown table",
+    "unknown column",
+    "no columns found for mysql object",
+    "error 1412",
+    "error 1146",
+    "error 1054",
+)
 SSH_COMMON_OPTIONS = (
     "-o",
     "BatchMode=yes",
@@ -267,6 +280,27 @@ def mysql_lines(result: subprocess.CompletedProcess[str]) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def format_called_process_error(error: subprocess.CalledProcessError) -> str:
+    details = []
+    if error.stderr:
+        details.append(error.stderr.strip())
+    if error.output:
+        details.append(error.output.strip())
+    if details:
+        return "\n".join(detail for detail in details if detail)
+    return str(error)
+
+
+def is_table_change_error(error: Exception) -> bool:
+    if isinstance(error, subprocess.CalledProcessError):
+        detail = format_called_process_error(error)
+    else:
+        detail = str(error)
+
+    lowered = detail.lower()
+    return any(marker in lowered for marker in TABLE_CHANGE_ERROR_MARKERS)
+
+
 def get_mysql_object_names(args: argparse.Namespace, database_name: str, table_type: str) -> list[str]:
     query = (
         "SELECT TABLE_NAME "
@@ -357,12 +391,7 @@ def iter_mysql_json_rows(
     stderr = process.stderr.read()
     return_code = process.wait()
     if return_code != 0:
-        # raise subprocess.CalledProcessError(return_code, process.args, output=None, stderr=stderr)
-        raise RuntimeError(
-        f"MySQL query failed for {database_name}.{table_name}\n"
-        f"query: {query}\n"
-        f"stderr: {stderr or '<empty>'}"
-        )
+        raise subprocess.CalledProcessError(return_code, process.args, output=None, stderr=stderr)
 
 
 def normalize_mysql_row(row: list[object], columns: list[dict[str, str]]) -> tuple[object, ...]:
@@ -411,6 +440,64 @@ def copy_table_to_sqlite(
     return rows_written
 
 
+def drop_partial_sqlite_table(sqlite_conn: sqlite3.Connection, table_name: str) -> None:
+    sqlite_conn.execute(f"DROP TABLE IF EXISTS {sqlite_identifier(table_name)}")
+    sqlite_conn.commit()
+
+
+def copy_table_to_sqlite_with_retries(
+    args: argparse.Namespace,
+    sqlite_conn: sqlite3.Connection,
+    database_name: str,
+    source_table_name: str,
+    destination_table_name: str,
+    chunk_size: int,
+) -> tuple[int | None, str | None]:
+    last_error = ""
+    for attempt in range(1, TABLE_CHANGE_RETRY_ATTEMPTS + 1):
+        try:
+            rows_written = copy_table_to_sqlite(
+                args,
+                sqlite_conn,
+                database_name,
+                source_table_name,
+                destination_table_name,
+                chunk_size,
+            )
+            return rows_written, None
+        except Exception as error:
+            if not is_table_change_error(error):
+                raise
+
+            if isinstance(error, subprocess.CalledProcessError):
+                last_error = format_called_process_error(error)
+            else:
+                last_error = str(error)
+
+            drop_partial_sqlite_table(sqlite_conn, destination_table_name)
+            if attempt < TABLE_CHANGE_RETRY_ATTEMPTS:
+                time.sleep(TABLE_CHANGE_RETRY_DELAY_SECONDS * attempt)
+                continue
+
+            return None, last_error
+
+    return None, last_error
+
+
+def print_skipped_table_summary(skipped_tables: list[tuple[str, str, str]]) -> None:
+    if not skipped_tables:
+        return
+
+    print(f"Skipped {len(skipped_tables):,} tables that changed during export.")
+    preview_limit = 10
+    for database_name, source_table_name, error_message in skipped_tables[:preview_limit]:
+        print(f"Skipped {database_name}.{source_table_name}: {error_message}")
+
+    remaining = len(skipped_tables) - preview_limit
+    if remaining > 0:
+        print(f"... {remaining:,} additional changed tables were skipped.")
+
+
 def collect_table_tasks(args: argparse.Namespace) -> list[tuple[str, str, str]]:
     prefix_database = len(args.databases) > 1
     table_tasks: list[tuple[str, str, str]] = []
@@ -451,11 +538,12 @@ def copy_table_batch_to_shard(
     args: argparse.Namespace,
     shard_path: str,
     table_tasks: list[tuple[str, str, str]],
-) -> list[tuple[str, str, str, int]]:
+) -> tuple[list[tuple[str, str, str, int]], list[tuple[str, str, str]]]:
     copied_tables: list[tuple[str, str, str, int]] = []
+    skipped_tables: list[tuple[str, str, str]] = []
     with managed_sqlite_connection(Path(shard_path)) as sqlite_conn:
         for database_name, source_table_name, destination_table_name in table_tasks:
-            rows_written = copy_table_to_sqlite(
+            rows_written, skip_error = copy_table_to_sqlite_with_retries(
                 args,
                 sqlite_conn,
                 database_name,
@@ -463,6 +551,10 @@ def copy_table_batch_to_shard(
                 destination_table_name,
                 args.chunk_size,
             )
+            if skip_error is not None:
+                skipped_tables.append((database_name, source_table_name, skip_error))
+                continue
+
             copied_tables.append(
                 (
                     database_name,
@@ -472,7 +564,7 @@ def copy_table_batch_to_shard(
                 )
             )
         sqlite_conn.commit()
-    return copied_tables
+    return copied_tables, skipped_tables
 
 
 def merge_sqlite_shard(sqlite_conn: sqlite3.Connection, shard_path: Path) -> None:
@@ -498,6 +590,7 @@ def build_sqlite_database_serial(
     table_tasks: list[tuple[str, str, str]],
 ) -> list[str]:
     copied_objects: list[str] = []
+    skipped_tables: list[tuple[str, str, str]] = []
     with managed_sqlite_connection(sqlite_path) as sqlite_conn:
         with tqdm(
             total=len(table_tasks),
@@ -506,7 +599,7 @@ def build_sqlite_database_serial(
             dynamic_ncols=True,
         ) as progress_bar:
             for database_name, source_table_name, destination_table_name in table_tasks:
-                copy_table_to_sqlite(
+                rows_written, skip_error = copy_table_to_sqlite_with_retries(
                     args,
                     sqlite_conn,
                     database_name,
@@ -514,13 +607,17 @@ def build_sqlite_database_serial(
                     destination_table_name,
                     args.chunk_size,
                 )
-                copied_objects.append(destination_table_name)
+                if skip_error is None:
+                    copied_objects.append(destination_table_name)
+                else:
+                    skipped_tables.append((database_name, source_table_name, skip_error))
                 progress_bar.update(1)
                 progress_bar.set_postfix_str(
                     f"{database_name}.{source_table_name}",
                     refresh=False,
                 )
         sqlite_conn.commit()
+    print_skipped_table_summary(skipped_tables)
     return copied_objects
 
 
@@ -530,6 +627,7 @@ def build_sqlite_database_parallel(
     table_tasks: list[tuple[str, str, str]],
 ) -> list[str]:
     copied_objects: list[str] = []
+    skipped_tables: list[tuple[str, str, str]] = []
     worker_count = min(args.workers, len(table_tasks))
     batches = table_task_batches(table_tasks, worker_count)
     print(
@@ -555,21 +653,29 @@ def build_sqlite_database_parallel(
 
                     for future in as_completed(futures):
                         shard_path = futures[future]
-                        copied_batch = future.result()
+                        copied_batch, skipped_batch = future.result()
                         merge_sqlite_shard(sqlite_conn, shard_path)
                         shard_path.unlink(missing_ok=True)
                         copied_objects.extend(
                             destination_table_name
                             for _, _, destination_table_name, _ in copied_batch
                         )
-                        progress_bar.update(len(copied_batch))
+                        skipped_tables.extend(skipped_batch)
+                        progress_bar.update(len(copied_batch) + len(skipped_batch))
                         if copied_batch:
                             last_database_name, last_source_table_name, _, _ = copied_batch[-1]
                             progress_bar.set_postfix_str(
                                 f"{last_database_name}.{last_source_table_name}",
                                 refresh=False,
                             )
+                        elif skipped_batch:
+                            last_database_name, last_source_table_name, _ = skipped_batch[-1]
+                            progress_bar.set_postfix_str(
+                                f"{last_database_name}.{last_source_table_name}",
+                                refresh=False,
+                            )
             sqlite_conn.commit()
+    print_skipped_table_summary(skipped_tables)
     return copied_objects
 
 
