@@ -37,6 +37,7 @@ TABLE_CHANGE_RETRY_DELAY_SECONDS = 0.5
 TABLE_CHANGE_ERROR_MARKERS = (
     "table definition has changed",
     "please retry transaction",
+    "table or view not found",
     "doesn't exist",
     "unknown table",
     "unknown column",
@@ -44,6 +45,18 @@ TABLE_CHANGE_ERROR_MARKERS = (
     "error 1412",
     "error 1146",
     "error 1054",
+    "error 1356",
+    "error 1109",
+)
+TABLE_CHANGE_FATAL_ERROR_MARKERS = (
+    "access denied",
+    "can't connect to mysql server",
+    "can't connect to local mysql server",
+    "lost connection to mysql server",
+    "server has gone away",
+    "unknown database",
+    "too many connections",
+    "syntax error",
 )
 SSH_COMMON_OPTIONS = (
     "-o",
@@ -217,7 +230,7 @@ def managed_sqlite_connection(sqlite_path: Path):
         sqlite_conn.close()
 
 
-def create_mysql_dump(args: argparse.Namespace, sql_dump_path: Path) -> None:
+def create_mysql_dump(args: argparse.Namespace, sql_dump_path: Path) -> bool:
     print(f"Creating MySQL dump for {', '.join(args.databases)}: {sql_dump_path}")
     command = [
         str(args.mysqldump_path),
@@ -234,8 +247,35 @@ def create_mysql_dump(args: argparse.Namespace, sql_dump_path: Path) -> None:
         "--databases",
         *args.databases,
     ]
-    with sql_dump_path.open("wb") as dump_handle:
-        subprocess.run(command, check=True, stdout=dump_handle)
+    last_error = ""
+    for attempt in range(1, TABLE_CHANGE_RETRY_ATTEMPTS + 1):
+        with sql_dump_path.open("wb") as dump_handle:
+            result = subprocess.run(command, check=False, stdout=dump_handle, stderr=subprocess.PIPE)
+
+        if result.returncode == 0:
+            return True
+
+        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        last_error = stderr.strip() or f"mysqldump exited with code {result.returncode}"
+        sql_dump_path.unlink(missing_ok=True)
+        error = subprocess.CalledProcessError(result.returncode, command, stderr=stderr)
+        if not is_table_change_error(error):
+            raise error
+
+        if attempt < TABLE_CHANGE_RETRY_ATTEMPTS:
+            print(
+                f"MySQL dump attempt {attempt} failed because tables changed during export; retrying."
+            )
+            time.sleep(TABLE_CHANGE_RETRY_DELAY_SECONDS * attempt)
+            continue
+
+        print(
+            "Skipping MySQL dump after repeated table-change errors. "
+            f"Last error: {last_error}"
+        )
+        return False
+
+    return False
 
 
 def mysql_base_command(args: argparse.Namespace, database_name: str) -> list[str]:
@@ -291,14 +331,39 @@ def format_called_process_error(error: subprocess.CalledProcessError) -> str:
     return str(error)
 
 
+def error_command_text(error: subprocess.CalledProcessError) -> str:
+    command = getattr(error, "cmd", "")
+    if isinstance(command, (list, tuple)):
+        return " ".join(str(part) for part in command).lower()
+    return str(command).lower()
+
+
 def is_table_change_error(error: Exception) -> bool:
     if isinstance(error, subprocess.CalledProcessError):
         detail = format_called_process_error(error)
+        command_text = error_command_text(error)
     else:
         detail = str(error)
+        command_text = ""
 
     lowered = detail.lower()
-    return any(marker in lowered for marker in TABLE_CHANGE_ERROR_MARKERS)
+    if any(marker in lowered for marker in TABLE_CHANGE_FATAL_ERROR_MARKERS):
+        return False
+
+    if any(marker in lowered for marker in TABLE_CHANGE_ERROR_MARKERS):
+        return True
+
+    if (
+        isinstance(error, subprocess.CalledProcessError)
+        and "mysql.exe" in command_text
+        and (
+            "information_schema.columns" in command_text
+            or "select json_array(" in command_text
+        )
+    ):
+        return True
+
+    return False
 
 
 def get_mysql_object_names(args: argparse.Namespace, database_name: str, table_type: str) -> list[str]:
@@ -471,6 +536,8 @@ def copy_table_to_sqlite_with_retries(
 
             if isinstance(error, subprocess.CalledProcessError):
                 last_error = format_called_process_error(error)
+                if not last_error:
+                    last_error = str(error)
             else:
                 last_error = str(error)
 
@@ -994,8 +1061,9 @@ def main() -> None:
 
         if not args.skip_mysqldump:
             local_artifacts.append(("MySQL dump", sql_dump_path))
-            create_mysql_dump(args, sql_dump_path)
-            print(f"Raw SQL backup saved to: {sql_dump_path}")
+            dump_created = create_mysql_dump(args, sql_dump_path)
+            if dump_created:
+                print(f"Raw SQL backup saved to: {sql_dump_path}")
 
         local_artifacts.append(("SQLite export", sqlite_path))
         copied_objects = build_sqlite_database(args, sqlite_path)
