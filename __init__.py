@@ -36,6 +36,7 @@ import redis
 import threading
 import gzip
 import argparse
+import sklearn
 
 #Local imports
 from . import fundamentals as fu
