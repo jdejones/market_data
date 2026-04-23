@@ -1560,6 +1560,8 @@ def run_all(symbols):
     mod.technical_short_list_systematic(symbols, save=True)
     mod.regime_watchlists(symbols)
     mod.trends(symbols)
+    mod.uptrend_retracement(symbols)
+    mod.downtrend_retracement(symbols)
     # Price and volume activity
     mod.episodic_pivots(symbols, start_date='2024-01-03')
     mod.price_above_target(symbols)
