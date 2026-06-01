@@ -834,7 +834,7 @@ class Regimes:
         df.loc[floor_ix_list[1:], flr] = floor_list
         df.loc[ceiling_ix_list[1:], clg] = ceiling_list
         df.loc[rg_ch_ix_list, rg_ch] = rg_ch_list
-        df[rg_ch] = df[rg_ch].fillna(method='ffill')
+        df[rg_ch] = df[rg_ch].ffill()
 
         ### regime from last swing
         df.loc[swing_max_ix:,rg] = np.where(ceiling_found, # if ceiling found, highest high since rg_ch_ix
@@ -842,6 +842,6 @@ class Regimes:
                                             np.where(floor_found, # if floor found, lowest low since rg_ch_ix
                                                     np.sign(df[swing_max_ix:][_c].cummin() - rg_ch_list[-1]),
                                                     np.sign(df[swing_max_ix:][_c].rolling(5).mean() - rg_ch_list[-1]))) 
-        df[rg] = df[rg].fillna(method='ffill')
+        df[rg] = df[rg].ffill()
         #df[rg+'_no_fill'] = df[rg]
 
