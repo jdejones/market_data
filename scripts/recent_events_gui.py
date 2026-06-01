@@ -26,7 +26,17 @@ from recent_events import (  # type: ignore[import-not-found]
 
 CONCURRENT_EVENT_COLUMN = "concurrent_event"
 PRIOR_EVENT_COLUMN = "prior_event"
-COLUMNS = (SYMBOL_COLUMN, DATE_COLUMN, CONCURRENT_EVENT_COLUMN, PRIOR_EVENT_COLUMN)
+PERCENT_CHANGE_COLUMN = "percent_change"
+EVENT_SUMMARY_COLUMN = "event_summary"
+NEWS_AGGREGATE_COLUMN = "news_aggregate"
+COLUMNS = (
+    SYMBOL_COLUMN,
+    DATE_COLUMN,
+    CONCURRENT_EVENT_COLUMN,
+    PRIOR_EVENT_COLUMN,
+    EVENT_SUMMARY_COLUMN,
+    NEWS_AGGREGATE_COLUMN,
+)
 
 
 class RecentEventsGUI:
@@ -36,7 +46,7 @@ class RecentEventsGUI:
         self.sort_state: dict[str, bool] = {column: False for column in COLUMNS}
 
         self.root.title("Recent Events")
-        self.root.geometry("900x480")
+        self.root.geometry("1200x520")
 
         self.status_var = tk.StringVar(value="Ready")
         self.symbol_var = tk.StringVar()
@@ -63,52 +73,63 @@ class RecentEventsGUI:
                 text=column,
                 command=lambda col=column: self.sort_by_column(col),
             )
-            width = 130 if column in {SYMBOL_COLUMN, DATE_COLUMN} else 260
+            width = {
+                SYMBOL_COLUMN: 100,
+                DATE_COLUMN: 120,
+                CONCURRENT_EVENT_COLUMN: 220,
+                PRIOR_EVENT_COLUMN: 220,
+                EVENT_SUMMARY_COLUMN: 320,
+                NEWS_AGGREGATE_COLUMN: 520,
+            }[column]
             self.tree.column(column, width=width, anchor=tk.W)
+        self.tree.tag_configure("positive_percent_change", foreground="green")
+        self.tree.tag_configure("negative_percent_change", foreground="red")
 
         y_scroll = ttk.Scrollbar(container, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=y_scroll.set)
+        x_scroll = ttk.Scrollbar(container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
         self.tree.grid(row=0, column=0, columnspan=6, sticky="nsew")
         y_scroll.grid(row=0, column=6, sticky="ns")
+        x_scroll.grid(row=1, column=0, columnspan=6, sticky="ew")
 
-        ttk.Label(container, text="Symbol").grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
+        ttk.Label(container, text="Symbol").grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
         ttk.Entry(container, textvariable=self.symbol_var, width=16).grid(
-            row=2, column=0, sticky="ew", padx=(0, 8)
+            row=3, column=0, sticky="ew", padx=(0, 8)
         )
 
         ttk.Label(container, text="Date (YYYY-MM-DD)").grid(
-            row=1, column=1, sticky=tk.W, pady=(10, 0)
+            row=2, column=1, sticky=tk.W, pady=(10, 0)
         )
         ttk.Entry(container, textvariable=self.date_var, width=16).grid(
-            row=2, column=1, sticky="ew", padx=(0, 8)
+            row=3, column=1, sticky="ew", padx=(0, 8)
         )
 
         ttk.Label(container, text="Concurrent Event").grid(
-            row=1, column=2, sticky=tk.W, pady=(10, 0)
+            row=2, column=2, sticky=tk.W, pady=(10, 0)
         )
         ttk.Entry(container, textvariable=self.concurrent_event_var, width=28).grid(
-            row=2, column=2, sticky="ew", padx=(0, 8)
+            row=3, column=2, sticky="ew", padx=(0, 8)
         )
 
         ttk.Label(container, text="Prior Event").grid(
-            row=1, column=3, sticky=tk.W, pady=(10, 0)
+            row=2, column=3, sticky=tk.W, pady=(10, 0)
         )
         ttk.Entry(container, textvariable=self.prior_event_var, width=28).grid(
-            row=2, column=3, sticky="ew", padx=(0, 8)
+            row=3, column=3, sticky="ew", padx=(0, 8)
         )
 
         ttk.Button(container, text="Add Row", command=self.add_row).grid(
-            row=2, column=4, sticky="ew", padx=(0, 8)
+            row=3, column=4, sticky="ew", padx=(0, 8)
         )
         ttk.Button(container, text="Remove Selected", command=self.remove_selected).grid(
-            row=2, column=5, sticky="ew"
+            row=3, column=5, sticky="ew"
         )
         ttk.Button(container, text="Refresh", command=self.refresh_rows).grid(
-            row=3, column=0, sticky="ew", pady=(10, 0)
+            row=4, column=0, sticky="ew", pady=(10, 0)
         )
 
         ttk.Label(container, textvariable=self.status_var).grid(
-            row=3, column=1, columnspan=5, sticky=tk.W, pady=(10, 0)
+            row=4, column=1, columnspan=5, sticky=tk.W, pady=(10, 0)
         )
 
         for column_index in range(6):
@@ -122,7 +143,10 @@ class RecentEventsGUI:
                 {mysql_identifier(SYMBOL_COLUMN)},
                 {mysql_identifier(DATE_COLUMN)},
                 {mysql_identifier(CONCURRENT_EVENT_COLUMN)},
-                {mysql_identifier(PRIOR_EVENT_COLUMN)}
+                {mysql_identifier(PRIOR_EVENT_COLUMN)},
+                {mysql_identifier(EVENT_SUMMARY_COLUMN)},
+                {mysql_identifier(NEWS_AGGREGATE_COLUMN)},
+                {mysql_identifier(PERCENT_CHANGE_COLUMN)}
             FROM {mysql_identifier(RECENT_EVENTS_TABLE)}
             ORDER BY {mysql_identifier(DATE_COLUMN)} DESC, {mysql_identifier(SYMBOL_COLUMN)}
             """
@@ -141,7 +165,7 @@ class RecentEventsGUI:
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             values = tuple(self.format_value(row[column]) for column in COLUMNS)
-            self.tree.insert("", tk.END, values=values)
+            self.tree.insert("", tk.END, values=values, tags=self.row_tags(row))
 
         self.status_var.set(f"Loaded {len(rows)} rows")
 
@@ -266,6 +290,15 @@ class RecentEventsGUI:
     def blank_to_none(value: str) -> str | None:
         value = value.strip()
         return value if value else None
+
+    @staticmethod
+    def row_tags(row: dict[str, Any]) -> tuple[str, ...]:
+        percent_change = row.get(PERCENT_CHANGE_COLUMN)
+        if percent_change == "+":
+            return ("positive_percent_change",)
+        if percent_change == "-":
+            return ("negative_percent_change",)
+        return ()
 
     @staticmethod
     def sort_key(value: str) -> tuple[int, Any]:

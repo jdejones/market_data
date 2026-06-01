@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import gzip
 import importlib
+import os
 import pickle
 import sys
 from pathlib import Path
@@ -27,12 +28,18 @@ DEFAULT_SYMBOLS_PICKLE = Path(
 MYSQL_HOST = "127.0.0.1"
 MYSQL_PORT = 3306
 MYSQL_USER = "price_data_streamer"
+NEWS_MYSQL_USER = "gptdb"
 STOCKS_DB = "stocks"
+NEWS_DB = "news"
 RECENT_EVENTS_TABLE = "recent_events"
 DATE_COLUMN = "date"
 SYMBOL_COLUMN = "symbol"
 RVOL_COLUMN = "RVol"
 ATRS_TRADED_COLUMN = "ATRs_Traded"
+PERCENT_CHANGE_SOURCE_COLUMN = "Percent_Change"
+PERCENT_CHANGE_DB_COLUMN = "percent_change"
+HEADLINES_COLUMN = "Title"
+NEWS_AGGREGATE_COLUMN = "news_aggregate"
 
 
 def mysql_identifier(name: str) -> str:
@@ -46,6 +53,19 @@ def make_engine() -> Engine:
     url = (
         f"mysql+pymysql://{MYSQL_USER}:{password}@"
         f"{MYSQL_HOST}:{MYSQL_PORT}/{STOCKS_DB}"
+    )
+    return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+
+def make_news_engine() -> Engine:
+    news_password = os.getenv("gptdb")
+    if not news_password:
+        raise RuntimeError("Missing required env var: gptdb")
+
+    password = quote_plus(news_password)
+    url = (
+        f"mysql+pymysql://{NEWS_MYSQL_USER}:{password}@"
+        f"{MYSQL_HOST}:{MYSQL_PORT}/{NEWS_DB}"
     )
     return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
@@ -109,6 +129,17 @@ def event_date_from_row(index_value: Any, row: pd.Series) -> dt.date | None:
     return None
 
 
+def percent_change_sign(row: pd.Series) -> str | None:
+    percent_change = pd.to_numeric(row[PERCENT_CHANGE_SOURCE_COLUMN], errors="coerce")
+    if pd.isna(percent_change) or not np.isfinite(percent_change):
+        return None
+    if percent_change > 0:
+        return "+"
+    if percent_change < 0:
+        return "-"
+    return None
+
+
 def find_recent_events(
     symbols_obj: Any,
     lookback_rows: int,
@@ -118,7 +149,11 @@ def find_recent_events(
     events: list[dict[str, Any]] = []
 
     for symbol, df in iter_symbol_data(symbols_obj):
-        missing_columns = {RVOL_COLUMN, ATRS_TRADED_COLUMN} - set(df.columns)
+        missing_columns = {
+            RVOL_COLUMN,
+            ATRS_TRADED_COLUMN,
+            PERCENT_CHANGE_SOURCE_COLUMN,
+        } - set(df.columns)
         if missing_columns:
             print(f"{symbol}: missing columns {sorted(missing_columns)}; skipping")
             continue
@@ -141,11 +176,14 @@ def find_recent_events(
                 {
                     SYMBOL_COLUMN: symbol,
                     DATE_COLUMN: event_date,
+                    PERCENT_CHANGE_DB_COLUMN: percent_change_sign(row),
                 }
             )
 
     if not events:
-        return pd.DataFrame(columns=[SYMBOL_COLUMN, DATE_COLUMN])
+        return pd.DataFrame(
+            columns=[SYMBOL_COLUMN, DATE_COLUMN, PERCENT_CHANGE_DB_COLUMN]
+        )
 
     return (
         pd.DataFrame(events)
@@ -155,29 +193,98 @@ def find_recent_events(
     )
 
 
-def insert_events(engine: Engine, events: pd.DataFrame) -> int:
+def insert_events(engine: Engine, events: pd.DataFrame) -> list[dict[str, Any]]:
     if events.empty:
-        return 0
+        return []
 
     records = events.to_dict(orient="records")
+    inserted_records: list[dict[str, Any]] = []
     with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                f"""
-                INSERT INTO {mysql_identifier(RECENT_EVENTS_TABLE)}
-                    ({mysql_identifier(SYMBOL_COLUMN)}, {mysql_identifier(DATE_COLUMN)})
-                SELECT :symbol, :date
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM {mysql_identifier(RECENT_EVENTS_TABLE)}
-                    WHERE {mysql_identifier(SYMBOL_COLUMN)} = :symbol
-                      AND {mysql_identifier(DATE_COLUMN)} = :date
+        insert_stmt = text(
+            f"""
+            INSERT INTO {mysql_identifier(RECENT_EVENTS_TABLE)}
+                (
+                    {mysql_identifier(SYMBOL_COLUMN)},
+                    {mysql_identifier(DATE_COLUMN)},
+                    {mysql_identifier(PERCENT_CHANGE_DB_COLUMN)}
                 )
-                """
-            ),
-            records,
+            SELECT :symbol, :date, :percent_change
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM {mysql_identifier(RECENT_EVENTS_TABLE)}
+                WHERE {mysql_identifier(SYMBOL_COLUMN)} = :symbol
+                  AND {mysql_identifier(DATE_COLUMN)} = :date
+            )
+            """
         )
-    return result.rowcount or 0
+        for record in records:
+            result = conn.execute(insert_stmt, record)
+            if result.rowcount:
+                inserted_records.append(record)
+    return inserted_records
+
+
+def fetch_event_headlines(
+    news_engine: Engine,
+    symbol: str,
+    event_date: dt.date,
+) -> list[str]:
+    query = text(
+        f"""
+        SELECT {mysql_identifier(HEADLINES_COLUMN)}
+        FROM {mysql_identifier(symbol.lower())}
+        WHERE DATE({mysql_identifier(DATE_COLUMN)}) = :event_date
+        """
+    )
+    with news_engine.connect() as conn:
+        result = conn.execute(query, {"event_date": event_date})
+        return [
+            str(row[0]).strip()
+            for row in result
+            if row[0] is not None and str(row[0]).strip()
+        ]
+
+
+def update_news_aggregate(
+    stocks_engine: Engine,
+    news_engine: Engine,
+    inserted_events: list[dict[str, Any]],
+) -> int:
+    if not inserted_events:
+        return 0
+
+    update_stmt = text(
+        f"""
+        UPDATE {mysql_identifier(RECENT_EVENTS_TABLE)}
+        SET {mysql_identifier(NEWS_AGGREGATE_COLUMN)} = :news_aggregate
+        WHERE {mysql_identifier(SYMBOL_COLUMN)} = :symbol
+          AND {mysql_identifier(DATE_COLUMN)} = :date
+        """
+    )
+    updated_count = 0
+
+    with stocks_engine.begin() as conn:
+        for event in inserted_events:
+            symbol = str(event[SYMBOL_COLUMN])
+            event_date = event[DATE_COLUMN]
+            try:
+                headlines = fetch_event_headlines(news_engine, symbol, event_date)
+            except Exception as exc:
+                print(f"{symbol} {event_date}: failed to fetch news headlines: {exc}")
+                continue
+
+            news_aggregate = "\n".join(headlines) if headlines else None
+            result = conn.execute(
+                update_stmt,
+                {
+                    SYMBOL_COLUMN: symbol,
+                    DATE_COLUMN: event_date,
+                    NEWS_AGGREGATE_COLUMN: news_aggregate,
+                },
+            )
+            updated_count += result.rowcount or 0
+
+    return updated_count
 
 
 def parse_args() -> argparse.Namespace:
@@ -219,11 +326,17 @@ def main() -> None:
         rvol_threshold=args.rvol_threshold,
         atrs_traded_threshold=args.atrs_traded_threshold,
     )
-    inserted_count = insert_events(engine, events)
+    inserted_events = insert_events(engine, events)
+    updated_news_count = 0
+    if inserted_events:
+        news_engine = make_news_engine()
+        updated_news_count = update_news_aggregate(engine, news_engine, inserted_events)
 
     print(
         f"Deleted {deleted_count} old rows. "
-        f"Found {len(events)} recent events; inserted {inserted_count} new rows."
+        f"Found {len(events)} recent events; "
+        f"inserted {len(inserted_events)} new rows; "
+        f"updated news for {updated_news_count} rows."
     )
 
 
