@@ -54,7 +54,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Timer utilities to measure time between tqdm progress bars
-    # section_timer_start = time.perf_counter()
+    section_timer_start = time.perf_counter()
     # print_section_time("Starting daily after close study")    
 
     def print_section_time(label: str) -> None:
@@ -67,12 +67,15 @@ if __name__ == "__main__":
         print(f"{label} took {now - section_timer_start:.2f} seconds")
         section_timer_start = now
 
+
+    print_section_time("Starting daily after close study")
     #*Import price data.
     #hadv == high average dollar volume
     hadv = make_watchlist(hadv)
     data = api_import(hadv)
     symbols = {k: SymbolData(k, v) for k,v in data.items()}
     
+    print_section_time("Imported price data")
     #########################################################################
     #Market as a reminder to monitor daily api usage.
     #Connect to database
@@ -182,6 +185,7 @@ if __name__ == "__main__":
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
 
     #########################################################################
+    print_section_time("Added daily quant rating")
     
     #*Add technicals.
     items = [(sd.symbol, sd.df) for sd in symbols.values()]
@@ -202,6 +206,8 @@ if __name__ == "__main__":
     r = rg.Regimes(symbols)
     r.run_all_combos()
     wf.run_all(symbols)
+    
+    print_section_time("Added technicals")
     
     #Sector and industry indices
     #TODO Add concurrency for sector and industry indices instantiation.
@@ -238,6 +244,8 @@ if __name__ == "__main__":
         run_pipeline(etfs[sym].df)      
     r_etfs = rg.Regimes(etfs)
     r_etfs.run_all_combos() 
+    
+    print_section_time("Added technicals to ETFs")
 
     #Stock Stats
     stock_stats = {}
@@ -250,6 +258,8 @@ if __name__ == "__main__":
             desc="Calculating Stock Stats"
         ):
             stock_stats[sym] = stats
+
+    print_section_time("Calculated stock stats")
 
     # Calculate expected value (EV) for each condition across all symbols
     ev = {}
@@ -305,6 +315,8 @@ if __name__ == "__main__":
             expected_value = np.dot(probabilities, outcomes)
             
             ev[condition][days] = round(expected_value, 4)
+            
+    print_section_time("Calculated expected values")
         
 
     sector_close_vwap_count = {sector: [0, 0] for sector in sec}
@@ -337,6 +349,8 @@ if __name__ == "__main__":
             pass
     sector_close_vwap_ratio = {sector: (sector_close_vwap_count[sector][0]/sector_close_vwap_count[sector][1]) * 100 for sector in sec}
     industry_close_vwap_ratio = {industry: (industry_close_vwap_count[industry][0]/industry_close_vwap_count[industry][1]) * 100 for industry in ind}
+    
+    print_section_time("Calculated close over vwap ratio")
     
     #Episodic Pivots
     ep = Episodic_Pivots(symbols)
@@ -388,6 +402,8 @@ if __name__ == "__main__":
         except Exception as e:
             print(sym, e, sep=': ')
             
+    print_section_time("Processed episodic pivots")
+            
     from finvizfinance.screener.custom import Custom
     from finvizfinance.constants import CUSTOM_SCREENER_COLUMNS
     custom = Custom()
@@ -419,6 +435,8 @@ if __name__ == "__main__":
                                     index=False,
                                     method="multi",
                                     chunksize=200)
+        
+    print_section_time("Stored results finvizsearch")
     
     top_rstren = [item[0] for item in rel_stren if (item[1] > 70) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     top_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] > 50) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
@@ -438,6 +456,8 @@ if __name__ == "__main__":
     shortable = [sym.replace('\n', '') for sym in open(r"E:\Market Research\Studies\Sector Studies\Watchlists\shortable.txt").readlines()]
     hist_short_int = pd.read_csv(r"E:\Market Research\Dataset\Fundamental Data\historic_short_interest.txt")
     hist_short_int.set_index('Ticker', inplace=True)
+
+    print_section_time("Loaded short interest data")
 
     tsc = Technical_Score_Calculator()
     tsc.technical_score_calculator(symbols)
@@ -479,6 +499,8 @@ if __name__ == "__main__":
             fas[sector] = sf.close_over_vwap_ratio(temp)    
         return fas
     
+    print_section_time("Calculated close over vwap ratio for sectors and industries and tsc")
+    
     #Factors: Fundamental
     #Expected Revenue Growth +1Q and +4Q
     qplus1 = {}
@@ -497,7 +519,9 @@ if __name__ == "__main__":
             )
         except:
             continue
-
+        
+    print_section_time("Calculated expected revenue growth")
+    
     interest_list_long = il(source_symbols=symbols)
     interest_list_long.value_filter(rel_stren, 70, '>=', 'Technical', 'Long', 'rel_stren')
     interest_list_long.value_filter(prev_perf_since_earnings, 50, '>=', 'Technical', 'Long', 'prev_perf_since_earnings')
@@ -518,6 +542,8 @@ if __name__ == "__main__":
     with open(fr"{wl.systematic_watchlists_root}\interest_list_long.txt", "w") as f:
         for sym in interest_list_long.interest_list:
             f.write(sym + '\n')
+    
+    print_section_time("Calculated interest list long")
     
     #Pickling most used objects, so I don't have to rerun the script.
     def save_snapshots(obj, name):
@@ -570,7 +596,8 @@ if __name__ == "__main__":
     for thread in tqdm(threads, desc="Storing Variables"):
         thread.join()        
 
-
+    print_section_time("Stored pickled variables")
+    
     from IPython.display import display, HTML
     from pprint import pprint
     print('\ndf_byrvol_positive dataframe descriptive statistics.',
