@@ -22,6 +22,7 @@ def _regime_ma_worker(args):
     Returns (symbol, updated_df).
     """
     sym, df = args
+    df = df.copy()  # Defragment before adding multiple regime columns.
     r = Regimes({})
     r.regime_sma(df)
     r.regime_ema(df)
@@ -242,7 +243,7 @@ class Regimes:
 
     # helper to do one symbol for MA combo
     def _process_regime_ma_symbol(self, sym):
-        df = self.symbols[sym].df
+        df = self.symbols[sym].df.copy()  # Defragment before adding multiple regime columns.
         self.regime_sma(df)
         self.regime_ema(df)
         self.regime_ema(df, st=20, lt=50)
@@ -387,7 +388,7 @@ class Regimes:
     #Does not require utility functions, can be used as is.
     def regime_breakout(self, df ,_h= 'High',_l= 'Low', window=252):
         hl =  np.where(df[_h] == df[_h].rolling(window).max(), 1, np.where(df[_l] == df[_l].rolling(window).min(), -1,np.nan))
-        roll_hl = pd.Series(index= df.index, data= hl).fillna(method= 'ffill')
+        roll_hl = pd.Series(index= df.index, data= hl).ffill()
         df['hi_'+str(window)] = df['High'].rolling(window).max()
         df['lo_'+str(window)] = df['Low'].rolling(window).min()
         df['bo_'+ str(window)]= roll_hl
@@ -593,9 +594,9 @@ class Regimes:
             '''
             # latest swing
             shi_dt = df.loc[pd.notnull(df[shi]), shi].index[-1]
-            s_hi = df.loc[pd.notnull(df[shi]), shi][-1]
+            s_hi = df.loc[pd.notnull(df[shi]), shi].iloc[-1]
             slo_dt = df.loc[pd.notnull(df[slo]), slo].index[-1] 
-            s_lo = df.loc[pd.notnull(df[slo]), slo][-1] 
+            s_lo = df.loc[pd.notnull(df[slo]), slo].iloc[-1] 
             len_shi_dt = len(df[:shi_dt])
             len_slo_dt = len(df[:slo_dt])
             
@@ -623,8 +624,8 @@ class Regimes:
         rt_lo=self.rt_lo
         shi_dt = df.loc[pd.notnull(df[shi]), shi].index[-1]
         slo_dt = df.loc[pd.notnull(df[slo]), slo].index[-1]
-        s_hi = df.loc[pd.notnull(df[shi]), shi][-1]
-        s_lo = df.loc[pd.notnull(df[slo]), slo][-1]
+        s_hi = df.loc[pd.notnull(df[shi]), shi].iloc[-1]
+        s_lo = df.loc[pd.notnull(df[slo]), slo].iloc[-1]
         
         if slo_dt > shi_dt: 
             swg_var = [1,s_lo,slo_dt,rt_lo,shi, df.loc[slo_dt:,_h].max(), df.loc[slo_dt:, _h].idxmax()]         
@@ -758,7 +759,8 @@ class Regimes:
             ### CLASSIC CEILING DISCOVERY
             if (ceiling_found == False):   
                 top = df[floor_ix_list[-1] : s_hi_ix][_h].max()
-                ceiling_test = round((s_hi - top) / stdev[s_hi_ix] ,1)  
+                ceiling_vol = stdev[s_hi_ix]
+                ceiling_test = np.nan if pd.isna(ceiling_vol) or ceiling_vol == 0 else round((s_hi - top) / ceiling_vol ,1)
 
                 ### Classic ceiling test
                 if ceiling_test <= -threshold: 
@@ -795,7 +797,8 @@ class Regimes:
             ### CLASSIC FLOOR DISCOVERY        
             if (floor_found == False): 
                 bottom = df[ceiling_ix_list[-1] : s_lo_ix][_l].min()
-                floor_test = round((s_lo - bottom) / stdev[s_lo_ix],1)
+                floor_vol = stdev[s_lo_ix]
+                floor_test = np.nan if pd.isna(floor_vol) or floor_vol == 0 else round((s_lo - bottom) / floor_vol,1)
 
                 ### Classic floor test
                 if (floor_test >= threshold): 
