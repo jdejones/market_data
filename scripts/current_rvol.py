@@ -44,6 +44,7 @@ EASTERN = ZoneInfo("US/Eastern")
 class MonitorState:
     cumulative_volume: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     processed_rows: set[tuple[str, pd.Timestamp]] = field(default_factory=set)
+    latest_rvol: dict[str, float] = field(default_factory=dict)
     elevated_symbols: set[str] = field(default_factory=set)
     last_seen_timestamp: pd.Timestamp | None = None
 
@@ -201,62 +202,29 @@ def existing_columns(engine: Engine, table_name: str) -> list[str]:
         return [row[0] for row in conn.execute(query, {"table_name": table_name})]
 
 
-def reset_temp_profile_table(engine: Engine, symbols: list[str], alter_chunk_size: int) -> None:
+def reset_temp_profile_table(
+    engine: Engine,
+    symbols: list[str],
+    alter_chunk_size: int,
+) -> None:
+    del symbols, alter_chunk_size
+    table = mysql_identifier(TEMP_RVOL_TABLE)
+
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                f"""
-                CREATE TABLE IF NOT EXISTS {mysql_identifier(TEMP_RVOL_TABLE)} (
-                    {mysql_identifier(TIMESTAMP_COLUMN)} TIME NULL
-                )
-                """
-            )
-        )
-
-    columns = existing_columns(engine, TEMP_RVOL_TABLE)
-    timestamp_matches = [column for column in columns if column.lower() == TIMESTAMP_COLUMN]
-    if not timestamp_matches:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    f"ALTER TABLE {mysql_identifier(TEMP_RVOL_TABLE)} "
-                    f"ADD COLUMN {mysql_identifier(TIMESTAMP_COLUMN)} TIME NULL FIRST"
-                )
-            )
-        columns = existing_columns(engine, TEMP_RVOL_TABLE)
-        timestamp_matches = [column for column in columns if column.lower() == TIMESTAMP_COLUMN]
-
-    timestamp_column = timestamp_matches[0]
-    if timestamp_column != TIMESTAMP_COLUMN:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    f"ALTER TABLE {mysql_identifier(TEMP_RVOL_TABLE)} "
-                    f"CHANGE COLUMN {mysql_identifier(timestamp_column)} "
-                    f"{mysql_identifier(TIMESTAMP_COLUMN)} TIME NULL"
-                )
-            )
-        columns = existing_columns(engine, TEMP_RVOL_TABLE)
-
-    columns_to_drop = [column for column in columns if column.lower() != TIMESTAMP_COLUMN]
-    with engine.begin() as conn:
-        for column_group in chunked(columns_to_drop, alter_chunk_size):
-            drop_sql = ", ".join(
-                f"DROP COLUMN {mysql_identifier(column)}" for column in column_group
-            )
-            conn.execute(text(f"ALTER TABLE {mysql_identifier(TEMP_RVOL_TABLE)} {drop_sql}"))
-        conn.execute(text(f"DELETE FROM {mysql_identifier(TEMP_RVOL_TABLE)}"))
-
-        for symbol_group in chunked(symbols, alter_chunk_size):
-            add_sql = ", ".join(
-                f"ADD COLUMN {mysql_identifier(symbol)} DOUBLE NULL"
-                for symbol in symbol_group
-            )
-            conn.execute(text(f"ALTER TABLE {mysql_identifier(TEMP_RVOL_TABLE)} {add_sql}"))
+        conn.execute(text(f"DELETE FROM {table}"))
 
 
 def write_temp_profiles(engine: Engine, profile_df: pd.DataFrame, chunksize: int) -> None:
-    output = profile_df.reset_index()
+    output = (
+        profile_df.reset_index()
+        .melt(
+            id_vars=TIMESTAMP_COLUMN,
+            var_name="symbol",
+            value_name="avg_cum_volume",
+        )
+        .dropna(subset=["avg_cum_volume"])
+        .loc[:, ["symbol", TIMESTAMP_COLUMN, "avg_cum_volume"]]
+    )
     output.to_sql(
         TEMP_RVOL_TABLE,
         con=engine,
@@ -274,10 +242,6 @@ def prepare_temp_profile_table(
     insert_chunksize: int,
 ) -> None:
     symbols = list(profile_df.columns)
-    if len(symbols) > 4000:
-        raise ValueError(
-            "stocks.temp_cum_rvol cannot safely store more than about 4000 symbol columns"
-        )
 
     print("Resetting stocks.temp_cum_rvol...")
     reset_temp_profile_table(engine, symbols, alter_chunk_size)
@@ -390,7 +354,7 @@ def process_stream_rows(
 
         rvol = state.cumulative_volume[symbol] / denominator
         if not pd.isna(rvol) and np.isfinite(rvol):
-            latest_rvol[symbol] = float(rvol)
+            latest_rvol[symbol] = state.latest_rvol[symbol] = float(rvol)
 
     return latest_rvol
 
@@ -409,29 +373,29 @@ def update_elevated_rvol_table(
     }
     to_insert = sorted(above_threshold - state.elevated_symbols)
     to_delete = sorted(below_threshold & state.elevated_symbols)
+    to_refresh = set(latest_rvol) & state.elevated_symbols
 
-    if not to_insert and not to_delete:
+    if not to_insert and not to_delete and not to_refresh:
         return
 
-    delete_stmt = text(
-        f"DELETE FROM {mysql_identifier(ELEVATED_RVOL_TABLE)} "
-        "WHERE symbol IN :symbols"
-    ).bindparams(bindparam("symbols", expanding=True))
+    if to_insert:
+        state.elevated_symbols.update(to_insert)
+    if to_delete:
+        state.elevated_symbols.difference_update(to_delete)
 
     with engine.begin() as conn:
-        if to_insert:
+        conn.execute(text(f"DELETE FROM {mysql_identifier(ELEVATED_RVOL_TABLE)}"))
+        if state.elevated_symbols:
             conn.execute(
                 text(
                     f"INSERT INTO {mysql_identifier(ELEVATED_RVOL_TABLE)} "
-                    "(symbol) VALUES (:symbol)"
+                    "(symbol, rvol) VALUES (:symbol, :rvol)"
                 ),
-                [{"symbol": symbol} for symbol in to_insert],
+                [
+                    {"symbol": symbol, "rvol": state.latest_rvol[symbol]}
+                    for symbol in sorted(state.elevated_symbols)
+                ],
             )
-            state.elevated_symbols.update(to_insert)
-
-        if to_delete:
-            conn.execute(delete_stmt, {"symbols": to_delete})
-            state.elevated_symbols.difference_update(to_delete)
 
 
 def monitor_current_rvol(
