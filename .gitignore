@@ -5,3 +5,4 @@ working_notebook.ipynb
 __pycache__/
 
 db_exports/
+scripts\script_error_logs.txt
