@@ -37,7 +37,7 @@ if __name__ == "__main__":
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading, argparse
     from market_data.stats_objects import IntradaySignalProcessing as isp
     from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time
-    from market_data.api_keys import database_password, seeking_alpha_api_key, seeking_alpha_access_token
+    from market_data.api_keys import database_password, seeking_alpha_api_key, seeking_alpha_access_token, polygon_api_key
     from market_data.interest_list import InterestList as il
 
     parser = argparse.ArgumentParser(description="Run the daily after close study pipeline.")
@@ -66,7 +66,17 @@ if __name__ == "__main__":
         now = time.perf_counter()
         print(f"{label} took {now - section_timer_start:.2f} seconds")
         section_timer_start = now
-
+    
+    
+    from polygon.rest import RESTClient
+    from polygon.rest.models import (
+        MarketHoliday,
+    )
+    client = RESTClient(polygon_api_key)
+    holidays = client.get_market_holidays()
+    holiday_dates = [holiday.date for holiday in holidays]
+    if datetime.datetime.today().date().strftime("%Y-%m-%d") in holiday_dates:
+        raise ValueError("Today is a holiday")
 
     #*Import price data.
     #hadv == high average dollar volume
