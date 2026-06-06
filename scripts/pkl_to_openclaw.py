@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ SSH_COMMON_OPTIONS = (
     "-o",
     "ConnectTimeout=15",
 )
+REMOTE_COMMAND_TIMEOUT_SECONDS = 300
+REMOTE_PREFLIGHT_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -221,8 +224,8 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         choices=("auto", "ssh-scp", "tailscale-ssh"),
         help=(
-            "Upload method to use. 'auto' tries standard ssh/scp first and "
-            "falls back to tailscale ssh."
+            "Upload method to use. 'auto' uses standard ssh/scp over the "
+            "Tailscale network. Use 'tailscale-ssh' explicitly if needed."
         ),
     )
     parser.add_argument(
@@ -251,6 +254,98 @@ def ensure_exists(path: Path, label: str) -> None:
 def ensure_command_available(command_name: str) -> None:
     if shutil.which(command_name) is None:
         raise FileNotFoundError(f"Required command not found on PATH: {command_name}")
+
+
+def disable_windows_console_quick_edit() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        enable_quick_edit_mode = 0x0040
+        enable_extended_flags = 0x0080
+        std_input_handle = -10
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(std_input_handle)
+        mode = ctypes.c_uint()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return
+
+        updated_mode = (mode.value | enable_extended_flags) & ~enable_quick_edit_mode
+        kernel32.SetConsoleMode(handle, updated_mode)
+    except Exception:
+        return
+
+
+def tailscale_status_is_connected(status: dict[str, object]) -> bool:
+    backend_state = str(status.get("BackendState", "")).lower()
+    tailscale_ips = status.get("TailscaleIPs") or []
+    return backend_state == "running" and bool(tailscale_ips)
+
+
+def summarize_tailscale_status(status: dict[str, object]) -> str:
+    backend_state = str(status.get("BackendState", "unknown"))
+    tailscale_ips = status.get("TailscaleIPs") or []
+    if isinstance(tailscale_ips, list) and tailscale_ips:
+        return f"{backend_state} ({', '.join(str(ip) for ip in tailscale_ips)})"
+    return backend_state
+
+
+def read_tailscale_status() -> dict[str, object] | None:
+    result = subprocess.run(
+        ["tailscale", "status", "--json"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        print(f"Unable to read Tailscale status: {detail or f'exit code {result.returncode}'}")
+        return None
+    try:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        print(f"Unable to parse Tailscale status output: {error}")
+        return None
+    if not isinstance(status, dict):
+        print("Unable to parse Tailscale status output: expected a JSON object.")
+        return None
+    return status
+
+
+def ensure_tailscale_connected() -> None:
+    ensure_command_available("tailscale")
+
+    status = read_tailscale_status()
+    if status is not None and tailscale_status_is_connected(status):
+        print(f"Tailscale connected: {summarize_tailscale_status(status)}")
+        return
+
+    if status is None:
+        print("Tailscale status is unavailable; attempting unattended connection.")
+    else:
+        print(f"Tailscale is not connected ({summarize_tailscale_status(status)}); attempting unattended connection.")
+
+    result = subprocess.run(
+        ["tailscale", "up", "--unattended=true"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            "Unable to connect Tailscale with 'tailscale up --unattended=true'. "
+            f"{detail or f'exit code {result.returncode}'}"
+        )
+
+    status = read_tailscale_status()
+    if status is None or not tailscale_status_is_connected(status):
+        summary = summarize_tailscale_status(status) if status is not None else "unknown"
+        raise RuntimeError(f"Tailscale did not report a connected state after unattended start: {summary}")
+
+    print(f"Tailscale connected: {summarize_tailscale_status(status)}")
 
 
 def sha256_file(path: Path) -> str:
@@ -334,9 +429,16 @@ def run_tailscale_ssh(
     remote_command: str,
     *,
     capture_output: bool = False,
+    timeout: int = REMOTE_COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess:
     command = ["tailscale", "ssh", args.ssh_target, remote_command]
-    return subprocess.run(command, check=True, text=True, capture_output=capture_output)
+    return subprocess.run(
+        command,
+        check=True,
+        text=True,
+        capture_output=capture_output,
+        timeout=timeout,
+    )
 
 
 def run_ssh_command(
@@ -344,9 +446,16 @@ def run_ssh_command(
     remote_command: str,
     *,
     capture_output: bool = False,
+    timeout: int = REMOTE_COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess:
     command = ["ssh", *SSH_COMMON_OPTIONS, args.ssh_target, remote_command]
-    return subprocess.run(command, check=True, text=True, capture_output=capture_output)
+    return subprocess.run(
+        command,
+        check=True,
+        text=True,
+        capture_output=capture_output,
+        timeout=timeout,
+    )
 
 
 def run_remote_command(
@@ -355,17 +464,28 @@ def run_remote_command(
     *,
     transport: str,
     capture_output: bool = False,
+    timeout: int = REMOTE_COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess:
     if transport == "ssh-scp":
-        return run_ssh_command(args, remote_command, capture_output=capture_output)
+        return run_ssh_command(
+            args,
+            remote_command,
+            capture_output=capture_output,
+            timeout=timeout,
+        )
     if transport == "tailscale-ssh":
-        return run_tailscale_ssh(args, remote_command, capture_output=capture_output)
+        return run_tailscale_ssh(
+            args,
+            remote_command,
+            capture_output=capture_output,
+            timeout=timeout,
+        )
     raise ValueError(f"Unsupported upload transport: {transport}")
 
 
 def available_upload_transports(args: argparse.Namespace) -> list[str]:
     if args.upload_transport == "auto":
-        return ["ssh-scp", "tailscale-ssh"]
+        return ["tailscale-ssh"]
     return [args.upload_transport]
 
 
@@ -379,6 +499,15 @@ def summarize_called_process_error(error: subprocess.CalledProcessError) -> str:
     if output_text:
         return output_text
     return f"exit code {error.returncode}"
+
+
+def summarize_timeout_error(error: subprocess.TimeoutExpired) -> str:
+    command = error.cmd
+    if isinstance(command, (list, tuple)):
+        command_text = " ".join(str(part) for part in command)
+    else:
+        command_text = str(command)
+    return f"timed out after {error.timeout:g} seconds: {command_text}"
 
 
 def is_tailscale_additional_check_error(error: subprocess.CalledProcessError) -> bool:
@@ -408,7 +537,13 @@ def select_upload_transport(args: argparse.Namespace, remote_dir: PurePosixPath)
     for transport in available_upload_transports(args):
         try:
             print(f"Checking remote access via {transport}")
-            run_remote_command(args, preflight_command, transport=transport, capture_output=True)
+            run_remote_command(
+                args,
+                preflight_command,
+                transport=transport,
+                capture_output=True,
+                timeout=REMOTE_PREFLIGHT_TIMEOUT_SECONDS,
+            )
             return transport
         except subprocess.CalledProcessError as error:
             detail = summarize_called_process_error(error)
@@ -417,6 +552,10 @@ def select_upload_transport(args: argparse.Namespace, remote_dir: PurePosixPath)
                 print("Tailscale SSH requires an interactive approval check; trying the next upload transport.")
             else:
                 print(f"{transport} preflight failed: {detail}")
+        except subprocess.TimeoutExpired as error:
+            detail = summarize_timeout_error(error)
+            failures.append((transport, detail))
+            print(f"{transport} preflight failed: {detail}")
 
     failure_text = "\n".join(f"- {transport}: {detail}" for transport, detail in failures)
     raise RuntimeError(
@@ -689,6 +828,7 @@ def transfer_batch(
 
 
 def main() -> None:
+    disable_windows_console_quick_edit()
     vpn_disconnected = False
 
     try:
@@ -705,6 +845,7 @@ def main() -> None:
         print(f"Remote batch target: {args.ssh_target}:{PurePosixPath(args.remote_dir) / batch_id}")
 
         ensure_upload_tools_available(args)
+        ensure_tailscale_connected()
         upload_transport = select_upload_transport(args, PurePosixPath(args.remote_dir))
         print(f"Using upload transport: {upload_transport}")
 
