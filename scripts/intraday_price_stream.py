@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from market_data.api_keys import intraday_stream_database, polygon_api_key  # type: ignore[import-not-found]
 
+from polygon.rest import RESTClient
 from polygon.websocket import WebSocketClient
 from polygon.websocket.models import Feed, Market, WebSocketMessage
 from sqlalchemy import create_engine, text
@@ -195,6 +196,14 @@ def select_feed(feed_name: str) -> Feed:
     return Feed.RealTime
 
 
+def stop_on_market_holiday() -> None:
+    client = RESTClient(polygon_api_key)
+    holidays = client.get_market_holidays()
+    holiday_dates = [holiday.date for holiday in holidays]
+    if dt.datetime.today().date().strftime("%Y-%m-%d") in holiday_dates:
+        raise ValueError("Today is a holiday")
+
+
 def raw_value(message: WebSocketMessage, *attrs: str) -> object:
     for attr in attrs:
         value = getattr(message, attr, None)
@@ -336,6 +345,7 @@ def run_stream(engine: Engine, symbols: Sequence[str], feed_name: str) -> None:
 
 def main() -> None:
     args = parse_args()
+    stop_on_market_holiday()
     symbols = read_symbols(args.symbols_file)
     engine = build_engine()
 
