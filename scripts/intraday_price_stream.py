@@ -249,7 +249,7 @@ def aggregate_rows(
     for message in messages:
         symbol = raw_value(message, "symbol", "ticker", "sym")
         timestamp = normalize_timestamp(
-            raw_value(message, "start_timestamp", "s", "timestamp", "t")
+            raw_value(message, "end_timestamp", "e", "timestamp", "t")
         )
 
         open_price = raw_value(message, "open", "o")
