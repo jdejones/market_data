@@ -21,4 +21,6 @@ start "Filings Stream GUI" /D "%NEWS_TRACKER_ROOT%" cmd /k ""%PYTHON_EXE%" "%NEW
 
 start "Current RVOL GUI" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\current_rvol_gui.py" --symbols-file "%SYMBOLS_FILE%" --update-elevated-table || (>> "%LOG_FILE%" echo [%%date%% %%time%%] current_rvol_gui.py failed with exit code %%errorlevel%%. & echo current_rvol_gui.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
 
+start "VWAP Bands" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\vwap_bands.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] vwap_bands.py failed with exit code %%errorlevel%%. & echo vwap_bands.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
+
 exit /b 0
