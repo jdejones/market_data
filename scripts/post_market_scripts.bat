@@ -1,4 +1,11 @@
 @echo off
+REM Post-market processing is a sequential, fail-fast pipeline.
+REM daily_after_close_processing.py refreshes the core daily artifacts used by later
+REM steps. recent_events.py then reads those artifacts and updates recent event data.
+REM The OpenClaw transfer scripts run last so they only publish/export data after the
+REM upstream processing succeeds. Unlike pre_market_scripts.bat, these scripts are
+REM expected to finish, so they run in the same terminal and each step waits for the
+REM previous one. If any script exits nonzero, log the failure and stop the pipeline.
 set "PYTHON_EXE=C:\Users\jdejo\AppData\Local\Programs\Python\Python313\python.exe"
 set "LOG_FILE=C:\Users\jdejo\Market_Data_Processing\market_data\scripts\script_error_logs.txt"
 

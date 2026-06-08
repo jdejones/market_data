@@ -1,4 +1,10 @@
 @echo off
+REM Pre-market startup intentionally launches long-running scripts in separate terminals.
+REM intraday_price_stream.py must start first because it streams market data into the
+REM database used by downstream tools. After a short startup delay, the GUI/monitoring
+REM scripts are independent enough to run in parallel. Use `start ... cmd /k` for each
+REM process so every infinite-loop script keeps its own visible terminal and can be
+REM monitored or closed independently.
 set "PYTHON_EXE=C:\Users\jdejo\AppData\Local\Programs\Python\Python313\python.exe"
 set "LOG_FILE=C:\Users\jdejo\Market_Data_Processing\market_data\scripts\script_error_logs.txt"
 set "MARKET_DATA_ROOT=C:\Users\jdejo\Market_Data_Processing\market_data"
