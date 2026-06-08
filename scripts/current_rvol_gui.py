@@ -619,7 +619,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to a newline-delimited text file of symbols.",
     )
     parser.add_argument("--lookback-days", type=int, default=20)
-    parser.add_argument("--calendar-buffer-days", type=int, default=10)
+    parser.add_argument("--calendar-buffer-days", type=int, default=15)
     parser.add_argument("--rvol-threshold", type=float, default=1.5)
     parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--query-overlap-minutes", type=int, default=2)
