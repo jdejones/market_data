@@ -253,9 +253,12 @@ def calculate_symbol_vwap_bands(
     return {
         "symbol": str(data["Symbol"].iloc[-1]).upper(),
         "vwap": latest_vwap,
-        "vb1": latest_vwap + latest_basis * band_multipliers[0],
-        "vb2": latest_vwap + latest_basis * band_multipliers[1],
-        "vb3": latest_vwap + latest_basis * band_multipliers[2],
+        "vb1_pos": latest_vwap + latest_basis * band_multipliers[0],
+        "vb2_pos": latest_vwap + latest_basis * band_multipliers[1],
+        "vb3_pos": latest_vwap + latest_basis * band_multipliers[2],
+        "vb1_neg": latest_vwap - latest_basis * band_multipliers[0],
+        "vb2_neg": latest_vwap - latest_basis * band_multipliers[1],
+        "vb3_neg": latest_vwap - latest_basis * band_multipliers[2],
     }
 
 
@@ -265,8 +268,18 @@ def calculate_vwap_bands(
     band_multipliers: tuple[float, float, float],
     calc_mode: str,
 ) -> pd.DataFrame:
+    output_columns = [
+        "symbol",
+        "vwap",
+        "vb1_pos",
+        "vb2_pos",
+        "vb3_pos",
+        "vb1_neg",
+        "vb2_neg",
+        "vb3_neg",
+    ]
     if rows.empty:
-        return pd.DataFrame(columns=["symbol", "vwap", "vb1", "vb2", "vb3"])
+        return pd.DataFrame(columns=output_columns)
 
     grouped_rows = {
         symbol: symbol_rows for symbol, symbol_rows in rows.groupby("Symbol", sort=False)
@@ -280,7 +293,7 @@ def calculate_vwap_bands(
         if result is not None:
             output_rows.append(result)
 
-    return pd.DataFrame(output_rows, columns=["symbol", "vwap", "vb1", "vb2", "vb3"])
+    return pd.DataFrame(output_rows, columns=output_columns)
 
 
 def reset_output_table(engine: Engine) -> None:
