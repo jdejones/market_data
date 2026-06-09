@@ -243,6 +243,11 @@ def parse_args() -> argparse.Namespace:
         default=socket.gethostname(),
         help="Source machine name written to the manifest.",
     )
+    parser.add_argument(
+        "--reconnect-vpn",
+        action="store_true",
+        help="Reconnect NordVPN at the end of the script. By default, the VPN remains disconnected.",
+    )
     return parser.parse_args()
 
 
@@ -829,6 +834,7 @@ def transfer_batch(
 
 def main() -> None:
     disable_windows_console_quick_edit()
+    args = parse_args()
     vpn_disconnected = False
 
     try:
@@ -836,7 +842,6 @@ def main() -> None:
         vpn_disconnected = True
         time.sleep(10)
 
-        args = parse_args()
         batch_id = resolve_batch_id(args.batch_id)
         payloads = resolve_payload_paths(args.source_dir)
 
@@ -870,7 +875,7 @@ def main() -> None:
         print("Pickle batch transfer complete.")
     finally:
         encountered_error = sys.exc_info()[0] is not None
-        if vpn_disconnected:
+        if vpn_disconnected and args.reconnect_vpn:
             try:
                 connect_vpn()
             except Exception as error:
@@ -878,6 +883,8 @@ def main() -> None:
                     print(f"Warning: unable to reconnect VPN: {error}")
                 else:
                     raise
+        elif vpn_disconnected:
+            print("VPN left disconnected. Use --reconnect-vpn to reconnect at script exit.")
 
 
 if __name__ == "__main__":

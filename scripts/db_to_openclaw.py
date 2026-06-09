@@ -58,6 +58,8 @@ TABLE_CHANGE_FATAL_ERROR_MARKERS = (
     "too many connections",
     "syntax error",
 )
+MYSQL_TABLE_MUTATION_LOCK_NAME = "market_data_table_mutation_lock"
+MYSQL_TABLE_MUTATION_LOCK_TIMEOUT_SECONDS = 3600
 SSH_COMMON_OPTIONS = (
     "-o",
     "BatchMode=yes",
@@ -166,6 +168,27 @@ def parse_args() -> argparse.Namespace:
         "--skip-upload",
         action="store_true",
         help="Build the local artifacts but do not upload them to OpenClaw.",
+    )
+    parser.add_argument(
+        "--reconnect-vpn",
+        action="store_true",
+        help="Reconnect NordVPN at the end of the script. By default, the VPN remains disconnected.",
+    )
+    parser.add_argument(
+        "--mysql-lock-name",
+        default=MYSQL_TABLE_MUTATION_LOCK_NAME,
+        help="MySQL advisory lock name used to coordinate with table-mutating scripts.",
+    )
+    parser.add_argument(
+        "--mysql-lock-timeout",
+        type=int,
+        default=MYSQL_TABLE_MUTATION_LOCK_TIMEOUT_SECONDS,
+        help="Seconds to wait for the MySQL advisory lock before failing.",
+    )
+    parser.add_argument(
+        "--skip-mysql-lock",
+        action="store_true",
+        help="Do not acquire the advisory lock before exporting MySQL data.",
     )
     return parser.parse_args()
 
@@ -279,6 +302,56 @@ def ensure_tailscale_connected() -> None:
         raise RuntimeError(f"Tailscale did not report a connected state after unattended start: {summary}")
 
     print(f"Tailscale connected: {summarize_tailscale_status(status)}")
+
+
+@contextmanager
+def mysql_table_mutation_lock(args: argparse.Namespace):
+    if args.skip_mysql_lock:
+        yield
+        return
+
+    try:
+        import pymysql
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "PyMySQL is required for MySQL advisory locking. Install pymysql "
+            "or rerun with --skip-mysql-lock."
+        ) from error
+
+    print(
+        "Waiting for MySQL advisory lock "
+        f"{args.mysql_lock_name!r} for up to {args.mysql_lock_timeout:,} seconds"
+    )
+    lock_conn = pymysql.connect(
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        password=args.password,
+        autocommit=True,
+        connect_timeout=10,
+    )
+    acquired = False
+    try:
+        with lock_conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT GET_LOCK(%s, %s)",
+                (args.mysql_lock_name, args.mysql_lock_timeout),
+            )
+            result = cursor.fetchone()
+        if not result or result[0] != 1:
+            raise TimeoutError(f"Timed out waiting for MySQL advisory lock: {args.mysql_lock_name}")
+
+        acquired = True
+        print(f"Acquired MySQL advisory lock: {args.mysql_lock_name}")
+        yield
+    finally:
+        if acquired:
+            try:
+                with lock_conn.cursor() as cursor:
+                    cursor.execute("SELECT RELEASE_LOCK(%s)", (args.mysql_lock_name,))
+            finally:
+                print(f"Released MySQL advisory lock: {args.mysql_lock_name}")
+        lock_conn.close()
 
 
 def mysql_identifier(name: str) -> str:
@@ -1171,6 +1244,7 @@ def connect_vpn():
 
 def main() -> None:
     disable_windows_console_quick_edit()
+    args = parse_args()
     vpn_disconnected = False
     cleanup_local_on_success = False
     local_artifacts: list[tuple[str, Path]] = []
@@ -1180,7 +1254,6 @@ def main() -> None:
         vpn_disconnected = True
         time.sleep(10)
 
-        args = parse_args()
         args.databases = selected_databases(args)
         if args.workers < 1:
             raise ValueError("--workers must be at least 1.")
@@ -1211,12 +1284,15 @@ def main() -> None:
 
         if not args.skip_mysqldump:
             local_artifacts.append(("MySQL dump", sql_dump_path))
-            dump_created = create_mysql_dump(args, sql_dump_path)
-            if dump_created:
-                print(f"Raw SQL backup saved to: {sql_dump_path}")
-
         local_artifacts.append(("SQLite export", sqlite_path))
-        copied_objects = build_sqlite_database(args, sqlite_path)
+
+        with mysql_table_mutation_lock(args):
+            if not args.skip_mysqldump:
+                dump_created = create_mysql_dump(args, sql_dump_path)
+                if dump_created:
+                    print(f"Raw SQL backup saved to: {sql_dump_path}")
+
+            copied_objects = build_sqlite_database(args, sqlite_path)
         print(f"SQLite export complete. Objects copied: {len(copied_objects)}")
 
         if args.skip_upload:
@@ -1230,7 +1306,7 @@ def main() -> None:
         if local_artifacts and (cleanup_local_on_success or encountered_error):
             cleanup_local_artifacts(local_artifacts)
 
-        if vpn_disconnected:
+        if vpn_disconnected and args.reconnect_vpn:
             try:
                 connect_vpn()
             except Exception as error:
@@ -1238,6 +1314,8 @@ def main() -> None:
                     print(f"Warning: unable to reconnect VPN: {error}")
                 else:
                     raise
+        elif vpn_disconnected:
+            print("VPN left disconnected. Use --reconnect-vpn to reconnect at script exit.")
 
 if __name__ == "__main__":
     main()
