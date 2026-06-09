@@ -32,6 +32,16 @@ OUTPUT_TABLE = "vwap_bands"
 STREAM_TABLE = "ohlcv_1m"
 EASTERN = ZoneInfo("America/New_York")
 DEFAULT_BAND_MULTIPLIERS = (1.0, 2.0, 3.0)
+OUTPUT_COLUMNS = [
+    "symbol",
+    "vwap",
+    "vb1_pos",
+    "vb2_pos",
+    "vb3_pos",
+    "vb1_neg",
+    "vb2_neg",
+    "vb3_neg",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -223,7 +233,7 @@ def calculate_symbol_vwap_bands(
     symbol_rows: pd.DataFrame,
     band_multipliers: tuple[float, float, float],
     calc_mode: str,
-) -> dict[str, float] | None:
+) -> dict[str, Any] | None:
     data = symbol_rows.sort_values("Timestamp").copy()
     for column in ("High", "Low", "Close", "Volume"):
         data[column] = pd.to_numeric(data[column], errors="coerce")
@@ -268,23 +278,13 @@ def calculate_vwap_bands(
     band_multipliers: tuple[float, float, float],
     calc_mode: str,
 ) -> pd.DataFrame:
-    output_columns = [
-        "symbol",
-        "vwap",
-        "vb1_pos",
-        "vb2_pos",
-        "vb3_pos",
-        "vb1_neg",
-        "vb2_neg",
-        "vb3_neg",
-    ]
     if rows.empty:
-        return pd.DataFrame(columns=output_columns)
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     grouped_rows = {
         symbol: symbol_rows for symbol, symbol_rows in rows.groupby("Symbol", sort=False)
     }
-    output_rows: list[dict[str, float]] = []
+    output_rows: list[dict[str, Any]] = []
     for symbol in symbols:
         symbol_rows = grouped_rows.get(symbol)
         if symbol_rows is None or symbol_rows.empty:
@@ -293,7 +293,7 @@ def calculate_vwap_bands(
         if result is not None:
             output_rows.append(result)
 
-    return pd.DataFrame(output_rows, columns=output_columns)
+    return pd.DataFrame(output_rows, columns=OUTPUT_COLUMNS)
 
 
 def reset_output_table(engine: Engine) -> None:
@@ -305,7 +305,7 @@ def write_vwap_bands(engine: Engine, bands: pd.DataFrame) -> None:
     if bands.empty:
         return
 
-    bands.to_sql(
+    bands.loc[:, OUTPUT_COLUMNS].to_sql(
         OUTPUT_TABLE,
         con=engine,
         if_exists="append",
