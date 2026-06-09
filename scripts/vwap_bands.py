@@ -5,6 +5,7 @@ import datetime as dt
 import math
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote_plus
@@ -42,6 +43,7 @@ OUTPUT_COLUMNS = [
     "vb2_neg",
     "vb3_neg",
 ]
+VALUE_COLUMNS = [column for column in OUTPUT_COLUMNS if column != "symbol"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,9 +64,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--date",
         type=lambda value: dt.datetime.strptime(value, "%Y-%m-%d").date(),
-        default=dt.datetime.now(EASTERN).date(),
         help="Session date to calculate, in YYYY-MM-DD format. Defaults to today.",
     )
+    parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--symbol-query-chunk-size", type=int, default=250)
     parser.add_argument(
         "--calc-mode",
@@ -78,6 +80,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--band-mult-1", type=float, default=DEFAULT_BAND_MULTIPLIERS[0])
     parser.add_argument("--band-mult-2", type=float, default=DEFAULT_BAND_MULTIPLIERS[1])
     parser.add_argument("--band-mult-3", type=float, default=DEFAULT_BAND_MULTIPLIERS[2])
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single update instead of continuously polling.",
+    )
     return parser.parse_args()
 
 
@@ -297,62 +304,126 @@ def calculate_vwap_bands(
 
 
 def reset_output_table(engine: Engine) -> None:
+    assignments = ", ".join(
+        f"{mysql_identifier(column)} = NULL" for column in VALUE_COLUMNS
+    )
     with engine.begin() as conn:
-        conn.execute(text(f"DELETE FROM {mysql_identifier(OUTPUT_TABLE)}"))
+        conn.execute(text(f"UPDATE {mysql_identifier(OUTPUT_TABLE)} SET {assignments}"))
 
 
 def write_vwap_bands(engine: Engine, bands: pd.DataFrame) -> None:
     if bands.empty:
         return
 
-    bands.loc[:, OUTPUT_COLUMNS].to_sql(
-        OUTPUT_TABLE,
-        con=engine,
-        if_exists="append",
-        index=False,
-        method="multi",
-        chunksize=500,
+    records = bands.loc[:, OUTPUT_COLUMNS].to_dict("records")
+    symbols = [str(record["symbol"]).upper() for record in records]
+    select_existing = text(
+        f"""
+        SELECT symbol
+        FROM {mysql_identifier(OUTPUT_TABLE)}
+        WHERE symbol IN :symbols
+        """
+    ).bindparams(bindparam("symbols", expanding=True))
+    update_stmt = text(
+        f"""
+        UPDATE {mysql_identifier(OUTPUT_TABLE)}
+        SET {", ".join(f"{mysql_identifier(column)} = :{column}" for column in VALUE_COLUMNS)}
+        WHERE symbol = :symbol
+        """
     )
+    insert_stmt = text(
+        f"""
+        INSERT INTO {mysql_identifier(OUTPUT_TABLE)}
+            ({", ".join(mysql_identifier(column) for column in OUTPUT_COLUMNS)})
+        VALUES
+            ({", ".join(f":{column}" for column in OUTPUT_COLUMNS)})
+        """
+    )
+
+    with engine.begin() as conn:
+        existing_symbols = {
+            str(row[0]).upper()
+            for row in conn.execute(select_existing, {"symbols": symbols})
+        }
+        rows_to_update = [
+            record for record in records if str(record["symbol"]).upper() in existing_symbols
+        ]
+        rows_to_insert = [
+            record for record in records if str(record["symbol"]).upper() not in existing_symbols
+        ]
+
+        if rows_to_update:
+            conn.execute(update_stmt, rows_to_update)
+        if rows_to_insert:
+            conn.execute(insert_stmt, rows_to_insert)
+
+
+def resolve_symbols(stocks_engine: Engine, symbols_file: Path | None) -> list[str]:
+    if symbols_file is not None:
+        return load_symbols_file(symbols_file)
+    return fetch_elevated_symbols(stocks_engine)
+
+
+def update_vwap_bands(
+    stocks_engine: Engine,
+    stream_engine: Engine,
+    symbols: list[str],
+    session_date: dt.date,
+    symbol_query_chunk_size: int,
+    band_multipliers: tuple[float, float, float],
+    calc_mode: str,
+) -> int:
+    reset_output_table(stocks_engine)
+
+    if not symbols:
+        return 0
+
+    session_start = dt.datetime.combine(session_date, dt.time.min)
+    session_end = session_start + dt.timedelta(days=1)
+    rows = fetch_ohlcv_rows(
+        engine=stream_engine,
+        symbols=symbols,
+        start_ts=session_start,
+        end_ts=session_end,
+        symbol_chunk_size=symbol_query_chunk_size,
+    )
+    bands = calculate_vwap_bands(
+        rows=rows,
+        symbols=symbols,
+        band_multipliers=band_multipliers,
+        calc_mode=calc_mode,
+    )
+    write_vwap_bands(stocks_engine, bands)
+    return len(bands)
 
 
 def main() -> None:
     args = parse_args()
     stocks_engine = make_gptdb_engine(STOCKS_DB)
     stream_engine = make_stream_engine(STREAM_DB)
-
-    print(f"Clearing stocks.{OUTPUT_TABLE}...")
-    reset_output_table(stocks_engine)
-
-    symbols = (
-        load_symbols_file(args.symbols_file)
-        if args.symbols_file is not None
-        else fetch_elevated_symbols(stocks_engine)
-    )
-
-    if not symbols:
-        print("No symbols found; output table was cleared.")
-        return
-
-    session_start = dt.datetime.combine(args.date, dt.time.min)
-    session_end = session_start + dt.timedelta(days=1)
-    print(f"Fetching {len(symbols)} symbols from {STREAM_DB}.{STREAM_TABLE}...")
-    rows = fetch_ohlcv_rows(
-        engine=stream_engine,
-        symbols=symbols,
-        start_ts=session_start,
-        end_ts=session_end,
-        symbol_chunk_size=args.symbol_query_chunk_size,
-    )
-
     band_multipliers = (args.band_mult_1, args.band_mult_2, args.band_mult_3)
-    bands = calculate_vwap_bands(
-        rows=rows,
-        symbols=symbols,
-        band_multipliers=band_multipliers,
-        calc_mode=args.calc_mode,
-    )
-    write_vwap_bands(stocks_engine, bands)
-    print(f"Wrote {len(bands)} rows to stocks.{OUTPUT_TABLE}.")
+
+    print(f"Continuously updating stocks.{OUTPUT_TABLE}...")
+    while True:
+        session_date = args.date or dt.datetime.now(EASTERN).date()
+        symbols = resolve_symbols(stocks_engine, args.symbols_file)
+        rows_written = update_vwap_bands(
+            stocks_engine=stocks_engine,
+            stream_engine=stream_engine,
+            symbols=symbols,
+            session_date=session_date,
+            symbol_query_chunk_size=args.symbol_query_chunk_size,
+            band_multipliers=band_multipliers,
+            calc_mode=args.calc_mode,
+        )
+        print(
+            f"{dt.datetime.now(EASTERN):%H:%M:%S}: "
+            f"symbols={len(symbols)} wrote={rows_written}"
+        )
+
+        if args.once:
+            break
+        time.sleep(args.poll_interval)
 
 
 if __name__ == "__main__":
