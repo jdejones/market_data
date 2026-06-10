@@ -25,4 +25,6 @@ start "VWAP Bands" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_
 
 start "NHOD" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\nhod.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] nhod.py failed with exit code %%errorlevel%%. & echo nhod.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
 
+start "NLOD" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\nlod.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] nlod.py failed with exit code %%errorlevel%%. & echo nlod.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
+
 exit /b 0
