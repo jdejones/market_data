@@ -467,6 +467,57 @@ if __name__ == "__main__":
         for sym in interest_list_long.interest_list:
             f.write(sym + '\n')
     
+    if not args.skip_daily_storage:
+        summary_column_map = {
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume",
+            "rvol": "RVol",
+            "dollar_volume": "Dollar_Volume",
+            "atr_14": "ATR_14",
+            "atr_14_signal": "ATR_14_signal",
+            "rsi_14": "RSI_14",
+            "rsi_14_signal": "RSI_14_signal",
+            "di_plus": "+DI",
+            "di_neg": "-DI",
+            "adx": "ADX",
+            "adx_signal": "ADX_signal",
+            "emacd1226": "eMACD1226",
+            "emacd1226_signal": "eMACD1226_signal",
+            "relative_atr": "Relative_ATR",
+            "atrs_traded": "ATRs_Traded",
+            "ep": "ep",
+        }
+
+        def latest_value(df, column):
+            if df.empty or column not in df.columns:
+                return np.nan
+            value = df[column].iloc[-1]
+            if hasattr(value, "item"):
+                value = value.item()
+            return value
+
+        summary_rows = []
+        for sym, symbol_data in tqdm(symbols.items(), desc="Updating stocks.summary"):
+            row = {"symbol": sym}
+            for summary_column, df_column in summary_column_map.items():
+                row[summary_column] = latest_value(symbol_data.df, df_column)
+            summary_rows.append(row)
+
+        summary_df = pd.DataFrame(summary_rows)
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM summary"))
+            summary_df.to_sql(
+                "summary",
+                con=conn,
+                if_exists="append",
+                index=False,
+                method="multi",
+                chunksize=200,
+            )
+    
     #Pickling most used objects, so I don't have to rerun the script.
     def save_snapshots(obj, name):
         base = r"E:\Market Research\Dataset\daily_after_close_study"
