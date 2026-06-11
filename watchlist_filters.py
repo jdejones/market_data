@@ -878,7 +878,7 @@ def relative_strength(symbols, threshold=70, no_of_results=5, bm=None, lookback=
     # #TODO This function is minimally viable. It currently only finds the relative strength for a given look back period. It should be able to find
     # #TODO the relative strength since IPO.
     # #Get Data
-    rel_stren_obj = sf.relative_strength(symbols, lookback=-252, bm=bm)
+    rel_stren_obj = sf.relative_strength(symbols, lookback=lookback, bm=bm)
     rel_stren = rel_stren_obj()
     threshold_passed = []  
     
@@ -898,8 +898,8 @@ def relative_strength(symbols, threshold=70, no_of_results=5, bm=None, lookback=
         for sym in threshold_passed:
             f.write(sym + '\n')
 
-def relative_weakness(symbols, threshold=20, no_of_results=5, bm=None, file=r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\relative_weakness_tc2000_favorites.txt"):
-    rel_weak_obj = sf.relative_strength(symbols, lookback=-252, bm=bm)
+def relative_weakness(symbols, threshold=20, no_of_results=5, bm=None, lookback=-252, file=r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\relative_weakness_tc2000_favorites.txt"):
+    rel_weak_obj = sf.relative_strength(symbols, lookback=lookback, bm=bm)
     rel_weak = rel_weak_obj()
     threshold_passed = []
     def results(threshold=threshold):
