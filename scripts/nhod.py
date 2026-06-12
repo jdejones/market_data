@@ -381,6 +381,7 @@ class NhodGUI:
         self.config = config
         self.output_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
         self.refresh_event = threading.Event()
         self.lookback_lock = threading.Lock()
         self.lookback_minutes = config.lookback_minutes
@@ -394,6 +395,7 @@ class NhodGUI:
 
         self.status_var = tk.StringVar(value="Starting...")
         self.lookback_var = tk.StringVar(value=str(config.lookback_minutes))
+        self.pause_button_text = tk.StringVar(value="Pause Updates")
         self._build_widgets()
         self.start_worker()
         self.root.after(250, self.process_queue)
@@ -454,6 +456,11 @@ class NhodGUI:
             sticky=tk.W,
             padx=(0, 8),
         )
+        ttk.Button(
+            controls,
+            textvariable=self.pause_button_text,
+            command=self.toggle_pause,
+        ).grid(row=0, column=3, sticky=tk.W, padx=(0, 8))
         ttk.Button(container, text="Refresh Now", command=self.render_last_rows).grid(
             row=2,
             column=0,
@@ -495,6 +502,17 @@ class NhodGUI:
             self.lookback_minutes = lookback_minutes
         self.refresh_event.set()
         self.status_var.set(f"Lookback set to {lookback_minutes}m")
+
+    def toggle_pause(self) -> None:
+        if self.pause_event.is_set():
+            self.pause_event.clear()
+            self.pause_button_text.set("Pause Updates")
+            self.status_var.set("Updates resumed")
+        else:
+            self.pause_event.set()
+            self.pause_button_text.set("Resume Updates")
+            self.status_var.set("Updates paused")
+        self.refresh_event.set()
 
     def sort_by_column(self, column: str) -> None:
         if column not in SORTABLE_COLUMNS:
@@ -568,6 +586,10 @@ class NhodGUI:
             self.output_queue.put(("status", "Monitoring new highs of day..."))
 
             while not self.stop_event.is_set():
+                if self.pause_event.is_set():
+                    self.stop_event.wait(0.25)
+                    continue
+
                 active_config = replace(
                     self.config,
                     lookback_minutes=self.current_lookback_minutes(),

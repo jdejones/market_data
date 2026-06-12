@@ -326,6 +326,7 @@ class HighShortInterestInPlayGUI:
         self.config = config
         self.output_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
         self.refresh_event = threading.Event()
         self.last_rows: list[dict[str, Any]] = []
         self.sort_column = "short_interest"
@@ -336,6 +337,7 @@ class HighShortInterestInPlayGUI:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.status_var = tk.StringVar(value="Starting...")
+        self.pause_button_text = tk.StringVar(value="Pause Updates")
         self._build_widgets()
         self.start_worker()
         self.root.after(250, self.process_queue)
@@ -381,6 +383,17 @@ class HighShortInterestInPlayGUI:
             sticky=tk.W,
             pady=(10, 0),
         )
+        ttk.Button(
+            container,
+            textvariable=self.pause_button_text,
+            command=self.toggle_pause,
+        ).grid(
+            row=1,
+            column=0,
+            sticky=tk.W,
+            padx=(100, 0),
+            pady=(10, 0),
+        )
         ttk.Label(container, textvariable=self.status_var).grid(
             row=1,
             column=0,
@@ -411,6 +424,17 @@ class HighShortInterestInPlayGUI:
     def refresh_now(self) -> None:
         self.refresh_event.set()
         self.render_rows(self.last_rows)
+
+    def toggle_pause(self) -> None:
+        if self.pause_event.is_set():
+            self.pause_event.clear()
+            self.pause_button_text.set("Pause Updates")
+            self.status_var.set("Updates resumed")
+        else:
+            self.pause_event.set()
+            self.pause_button_text.set("Resume Updates")
+            self.status_var.set("Updates paused")
+        self.refresh_event.set()
 
     def render_rows(self, rows: list[dict[str, Any]]) -> None:
         sorted_rows = list(rows)
@@ -463,6 +487,10 @@ class HighShortInterestInPlayGUI:
             self.output_queue.put(("status", "Monitoring high short interest in play..."))
 
             while not self.stop_event.is_set():
+                if self.pause_event.is_set():
+                    self.stop_event.wait(0.25)
+                    continue
+
                 rows, release_date, high_short_count = refresh_high_short_interest_in_play(
                     stocks_engine,
                     self.config,
