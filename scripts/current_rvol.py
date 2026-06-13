@@ -24,18 +24,21 @@ PACKAGE_PARENT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_PARENT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_PARENT))
 
-from market_data.api_keys import intraday_stream_database  # type: ignore[import-not-found]
+from market_data import watchlists_locations  # type: ignore[import-not-found]
+from market_data.api_keys import gptdb, intraday_stream_database  # type: ignore[import-not-found]
 from market_data.price_data_import import intraday_import  # type: ignore[import-not-found]
 
 
 MYSQL_HOST = "127.0.0.1"
 MYSQL_PORT = 3306
+GPTDB_MYSQL_USER = "gptdb"
 MYSQL_USER = "price_data_streamer"
 STOCKS_DB = "stocks"
 STREAM_DB = "intraday_price_stream"
 TEMP_RVOL_TABLE = "temp_cum_rvol"
 STREAM_TABLE = "ohlcv_1m"
 ELEVATED_RVOL_TABLE = "elevated_rvol"
+EP_RVOL_TABLE = "ep_rvol"
 TIMESTAMP_COLUMN = "timestamp"
 EASTERN = ZoneInfo("US/Eastern")
 
@@ -46,6 +49,7 @@ class MonitorState:
     processed_rows: set[tuple[str, pd.Timestamp]] = field(default_factory=set)
     latest_rvol: dict[str, float] = field(default_factory=dict)
     elevated_symbols: set[str] = field(default_factory=set)
+    ep_rvol_symbols: set[str] = field(default_factory=set)
     last_seen_timestamp: pd.Timestamp | None = None
 
 
@@ -76,10 +80,23 @@ def load_symbols(symbols_file: Path) -> list[str]:
     return symbols
 
 
+def load_symbol_set(symbols_file: Path) -> set[str]:
+    return set(load_symbols(symbols_file))
+
+
 def make_engine(database: str) -> Engine:
     password = quote_plus(intraday_stream_database)
     url = (
         f"mysql+pymysql://{MYSQL_USER}:{password}@"
+        f"{MYSQL_HOST}:{MYSQL_PORT}/{database}"
+    )
+    return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+
+def make_gptdb_engine(database: str) -> Engine:
+    password = quote_plus(gptdb)
+    url = (
+        f"mysql+pymysql://{GPTDB_MYSQL_USER}:{password}@"
         f"{MYSQL_HOST}:{MYSQL_PORT}/{database}"
     )
     return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
@@ -263,6 +280,21 @@ def reset_elevated_rvol_table(engine: Engine) -> None:
         conn.execute(text(f"DELETE FROM {mysql_identifier(ELEVATED_RVOL_TABLE)}"))
 
 
+def reset_ep_rvol_table(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"""
+                CREATE TABLE IF NOT EXISTS {mysql_identifier(EP_RVOL_TABLE)} (
+                    symbol VARCHAR(32),
+                    rvol FLOAT
+                )
+                """
+            )
+        )
+        conn.execute(text(f"DELETE FROM {mysql_identifier(EP_RVOL_TABLE)}"))
+
+
 def fetch_stream_rows(
     engine: Engine,
     symbols: list[str],
@@ -398,11 +430,49 @@ def update_elevated_rvol_table(
             )
 
 
+def update_ep_rvol_table(
+    engine: Engine,
+    state: MonitorState,
+    latest_rvol: dict[str, float],
+    episodic_pivot_symbols: set[str],
+) -> None:
+    ep_rvol_updates = {
+        symbol for symbol in latest_rvol if symbol in episodic_pivot_symbols
+    }
+    removed_from_watchlist = state.ep_rvol_symbols - episodic_pivot_symbols
+    to_insert = sorted(ep_rvol_updates - state.ep_rvol_symbols)
+    to_refresh = ep_rvol_updates & state.ep_rvol_symbols
+
+    if not to_insert and not removed_from_watchlist and not to_refresh:
+        return
+
+    if to_insert:
+        state.ep_rvol_symbols.update(to_insert)
+    if removed_from_watchlist:
+        state.ep_rvol_symbols.difference_update(removed_from_watchlist)
+
+    with engine.begin() as conn:
+        conn.execute(text(f"DELETE FROM {mysql_identifier(EP_RVOL_TABLE)}"))
+        if state.ep_rvol_symbols:
+            conn.execute(
+                text(
+                    f"INSERT INTO {mysql_identifier(EP_RVOL_TABLE)} "
+                    "(symbol, rvol) VALUES (:symbol, :rvol)"
+                ),
+                [
+                    {"symbol": symbol, "rvol": state.latest_rvol[symbol]}
+                    for symbol in sorted(state.ep_rvol_symbols)
+                ],
+            )
+
+
 def monitor_current_rvol(
     stream_engine: Engine,
     stocks_engine: Engine,
+    ep_rvol_engine: Engine,
     symbols: list[str],
     profile_df: pd.DataFrame,
+    episodic_pivot_symbols: set[str],
     threshold: float,
     poll_interval: float,
     query_overlap_minutes: int,
@@ -434,13 +504,15 @@ def monitor_current_rvol(
         )
         latest_rvol = process_stream_rows(rows, profile_df, state)
         update_elevated_rvol_table(stocks_engine, state, latest_rvol, threshold)
+        update_ep_rvol_table(ep_rvol_engine, state, latest_rvol, episodic_pivot_symbols)
 
         if verbose:
             print(
                 f"{dt.datetime.now(EASTERN):%H:%M:%S}: "
                 f"processed_rows={len(state.processed_rows)} "
                 f"latest_updates={len(latest_rvol)} "
-                f"elevated={len(state.elevated_symbols)}"
+                f"elevated={len(state.elevated_symbols)} "
+                f"ep_rvol={len(state.ep_rvol_symbols)}"
             )
 
         time.sleep(poll_interval)
@@ -448,7 +520,10 @@ def monitor_current_rvol(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Calculate current intraday RVol and maintain stocks.elevated_rvol."
+        description=(
+            "Calculate current intraday RVol and maintain stocks.elevated_rvol "
+            "and stocks.ep_rvol."
+        )
     )
     parser.add_argument(
         "--symbols-file",
@@ -483,10 +558,13 @@ def main() -> None:
     symbols = load_symbols(args.symbols_file)
     target_date = dt.datetime.now(EASTERN).date()
     stocks_engine = make_engine(STOCKS_DB)
+    ep_rvol_engine = make_gptdb_engine(STOCKS_DB)
     stream_engine = make_engine(STREAM_DB)
+    episodic_pivot_symbols = load_symbol_set(Path(watchlists_locations.episodic_pivots))
 
     reset_temp_profile_table(stocks_engine, [], args.alter_chunk_size)
     reset_elevated_rvol_table(stocks_engine)
+    reset_ep_rvol_table(ep_rvol_engine)
 
     profile_df = build_historical_profiles(
         symbols=symbols,
@@ -505,8 +583,10 @@ def main() -> None:
     monitor_current_rvol(
         stream_engine=stream_engine,
         stocks_engine=stocks_engine,
+        ep_rvol_engine=ep_rvol_engine,
         symbols=list(profile_df.columns),
         profile_df=profile_df,
+        episodic_pivot_symbols=episodic_pivot_symbols,
         threshold=args.rvol_threshold,
         poll_interval=args.poll_interval,
         query_overlap_minutes=args.query_overlap_minutes,
