@@ -29,4 +29,6 @@ start "NHOD" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\
 
 start "NLOD" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\nlod.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] nlod.py failed with exit code %%errorlevel%%. & echo nlod.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
 
+start "EP Continuation" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\ep_continuation.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] ep_continuation.py failed with exit code %%errorlevel%%. & echo ep_continuation.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
+
 exit /b 0
