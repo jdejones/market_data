@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import gzip
 import math
 import os
-import pickle
 import queue
 import sys
 import threading
@@ -22,22 +20,12 @@ import pandas as pd
 from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 
-try:
-    from tqdm import tqdm
-except ImportError:  # pragma: no cover - only used when tqdm is not installed.
-    def tqdm(iterable: Iterable[Any], **_: Any) -> Iterable[Any]:
-        return iterable
 
-
-SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-for path in (PROJECT_ROOT, SCRIPT_DIR):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from market_data import watchlists_locations  # type: ignore[import-not-found]
-
-import load_daily_variables  # type: ignore[import-not-found]
+from market_data import add_technicals as technicals  # type: ignore[import-not-found]
 
 
 MYSQL_HOST = "127.0.0.1"
@@ -47,7 +35,7 @@ STREAM_MYSQL_USER = "price_data_streamer"
 STOCKS_DB = "stocks"
 STREAM_DB = "intraday_price_stream"
 EP_RVOL_TABLE = "ep_rvol"
-OUTPUT_TABLE = "ep_continuation"
+OUTPUT_TABLE = "ep_59ema_cross_below_vwap"
 DAILY_QUANT_RATING_TABLE = "daily_quant_rating"
 STREAM_TABLE = "ohlcv_1m"
 EASTERN = ZoneInfo("America/New_York")
@@ -58,7 +46,8 @@ DISPLAY_COLUMNS = (
     "quant_rating",
     "cross_time",
     "last_price",
-    "yesterday_high",
+    "vwap",
+    "emacd59",
 )
 OUTPUT_COLUMNS = ("symbol", "rvol", "quant_rating")
 SORTABLE_COLUMNS = set(DISPLAY_COLUMNS)
@@ -84,15 +73,15 @@ class MonitorConfig:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Monitor episodic pivot symbols that traded below yesterday's high "
-            "and then back above it inside a configurable lookback window."
+            "Monitor stocks.ep_rvol for symbols whose 5/9 eMACD crossed from "
+            "negative to positive while the latest price is below VWAP."
         )
     )
     parser.add_argument(
         "--lookback-minutes",
         type=int,
         default=15,
-        help="Minutes to look back for yesterday-high recaptures. Defaults to 15.",
+        help="Minutes to look back for eMACD crosses. Defaults to 15.",
     )
     parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--symbol-query-chunk-size", type=int, default=250)
@@ -148,29 +137,6 @@ def chunked(items: list[str], chunk_size: int) -> Iterable[list[str]]:
         yield items[i:i + chunk_size]
 
 
-def normalize_symbols(values: Iterable[Any]) -> list[str]:
-    symbols: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value is None or pd.isna(value):
-            continue
-        symbol = str(value).strip().upper()
-        if not symbol or symbol.startswith("#") or symbol in seen:
-            continue
-        symbols.append(symbol)
-        seen.add(symbol)
-    return symbols
-
-
-def load_symbols_file(symbols_file: Path) -> list[str]:
-    with symbols_file.open("r", encoding="utf-8") as f:
-        symbols = normalize_symbols(line.strip() for line in f)
-
-    if not symbols:
-        raise ValueError(f"No symbols found in {symbols_file}")
-    return symbols
-
-
 def numeric_or_none(value: Any) -> float | None:
     number = pd.to_numeric(value, errors="coerce")
     if pd.isna(number):
@@ -202,62 +168,6 @@ def resolve_column(columns: Iterable[str], candidates: Iterable[str]) -> str | N
         if match is not None:
             return match
     return None
-
-
-def load_daily_pickles() -> dict[str, Any]:
-    # load_daily_variables defines load_all but imports these modules only in its
-    # script entrypoint. Patch them in here so this monitor can reuse the loader.
-    load_daily_variables.gzip = gzip
-    load_daily_variables.pickle = pickle
-    load_daily_variables.threading = threading
-    load_daily_variables.tqdm = tqdm
-    return load_daily_variables.load_all()
-
-
-def get_symbol_frame(symbol_data: Any) -> pd.DataFrame | None:
-    frame = getattr(symbol_data, "df", None)
-    if isinstance(frame, pd.DataFrame):
-        return frame
-    return None
-
-
-def load_yesterday_highs(symbols: list[str]) -> dict[str, float]:
-    loaded = load_daily_pickles()
-    symbol_data_by_symbol = loaded.get("symbols", {})
-    if not isinstance(symbol_data_by_symbol, dict):
-        raise ValueError("Loaded daily variables did not include a symbols dictionary")
-
-    today = dt.datetime.now(EASTERN).date()
-    highs: dict[str, float] = {}
-
-    for symbol in symbols:
-        symbol_data = symbol_data_by_symbol.get(symbol) or symbol_data_by_symbol.get(
-            symbol.upper()
-        )
-        frame = get_symbol_frame(symbol_data)
-        if frame is None or frame.empty:
-            continue
-
-        high_column = resolve_column(frame.columns, ("High", "high", "H", "h"))
-        if high_column is None:
-            continue
-
-        data = frame.copy()
-        if isinstance(data.index, pd.DatetimeIndex):
-            data = data.loc[data.index.date < today]
-        else:
-            parsed_index = pd.to_datetime(pd.Index(data.index), errors="coerce")
-            if parsed_index.notna().any():
-                data = data.loc[parsed_index.date < today]
-
-        if data.empty:
-            continue
-
-        high = numeric_or_none(data[high_column].iloc[-1])
-        if high is not None:
-            highs[symbol] = high
-
-    return highs
 
 
 def fetch_ep_rvol(engine: Engine) -> pd.DataFrame:
@@ -312,7 +222,9 @@ def load_latest_quant_ratings(engine: Engine) -> dict[str, float | None]:
 
 
 def empty_ohlcv_frame() -> pd.DataFrame:
-    return pd.DataFrame(columns=["Symbol", "Timestamp", "High", "Low", "Close"])
+    return pd.DataFrame(
+        columns=["Symbol", "Timestamp", "Open", "High", "Low", "Close", "Volume"]
+    )
 
 
 def fetch_ohlcv_rows(
@@ -328,7 +240,7 @@ def fetch_ohlcv_rows(
     frames: list[pd.DataFrame] = []
     stmt = text(
         f"""
-        SELECT Symbol, Timestamp, High, Low, Close
+        SELECT Symbol, Timestamp, Open, High, Low, Close, Volume
         FROM {mysql_identifier(STREAM_TABLE)}
         WHERE Timestamp >= :start_ts
           AND Timestamp <= :end_ts
@@ -356,9 +268,9 @@ def fetch_ohlcv_rows(
     rows = pd.concat(frames, ignore_index=True)
     rows["Symbol"] = rows["Symbol"].astype(str).str.strip().str.upper()
     rows["Timestamp"] = pd.to_datetime(rows["Timestamp"])
-    for column in ("High", "Low", "Close"):
+    for column in ("Open", "High", "Low", "Close", "Volume"):
         rows[column] = pd.to_numeric(rows[column], errors="coerce")
-    return rows.dropna(subset=["High", "Low", "Close"]).sort_values(
+    return rows.dropna(subset=["Open", "High", "Low", "Close", "Volume"]).sort_values(
         ["Symbol", "Timestamp"]
     )
 
@@ -374,10 +286,23 @@ def session_bounds(include_extended_hours: bool) -> tuple[dt.datetime, dt.dateti
     return dt.datetime.combine(today, start_time), dt.datetime.combine(today, end_time)
 
 
-def detect_ep_continuations(
+def add_intraday_indicators(symbol_rows: pd.DataFrame) -> pd.DataFrame:
+    data = symbol_rows.sort_values("Timestamp").copy()
+    data = data.set_index("Timestamp", drop=False)
+    data = technicals.MACD(
+        data,
+        base="Close",
+        short_period=5,
+        long_period=9,
+        ma_type="exponential",
+    )
+    data = technicals.VWAP_(data)
+    return data
+
+
+def detect_crosses_below_vwap(
     ep_rvol: pd.DataFrame,
     ohlcv_rows: pd.DataFrame,
-    yesterday_highs: dict[str, float],
     quant_ratings: dict[str, float | None],
     lookback_minutes: int,
     as_of: dt.datetime,
@@ -390,25 +315,24 @@ def detect_ep_continuations(
     output_rows: list[dict[str, Any]] = []
 
     for symbol, symbol_rows in ohlcv_rows.groupby("Symbol", sort=False):
-        symbol_upper = str(symbol).upper()
-        yesterday_high = yesterday_highs.get(symbol_upper)
-        if yesterday_high is None:
-            continue
-
-        data = symbol_rows.sort_values("Timestamp").copy()
-        below_seen = data["Low"].lt(yesterday_high).cummax()
-        above_yesterday_high = data["High"].gt(yesterday_high)
-        recent_crosses = data.loc[
-            below_seen & above_yesterday_high & (data["Timestamp"] >= cutoff)
-        ]
-        if recent_crosses.empty:
+        data = add_intraday_indicators(symbol_rows)
+        if data.empty or len(data) < 2:
             continue
 
         latest_bar = data.iloc[-1]
         latest_close = numeric_or_none(latest_bar["Close"])
-        if latest_close is None or latest_close <= yesterday_high:
+        latest_vwap = numeric_or_none(latest_bar["VWAP"])
+        latest_emacd = numeric_or_none(latest_bar["eMACD59"])
+        if latest_close is None or latest_vwap is None or latest_close >= latest_vwap:
             continue
 
+        previous_emacd = data["eMACD59"].shift(1)
+        crossed_positive = previous_emacd.lt(0) & data["eMACD59"].gt(0)
+        recent_crosses = data.loc[crossed_positive & (data["Timestamp"] >= cutoff)]
+        if recent_crosses.empty:
+            continue
+
+        symbol_upper = str(symbol).upper()
         latest_cross = recent_crosses.iloc[-1]
         output_rows.append(
             {
@@ -417,7 +341,8 @@ def detect_ep_continuations(
                 "quant_rating": quant_ratings.get(symbol_upper),
                 "cross_time": pd.Timestamp(latest_cross["Timestamp"]),
                 "last_price": latest_close,
-                "yesterday_high": yesterday_high,
+                "vwap": latest_vwap,
+                "emacd59": latest_emacd,
             }
         )
 
@@ -433,7 +358,7 @@ def reset_output_table(engine: Engine) -> None:
         conn.execute(text(f"DELETE FROM {mysql_identifier(OUTPUT_TABLE)}"))
 
 
-def write_ep_continuation_rows(engine: Engine, rows: pd.DataFrame) -> None:
+def write_output_rows(engine: Engine, rows: pd.DataFrame) -> None:
     if rows.empty:
         records: list[dict[str, Any]] = []
     else:
@@ -457,14 +382,12 @@ def write_ep_continuation_rows(engine: Engine, rows: pd.DataFrame) -> None:
             )
 
 
-def refresh_ep_continuation(
+def refresh_rows(
     stocks_engine: Engine,
     stream_engine: Engine,
     config: MonitorConfig,
-    yesterday_highs: dict[str, float],
 ) -> pd.DataFrame:
     ep_rvol = fetch_ep_rvol(stocks_engine)
-    ep_rvol = ep_rvol[ep_rvol["symbol"].isin(yesterday_highs)]
     symbols = ep_rvol["symbol"].tolist() if not ep_rvol.empty else []
     quant_ratings = load_latest_quant_ratings(stocks_engine)
     session_start, session_end = session_bounds(config.include_extended_hours)
@@ -476,19 +399,18 @@ def refresh_ep_continuation(
         end_ts=min(as_of, session_end),
         symbol_chunk_size=config.symbol_chunk_size,
     )
-    continuation_rows = detect_ep_continuations(
+    output_rows = detect_crosses_below_vwap(
         ep_rvol=ep_rvol,
         ohlcv_rows=rows,
-        yesterday_highs=yesterday_highs,
         quant_ratings=quant_ratings,
         lookback_minutes=config.lookback_minutes,
         as_of=as_of,
     )
-    write_ep_continuation_rows(stocks_engine, continuation_rows)
-    return continuation_rows
+    write_output_rows(stocks_engine, output_rows)
+    return output_rows
 
 
-class EpContinuationGUI:
+class EpEmaCrossBelowVwapGUI:
     def __init__(self, root: tk.Tk, config: MonitorConfig) -> None:
         self.root = root
         self.config = config
@@ -502,8 +424,8 @@ class EpContinuationGUI:
         self.sort_column = "rvol"
         self.sort_descending = True
 
-        self.root.title("EP Continuation")
-        self.root.geometry("880x520")
+        self.root.title("EP 5/9 EMA Cross Below VWAP")
+        self.root.geometry("960x520")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.status_var = tk.StringVar(value="Starting...")
@@ -529,7 +451,8 @@ class EpContinuationGUI:
             "quant_rating": 120,
             "cross_time": 120,
             "last_price": 110,
-            "yesterday_high": 130,
+            "vwap": 110,
+            "emacd59": 110,
         }
         anchors = {
             "symbol": tk.W,
@@ -537,7 +460,8 @@ class EpContinuationGUI:
             "quant_rating": tk.E,
             "cross_time": tk.CENTER,
             "last_price": tk.E,
-            "yesterday_high": tk.E,
+            "vwap": tk.E,
+            "emacd59": tk.E,
         }
         for column in DISPLAY_COLUMNS:
             self.tree.heading(
@@ -594,7 +518,7 @@ class EpContinuationGUI:
     def start_worker(self) -> None:
         worker = threading.Thread(
             target=self.worker_loop,
-            name="ep-continuation-gui-worker",
+            name="ep-59ema-cross-below-vwap-gui-worker",
             daemon=True,
         )
         worker.start()
@@ -672,7 +596,8 @@ class EpContinuationGUI:
                     format_number(row.get("quant_rating")),
                     format_time(row.get("cross_time")),
                     format_number(row.get("last_price")),
-                    format_number(row.get("yesterday_high")),
+                    format_number(row.get("vwap")),
+                    format_number(row.get("emacd59"), decimals=4),
                 ),
             )
 
@@ -687,7 +612,7 @@ class EpContinuationGUI:
                     self.render_rows(self.last_rows)
                 elif message_type == "error":
                     self.status_var.set("Worker failed")
-                    messagebox.showerror("EP Continuation Failed", str(payload))
+                    messagebox.showerror("EP 5/9 EMA Cross Failed", str(payload))
         except queue.Empty:
             pass
 
@@ -699,18 +624,7 @@ class EpContinuationGUI:
             stocks_engine = make_gptdb_engine(STOCKS_DB)
             stream_engine = make_stream_engine(STREAM_DB)
             reset_output_table(stocks_engine)
-
-            ep_symbols = load_symbols_file(Path(watchlists_locations.episodic_pivots))
-            self.output_queue.put(("status", "Loading previous daily highs..."))
-            yesterday_highs = load_yesterday_highs(ep_symbols)
-            missing_count = len(ep_symbols) - len(yesterday_highs)
-            self.output_queue.put(
-                (
-                    "status",
-                    f"Monitoring {len(yesterday_highs)} EP symbols "
-                    f"({missing_count} missing daily highs)",
-                )
-            )
+            self.output_queue.put(("status", "Monitoring EP 5/9 EMA crosses..."))
 
             while not self.stop_event.is_set():
                 if self.pause_event.is_set():
@@ -721,11 +635,10 @@ class EpContinuationGUI:
                     self.config,
                     lookback_minutes=self.current_lookback_minutes(),
                 )
-                rows = refresh_ep_continuation(
+                rows = refresh_rows(
                     stocks_engine=stocks_engine,
                     stream_engine=stream_engine,
                     config=active_config,
-                    yesterday_highs=yesterday_highs,
                 )
                 records = rows.to_dict("records")
                 self.output_queue.put(("rows", records))
@@ -733,7 +646,7 @@ class EpContinuationGUI:
                     (
                         "status",
                         f"{dt.datetime.now(EASTERN):%H:%M:%S}: "
-                        f"ep_continuation={len(records)} "
+                        f"ep_59ema_cross_below_vwap={len(records)} "
                         f"lookback={active_config.lookback_minutes}m",
                     )
                 )
@@ -762,7 +675,7 @@ def main() -> None:
         once=args.once,
     )
     root = tk.Tk()
-    app = EpContinuationGUI(root, config)
+    app = EpEmaCrossBelowVwapGUI(root, config)
     _ = app
     root.mainloop()
 

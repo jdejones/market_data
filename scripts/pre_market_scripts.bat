@@ -31,4 +31,6 @@ start "NLOD" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\
 
 start "EP Continuation" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\ep_continuation.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] ep_continuation.py failed with exit code %%errorlevel%%. & echo ep_continuation.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
 
+start "EP 5-9 EMA Cross Below VWAP" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\ep_59ema_cross_below_vwap.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] ep_59ema_cross_below_vwap.py failed with exit code %%errorlevel%%. & echo ep_59ema_cross_below_vwap.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
+
 exit /b 0
