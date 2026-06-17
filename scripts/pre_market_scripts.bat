@@ -19,7 +19,7 @@ timeout /t %STARTUP_DELAY_SECONDS% /nobreak > nul
 
 start "Filings Stream GUI" /D "%NEWS_TRACKER_ROOT%" cmd /k ""%PYTHON_EXE%" "%NEWS_TRACKER_ROOT%\scripts\filings_stream_gui.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] filings_stream_gui.py failed with exit code %%errorlevel%%. & echo filings_stream_gui.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
 
-start "Current RVOL GUI" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\current_rvol_gui.py" --symbols-file "%SYMBOLS_FILE%" --update-elevated-table || (>> "%LOG_FILE%" echo [%%date%% %%time%%] current_rvol_gui.py failed with exit code %%errorlevel%%. & echo current_rvol_gui.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
+start "Current RVOL GUI" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\current_rvol_gui.py" --symbols-file "%SYMBOLS_FILE%" --update-elevated-table --update-ep-rvol-table || (>> "%LOG_FILE%" echo [%%date%% %%time%%] current_rvol_gui.py failed with exit code %%errorlevel%%. & echo current_rvol_gui.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
 
 start "High Short Interest In Play" /D "%MARKET_DATA_ROOT%" cmd /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\high_short_interest_in_play.py" || (>> "%LOG_FILE%" echo [%%date%% %%time%%] high_short_interest_in_play.py failed with exit code %%errorlevel%%. & echo high_short_interest_in_play.py failed with exit code %%errorlevel%%. See "%LOG_FILE%".)"
 

@@ -73,6 +73,7 @@ class GuiConfig:
     market_open_only: bool
     events_table: str
     update_elevated_table: bool
+    update_ep_rvol_table: bool
     verbose: bool
 
 
@@ -519,6 +520,12 @@ class CurrentRvolGUI:
         )
         if self.config.update_elevated_table:
             current_rvol.reset_elevated_rvol_table(stocks_engine)
+        episodic_pivot_symbols: set[str] = set()
+        if self.config.update_ep_rvol_table:
+            episodic_pivot_symbols = current_rvol.load_symbol_set(
+                Path(current_rvol.watchlists_locations.episodic_pivots)
+            )
+            current_rvol.reset_ep_rvol_table(metadata_engine)
 
         state = current_rvol.MonitorState()
         current_day = dt.datetime.now(EASTERN).date()
@@ -530,6 +537,8 @@ class CurrentRvolGUI:
             metadata.append(f"quant={latest_quant_column}")
         if events_table:
             metadata.append(f"events={events_table}")
+        if self.config.update_ep_rvol_table:
+            metadata.append(f"ep_rvol_symbols={len(episodic_pivot_symbols)}")
         metadata_text = f" ({', '.join(metadata)})" if metadata else ""
         self.output_queue.put(
             (
@@ -568,6 +577,13 @@ class CurrentRvolGUI:
                     latest_rvol,
                     threshold,
                 )
+            if self.config.update_ep_rvol_table:
+                current_rvol.update_ep_rvol_table(
+                    metadata_engine,
+                    state,
+                    latest_rvol,
+                    episodic_pivot_symbols,
+                )
 
             display_rows = self.display_rows(
                 state.latest_rvol,
@@ -577,11 +593,17 @@ class CurrentRvolGUI:
             self.output_queue.put(("rows", display_rows))
 
             if self.config.verbose:
+                ep_rvol_status = (
+                    f" ep_rvol={len(state.ep_rvol_symbols)}"
+                    if self.config.update_ep_rvol_table
+                    else ""
+                )
                 self.output_queue.put(
                     (
                         "status",
                         f"{dt.datetime.now(EASTERN):%H:%M:%S}: "
-                        f"updates={len(latest_rvol)} displayed={len(display_rows)}",
+                        f"updates={len(latest_rvol)} displayed={len(display_rows)}"
+                        f"{ep_rvol_status}",
                     )
                 )
 
@@ -645,6 +667,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also maintain stocks.elevated_rvol while the GUI runs.",
     )
+    parser.add_argument(
+        "--update-ep-rvol-table",
+        action="store_true",
+        help="Also maintain stocks.ep_rvol while the GUI runs.",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
@@ -665,6 +692,7 @@ def main() -> None:
         market_open_only=args.market_open_only,
         events_table=args.events_table,
         update_elevated_table=args.update_elevated_table,
+        update_ep_rvol_table=args.update_ep_rvol_table,
         verbose=args.verbose,
     )
     root = tk.Tk()
