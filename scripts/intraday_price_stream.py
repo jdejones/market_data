@@ -27,7 +27,7 @@ MYSQL_USER = "price_data_streamer"
 MYSQL_SCHEMA = "intraday_price_stream"
 MYSQL_TABLE = "ohlcv_1m"
 
-DEFAULT_FEED = "delayed"
+DEFAULT_FEED = "realtime"
 PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Volume", "VWAP")
 EASTERN_TIME = ZoneInfo("America/New_York")
 PROGRESS_EVERY_ROWS = 1_000
@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
         "--feed",
         choices=("realtime", "delayed"),
         default=DEFAULT_FEED,
-        help="Polygon websocket feed to use. Defaults to delayed.",
+        help="Polygon/Massive websocket feed to use. Defaults to realtime.",
     )
     return parser.parse_args()
 
