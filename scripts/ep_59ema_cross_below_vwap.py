@@ -38,6 +38,7 @@ EP_RVOL_TABLE = "ep_rvol"
 OUTPUT_TABLE = "ep_59ema_cross_below_vwap"
 DAILY_QUANT_RATING_TABLE = "daily_quant_rating"
 STREAM_TABLE = "ohlcv_1m"
+RESAMPLE_FREQUENCY = "3min"
 EASTERN = ZoneInfo("America/New_York")
 
 DISPLAY_COLUMNS = (
@@ -286,8 +287,27 @@ def session_bounds(include_extended_hours: bool) -> tuple[dt.datetime, dt.dateti
     return dt.datetime.combine(today, start_time), dt.datetime.combine(today, end_time)
 
 
-def add_intraday_indicators(symbol_rows: pd.DataFrame) -> pd.DataFrame:
+def resample_ohlcv(symbol_rows: pd.DataFrame) -> pd.DataFrame:
     data = symbol_rows.sort_values("Timestamp").copy()
+    data = data.set_index("Timestamp", drop=False)
+    symbol = str(data["Symbol"].iloc[0]).upper()
+    resampled = data.resample(RESAMPLE_FREQUENCY).agg(
+        {
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum",
+        }
+    )
+    resampled = resampled.dropna(subset=["Open", "High", "Low", "Close"])
+    resampled["Symbol"] = symbol
+    resampled["Timestamp"] = resampled.index
+    return resampled
+
+
+def add_intraday_indicators(symbol_rows: pd.DataFrame) -> pd.DataFrame:
+    data = resample_ohlcv(symbol_rows)
     data = data.set_index("Timestamp", drop=False)
     data = technicals.MACD(
         data,
