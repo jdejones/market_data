@@ -476,6 +476,7 @@ if __name__ == "__main__":
             "volume": "Volume",
             "rvol": "RVol",
             "dollar_volume": "Dollar_Volume",
+            "20dma": "20DMA",
             "atr_14": "ATR_14",
             "atr_14_signal": "ATR_14_signal",
             "rsi_14": "RSI_14",
