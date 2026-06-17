@@ -268,30 +268,11 @@ def prepare_temp_profile_table(
 
 def reset_elevated_rvol_table(engine: Engine) -> None:
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                f"""
-                CREATE TABLE IF NOT EXISTS {mysql_identifier(ELEVATED_RVOL_TABLE)} (
-                    symbol VARCHAR(32) NOT NULL
-                )
-                """
-            )
-        )
         conn.execute(text(f"DELETE FROM {mysql_identifier(ELEVATED_RVOL_TABLE)}"))
 
 
 def reset_ep_rvol_table(engine: Engine) -> None:
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                f"""
-                CREATE TABLE IF NOT EXISTS {mysql_identifier(EP_RVOL_TABLE)} (
-                    symbol VARCHAR(32),
-                    rvol FLOAT
-                )
-                """
-            )
-        )
         conn.execute(text(f"DELETE FROM {mysql_identifier(EP_RVOL_TABLE)}"))
 
 
