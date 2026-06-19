@@ -51,3 +51,4 @@ from . import fundamentals as fu
 from . import stats_objects as so
 from . import anchored_vwap as av
 from . import interest_list as il
+from . import filings
