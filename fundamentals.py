@@ -6,6 +6,7 @@ from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi, find_
 from market_data.api_keys import sec_api_key, polygon_api_key, database_password
 from market_data.price_data_import import api_import
 from polygon.rest import RESTClient
+from market_data.filings import single_fundamental
 # from audioop import reverse
 pd.options.display.max_columns = 150
 from matplotlib.colors import ListedColormap
@@ -462,10 +463,10 @@ def earnings_expectations( symbols, outlook='positive'):
 
 def ebitda( symbol, form_type='10-K'):
     try:
-        income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
-        taxes = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
-        interest = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
-        d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
+        income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
+        taxes = float(single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
+        interest = float(single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
+        d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
         ebitda = income + taxes + interest + d_a
         return ebitda
     except:
@@ -473,15 +474,15 @@ def ebitda( symbol, form_type='10-K'):
 
 def ebitda_growth( symbol, form_type='10-K'):
     try:
-        current_income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
-        current_taxes = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
-        current_interest = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
-        current_d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
+        current_income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
+        current_taxes = float(single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
+        current_interest = float(single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
+        current_d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
         current_ebitda = current_income + current_taxes + current_interest + current_d_a
-        prev_income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[1].value)
-        prev_taxes = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[1].value)
-        prev_interest = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[1].value)
-        prev_d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[1].value)
+        prev_income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[1].value)
+        prev_taxes = float(single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[1].value)
+        prev_interest = float(single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[1].value)
+        prev_d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[1].value)
         prev_ebitda = prev_income + prev_taxes + prev_interest + prev_d_a
         ebitda_yoy = ((current_ebitda - prev_ebitda) / prev_ebitda) * 100
         return ebitda_yoy
@@ -491,7 +492,7 @@ def ebitda_growth( symbol, form_type='10-K'):
 def ebitda_margin( symbol, form_type='10-K'):
     try:
         ebitda = ebitda(symbol, form_type='10-K')
-        revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
+        revenue = float(single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
         ebitda_margin = ebitda / revenue
         return ebitda
     except:
@@ -499,9 +500,9 @@ def ebitda_margin( symbol, form_type='10-K'):
 
 def ebit( symbol, form_type='10-K'):
     try:
-        income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
-        taxes = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
-        interest = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
+        income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
+        taxes = float(single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
+        interest = float(single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
         ebit = income + taxes + interest
         return ebit
     except:
@@ -509,13 +510,13 @@ def ebit( symbol, form_type='10-K'):
 
 def ebit_growth( symbol, form_type='10-K'):
     try:
-        current_income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
-        current_taxes = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
-        current_interest = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
+        current_income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
+        current_taxes = float(single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[0].value)
+        current_interest = float(single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[0].value)
         current_ebit= current_income + current_taxes + current_interest
-        prev_income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[1].value)
-        prev_taxes = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[1].value)
-        prev_interest = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[1].value)
+        prev_income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[1].value)
+        prev_taxes = float(single_fundamental(symbol, form_type=form_type, fundamental='Taxes').iloc[1].value)
+        prev_interest = float(single_fundamental(symbol, form_type=form_type, fundamental='Interest').iloc[1].value)
         prev_ebit = prev_income + prev_taxes + prev_interest
         ebit_yoy = ((current_ebit- prev_ebit) / prev_ebit) * 100
         return ebit_yoy
@@ -525,7 +526,7 @@ def ebit_growth( symbol, form_type='10-K'):
 def ebit_margin( symbol, form_type='10-K'):
     try:
         ebit = ebit(symbol, form_type='10-K')
-        revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
+        revenue = float(single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
         ebit_margin = ebit / revenue
         return ebit
     except:
@@ -534,10 +535,10 @@ def ebit_margin( symbol, form_type='10-K'):
 def enterprise_value( symbol, form_type='10-K'):
     try:
         market_cap = sa_fundamental_data.marketCap.loc[sa_fundamental_data.Symbol == symbol].values[0]
-        short_term_debt = float(f.single_fundamental(symbol, form_type=form_type, fundamental='ShortTermDebt').iloc[0].value)
-        long_term_debt = float(f.single_fundamental(symbol, form_type=form_type, fundamental='LongTermDebt').iloc[0].value)
+        short_term_debt = float(single_fundamental(symbol, form_type=form_type, fundamental='ShortTermDebt').iloc[0].value)
+        long_term_debt = float(single_fundamental(symbol, form_type=form_type, fundamental='LongTermDebt').iloc[0].value)
         total_debt = short_term_debt + long_term_debt
-        cashandcashequivalents = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CashAndCashEquivalents').iloc[0].value)
+        cashandcashequivalents = float(single_fundamental(symbol, form_type=form_type, fundamental='CashAndCashEquivalents').iloc[0].value)
         ev = market_cap + total_debt - cashandcashequivalents
         return ev
     except:
@@ -546,7 +547,7 @@ def enterprise_value( symbol, form_type='10-K'):
 def ev_sales( symbol, form_type='10-K'):
     try:
         ev = enterprise_value(symbol, form_type=form_type)
-        revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
+        revenue = float(single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
         ev_revenue = ev / revenue
         return ev_revenue
     except:
@@ -572,7 +573,7 @@ def ev_ebit( symbol, form_type='10-K'):
 
 def free_cash_flow( symbol, form_type='10-K'):
     try:
-        cash_from_operations = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[0].value)
+        cash_from_operations = float(single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[0].value)
         capex = capex(symbol, form_type=form_type)
         fcf = cash_from_operations - capex
         return fcf
@@ -591,14 +592,14 @@ def price_fcf( symbol, form_type='10-K'):
 def levered_fcf( symbol, form_type='10-K'):
     try:
         ebitda = ebitda(symbol)
-        current_assets = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[0].value)
-        current_liabilities = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[0].value)
+        current_assets = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[0].value)
+        current_liabilities = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[0].value)
         delta_nwc = current_assets - current_liabilities
-        ppe = float(f.single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[0].value)
-        d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
+        ppe = float(single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[0].value)
+        d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
         capex = ppe + d_a
-        short_term_debt = float(f.single_fundamental(symbol, form_type=form_type, fundamental='ShortTermDebt').iloc[0].value)
-        long_term_debt = float(f.single_fundamental(symbol, form_type=form_type, fundamental='LongTermDebt').iloc[0].value)
+        short_term_debt = float(single_fundamental(symbol, form_type=form_type, fundamental='ShortTermDebt').iloc[0].value)
+        long_term_debt = float(single_fundamental(symbol, form_type=form_type, fundamental='LongTermDebt').iloc[0].value)
         lfcf = ebitda - delta_nwc - capex - short_term_debt
         return lfcf
     except:
@@ -607,7 +608,7 @@ def levered_fcf( symbol, form_type='10-K'):
 def levered_fcf_margin( symbol, form_type='10-K'):
     try:
         levered_fcf = levered_fcf(symbol, form_type=form_type)
-        revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
+        revenue = float(single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
         lfcf_margin = (levered_fcf / revenue) * 100
         return lfcf_margin
     except:
@@ -626,12 +627,12 @@ def fcf_per_share( symbol, form_type='10-K'):
 
 def free_cash_flow_growth( symbol, form_type='10-K'):
     try:
-        cur_cash_from_operations = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[0].value)
+        cur_cash_from_operations = float(single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[0].value)
         cur_capex = capex(symbol, form_type=form_type)
         cur_fcf = cur_cash_from_operations - cur_capex
-        prev_cash_from_operations = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[1].value)
-        prev_ppe = float(f.single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[1].value)
-        prev_d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[1].value)
+        prev_cash_from_operations = float(single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[1].value)
+        prev_ppe = float(single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[1].value)
+        prev_d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[1].value)
         prev_capex = prev_ppe + prev_d_a
         prev_fcf = prev_cash_from_operations - prev_capex
         fcf_growth = ((cur_fcf - prev_fcf) / prev_fcf) * 100
@@ -641,11 +642,11 @@ def free_cash_flow_growth( symbol, form_type='10-K'):
 
 def return_on_total_capital( symbol, form_type='10-K'):
     try:
-        income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
-        short_term_debt = float(f.single_fundamental(symbol, form_type=form_type, fundamental='ShortTermDebt').iloc[0].value)
-        long_term_debt = float(f.single_fundamental(symbol, form_type=form_type, fundamental='LongTermDebt').iloc[0].value)
+        income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
+        short_term_debt = float(single_fundamental(symbol, form_type=form_type, fundamental='ShortTermDebt').iloc[0].value)
+        long_term_debt = float(single_fundamental(symbol, form_type=form_type, fundamental='LongTermDebt').iloc[0].value)
         total_debt = short_term_debt + long_term_debt
-        equity = float(f.single_fundamental(symbol, form_type=form_type, fundamental='ShareholdersEquity').iloc[0].value)
+        equity = float(single_fundamental(symbol, form_type=form_type, fundamental='ShareholdersEquity').iloc[0].value)
         invested_capital = total_debt + equity
         rotc = income / invested_capital
         return rotc
@@ -654,8 +655,8 @@ def return_on_total_capital( symbol, form_type='10-K'):
 
 def return_on_total_assets( symbol, form_type='10-K'):
     try:
-        assets_cur = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[0].value)
-        assets_prev = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[1].value)
+        assets_cur = float(single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[0].value)
+        assets_prev = float(single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[1].value)
         ebit = ebit(symbol, form_type=form_type)
         avg_total_assets = (assets_cur + assets_prev) / 2
         rota = ebit / avg_total_assets
@@ -666,7 +667,7 @@ def return_on_total_assets( symbol, form_type='10-K'):
 def income_per_employee( symbol, form_type='10-K'):
     try:
         num_employees = sa_fundamental_data.numberOfEmployees.loc[sa_fundamental_data.Symbol == symbol].values[0]
-        income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
+        income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
         income_per_employee = income / num_employees
         return income_per_employee
     except:
@@ -674,8 +675,8 @@ def income_per_employee( symbol, form_type='10-K'):
 
 def net_profit_margin( symbol, form_type='10-K'):
     try:
-        income = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
-        revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
+        income = float(single_fundamental(symbol, form_type=form_type, fundamental='Income').iloc[0].value)
+        revenue = float(single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
         npm = (income / revenue) * 100
         return npm
     except:
@@ -684,7 +685,7 @@ def net_profit_margin( symbol, form_type='10-K'):
 def price_sales( symbol, form_type='10-K'):
     try:
         market_cap = sa_fundamental_data.marketCap.loc[sa_fundamental_data.Symbol == symbol].values[0]
-        revenue = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
+        revenue = float(single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
         p_s = market_cap / revenue
         return p_s
     except:
@@ -737,8 +738,8 @@ def revenue_growth(symbol, limit=10, timeframe='quarterly', plot=False, most_rec
 
 def capex( symbol, form_type='10-K'):
     try:
-        ppe = float(f.single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[0].value)
-        d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
+        ppe = float(single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[0].value)
+        d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
         capex = ppe + d_a
         return capex
     except:
@@ -755,11 +756,11 @@ def capex_sales( symbol, form_type='10-K'):
 
 def capex_growth( symbol, form_type='10-K'):
     try:
-        cur_ppe = float(f.single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[0].value)
-        cur_d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
+        cur_ppe = float(single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[0].value)
+        cur_d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[0].value)
         cur_capex = cur_ppe + cur_d_a
-        prev_ppe = float(f.single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[1].value)
-        prev_d_a = float(f.single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[1].value)
+        prev_ppe = float(single_fundamental(symbol, form_type=form_type, fundamental='PPE').iloc[1].value)
+        prev_d_a = float(single_fundamental(symbol, form_type=form_type, fundamental='DepreciationAndAmortization').iloc[1].value)
         prev_capex = prev_ppe + prev_d_a
         capex_growth = ((cur_capex - prev_capex) / prev_capex) * 100
         return capex_growth
@@ -769,8 +770,8 @@ def capex_growth( symbol, form_type='10-K'):
 def asset_turnover( symbol, form_type='10-K'):
     try:
         revenue = sales(symbol, form_type=form_type)
-        ending_assets = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[0].value)
-        beginning_assets = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[1].value)
+        ending_assets = float(single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[0].value)
+        beginning_assets = float(single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[1].value)
         assets_avg = (beginning_assets + ending_assets) / 2
         asset_turnover_ratio = revenue / assets_avg
         return asset_turnover_ratio
@@ -780,7 +781,7 @@ def asset_turnover( symbol, form_type='10-K'):
 def p_e_basic( symbol, form_type='10-K'):
     try:
         price = symbols[symbol].iloc[-1].Close.values[0]
-        eps_basic = float(f.single_fundamental(symbol, form_type=form_type, fundamental='EPSBasic').iloc[0].value)
+        eps_basic = float(single_fundamental(symbol, form_type=form_type, fundamental='EPSBasic').iloc[0].value)
         p_e = price / eps_basic
         return p_e
     except:
@@ -788,8 +789,8 @@ def p_e_basic( symbol, form_type='10-K'):
 
 def eps_basic_growth( symbol, form_type='10-K'):
     try:
-        prev_eps_basic = float(f.single_fundamental(symbol, form_type=form_type, fundamental='EPSBasic').iloc[1].value)
-        cur_eps_basic = float(f.single_fundamental(symbol, form_type=form_type, fundamental='EPSBasic').iloc[0].value)
+        prev_eps_basic = float(single_fundamental(symbol, form_type=form_type, fundamental='EPSBasic').iloc[1].value)
+        cur_eps_basic = float(single_fundamental(symbol, form_type=form_type, fundamental='EPSBasic').iloc[0].value)
         eps_growth = ((cur_eps_basic - prev_eps_basic) / prev_eps_basic) * 100
         return eps_growth
     except:
@@ -798,7 +799,7 @@ def eps_basic_growth( symbol, form_type='10-K'):
 def p_e_diluted( symbol, form_type='10-K'):
     try:
         price = symbols[symbol].iloc[-1].Close.values[0]
-        eps_diluted = float(f.single_fundamental(symbol, form_type=form_type, fundamental='EPSDiluted').iloc[0].value)
+        eps_diluted = float(single_fundamental(symbol, form_type=form_type, fundamental='EPSDiluted').iloc[0].value)
         p_e = price / eps_diluted
         return p_e
     except:
@@ -806,8 +807,8 @@ def p_e_diluted( symbol, form_type='10-K'):
 
 def eps_diluted_growth( symbol, form_type='10-K'):
     try:
-        prev_eps_diluted = float(f.single_fundamental(symbol, form_type=form_type, fundamental='EPSDiluted').iloc[1].value)
-        cur_eps_diluted = float(f.single_fundamental(symbol, form_type=form_type, fundamental='EPSDiluted').iloc[0].value)
+        prev_eps_diluted = float(single_fundamental(symbol, form_type=form_type, fundamental='EPSDiluted').iloc[1].value)
+        cur_eps_diluted = float(single_fundamental(symbol, form_type=form_type, fundamental='EPSDiluted').iloc[0].value)
         eps_growth = ((cur_eps_diluted - prev_eps_diluted) / prev_eps_diluted) * 100
         return eps_growth
     except:
@@ -815,8 +816,8 @@ def eps_diluted_growth( symbol, form_type='10-K'):
 
 def book_value( symbol, form_type='10-K'):
     try:
-        total_assets = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[0].value)
-        total_liabilities = float(f.single_fundamental(symbol, form_type=form_type, fundamental='Liabilities').iloc[0].value)
+        total_assets = float(single_fundamental(symbol, form_type=form_type, fundamental='Assets').iloc[0].value)
+        total_liabilities = float(single_fundamental(symbol, form_type=form_type, fundamental='Liabilities').iloc[0].value)
         bv = total_assets - total_liabilities
         return bv
     except:
@@ -833,8 +834,8 @@ def price_book( symbol, form_type='10-K'):
 
 def working_capital( symbol, form_type='10-K'):
     try:
-        current_assets = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[0].value)
-        current_liabilities = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[0].value)
+        current_assets = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[0].value)
+        current_liabilities = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[0].value)
         working_capital = current_assets - current_liabilities
         return working_capital
     except:
@@ -842,11 +843,11 @@ def working_capital( symbol, form_type='10-K'):
 
 def working_capital_growth( symbol, form_type='10-K'):
     try:
-        cur_current_assets = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[0].value)
-        cur_current_liabilities = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[0].value)
+        cur_current_assets = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[0].value)
+        cur_current_liabilities = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[0].value)
         cur_working_capital = cur_current_assets - cur_current_liabilities
-        prev_current_assets = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[1].value)
-        prev_current_liabilities = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[1].value)
+        prev_current_assets = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentAssets').iloc[1].value)
+        prev_current_liabilities = float(single_fundamental(symbol, form_type=form_type, fundamental='CurrentLiabilities').iloc[1].value)
         prev_working_capital = prev_current_assets - prev_current_liabilities
         working_capital_growth = ((cur_working_capital - prev_working_capital) / prev_working_capital) * 100
         return working_capital_growth
@@ -855,14 +856,14 @@ def working_capital_growth( symbol, form_type='10-K'):
 
 def cash_from_operations( symbol, form_type='10-K'):
     try:
-        cash_from_operations = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[0].value)
+        cash_from_operations = float(single_fundamental(symbol, form_type=form_type, fundamental='CashFromOperations').iloc[0].value)
         return cash_from_operations
     except:
         return np.nan
 
 def cash_per_share( symbol, form_type='10-K'):
     try:
-        cash_at_end_of_period = float(f.single_fundamental(symbol, form_type=form_type, fundamental='CashAtEndOfPeriod').iloc[0].value)
+        cash_at_end_of_period = float(single_fundamental(symbol, form_type=form_type, fundamental='CashAtEndOfPeriod').iloc[0].value)
         floatApi = FloatApi(f.api_key)
         float_data = floatApi.get_float(ticker=symbol)
         shares_float = float_data['data'][0]['float']['outstandingShares'][0]['value']
