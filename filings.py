@@ -100,7 +100,7 @@ def single_fundamental(
     fundamental: str,
     plot: bool=False,
     xbrl_tags_manager=None,
-) -> pd.DataFrame:
+    ) -> pd.DataFrame:
     #TODO add function that will identify the path to the specified fundamental in the xbrl_tags_dict. This may need to be an
     #TODO algorithm that could be in a separate class so that it's easier to repurpose.
     """
