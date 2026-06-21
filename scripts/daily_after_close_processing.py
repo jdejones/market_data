@@ -536,6 +536,7 @@ if __name__ == "__main__":
         (etfs, 'etfs'),
         (sector_close_vwap_ratio, 'sector_close_vwap_ratio'),
         (industry_close_vwap_ratio, 'industry_close_vwap_ratio'),
+        (ep, 'episodic_pivots'),
         (ep_curdur, 'ep_curdur'),
         (ep_rr, 'ep_rr'),
         (rel_stren, 'rel_stren'),
