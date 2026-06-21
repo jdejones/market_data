@@ -30,11 +30,16 @@ MYSQL_HOST = "127.0.0.1"
 MYSQL_PORT = 3306
 GPTDB_MYSQL_USER = "gptdb"
 FORM13F_DB = "form13f"
+FORM4_DB = "form4"
 SEC_API_BASE_URL = "https://api.sec-api.io"
+FORM4_INSIDER_TRADING_ENDPOINT = f"{SEC_API_BASE_URL}/insider-trading"
 FORM13F_COVER_PAGES_ENDPOINT = f"{SEC_API_BASE_URL}/form-13f/cover-pages"
 FORM13F_HOLDINGS_ENDPOINT = f"{SEC_API_BASE_URL}/form-13f/holdings"
 DEFAULT_13F_THRESHOLD = 1_000_000_000
 DEFAULT_13F_START_PERIOD = "2013-01-01"
+DEFAULT_FORM4_LOOKBACK_DAYS = 365
+SEC_API_FORM4_PAGE_SIZE = 50
+SEC_API_FORM4_FROM_LIMIT = 10_000
 SEC_API_13F_PAGE_SIZE = 50
 SEC_API_13F_FROM_LIMIT = 10_000
 
@@ -1550,7 +1555,1228 @@ class Form13FAnalytics:
         plot_df.plot(title="13F Ownership % of Shares Outstanding")
 
 
+@dataclass
+class Form4ImportStats:
+    """Summary returned by Form 4 import methods."""
+
+    symbols: int = 0
+    symbol_batches: int = 0
+    date_windows: int = 0
+    requests: int = 0
+    filings: int = 0
+    filing_rows: int = 0
+    transaction_rows: int = 0
+    deleted_transaction_rows: int = 0
+    skipped_transaction_rows: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "symbols": self.symbols,
+            "symbol_batches": self.symbol_batches,
+            "date_windows": self.date_windows,
+            "requests": self.requests,
+            "filings": self.filings,
+            "filing_rows": self.filing_rows,
+            "transaction_rows": self.transaction_rows,
+            "deleted_transaction_rows": self.deleted_transaction_rows,
+            "skipped_transaction_rows": self.skipped_transaction_rows,
+            "errors": self.errors,
+        }
+
+
+class Form4Database:
+    """
+    MySQL storage layer for sec-api.io Form 4 insider trading filings.
+
+    The normalized model keeps one row per filing in `filings` and one row per
+    analyzable open-market non-derivative purchase/sale in
+    `non_derivative_transactions`.
+    """
+
+    FILING_COLUMNS = (
+        "accession_no",
+        "document_type",
+        "period_of_report",
+        "filed_at",
+        "issuer_cik",
+        "issuer_name",
+        "issuer_trading_symbol",
+        "reporting_owner_cik",
+        "reporting_owner_name",
+        "owner_is_director",
+        "owner_is_officer",
+        "owner_is_ten_percent_owner",
+        "owner_is_other",
+        "owner_officer_title",
+        "owner_other_text",
+        "not_subject_to_section16",
+        "aff10b5_one",
+        "owner_signature_name",
+        "owner_signature_date",
+        "remarks",
+        "footnotes_json",
+        "raw_json",
+        "source_key",
+        "source_updated_at",
+    )
+    TRANSACTION_COLUMNS = (
+        "accession_no",
+        "line_number",
+        "document_type",
+        "period_of_report",
+        "filed_at",
+        "issuer_cik",
+        "issuer_name",
+        "issuer_trading_symbol",
+        "reporting_owner_cik",
+        "reporting_owner_name",
+        "owner_is_director",
+        "owner_is_officer",
+        "owner_is_ten_percent_owner",
+        "owner_is_other",
+        "owner_officer_title",
+        "security_title",
+        "transaction_date",
+        "transaction_code",
+        "transaction_form_type",
+        "equity_swap_involved",
+        "timeliness",
+        "acquired_disposed_code",
+        "shares",
+        "price_per_share",
+        "transaction_value",
+        "shares_owned_following_transaction",
+        "direct_or_indirect_ownership",
+        "nature_of_ownership",
+        "aff10b5_one",
+        "raw_transaction_json",
+        "raw_filing_json",
+        "source_key",
+        "source_updated_at",
+    )
+
+    def __init__(
+        self,
+        database: str = FORM4_DB,
+        user: str = GPTDB_MYSQL_USER,
+        password: str = gptdb,
+        host: str = MYSQL_HOST,
+        port: int = MYSQL_PORT,
+        engine: Engine | None = None,
+    ) -> None:
+        self.database = database
+        self.engine = engine or self._make_engine(database, user, password, host, port)
+
+    def _make_engine(
+        self,
+        database: str,
+        user: str,
+        password: str,
+        host: str,
+        port: int,
+    ) -> Engine:
+        url = URL.create(
+            "mysql+pymysql",
+            username=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+        )
+        return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+    def setup(self) -> None:
+        """Create Form 4 tables if they do not already exist."""
+        with self.engine.begin() as conn:
+            conn.execute(text(self._filings_ddl()))
+            conn.execute(text(self._transactions_ddl()))
+
+    def latest_filed_at(self) -> dt.datetime | None:
+        query = text("SELECT MAX(filed_at) FROM filings")
+        with self.engine.connect() as conn:
+            value = conn.execute(query).scalar()
+        return value
+
+    def row_counts(self) -> dict[str, int]:
+        with self.engine.connect() as conn:
+            return {
+                "filings": int(conn.execute(text("SELECT COUNT(*) FROM filings")).scalar() or 0),
+                "non_derivative_transactions": int(
+                    conn.execute(text("SELECT COUNT(*) FROM non_derivative_transactions")).scalar() or 0
+                ),
+            }
+
+    def upsert_filings(self, rows: list[dict[str, Any]], batch_size: int = 1000) -> int:
+        if not rows:
+            return 0
+
+        statement = text(self._upsert_sql("filings", self.FILING_COLUMNS, ("accession_no",)))
+        inserted = 0
+        with self.engine.begin() as conn:
+            for batch in chunked(rows, batch_size):
+                conn.execute(statement, batch)
+                inserted += len(batch)
+        return inserted
+
+    def replace_transactions_for_filings(
+        self,
+        rows: list[dict[str, Any]],
+        batch_size: int = 2000,
+    ) -> tuple[int, int, int]:
+        if not rows:
+            return 0, 0, 0
+
+        accessions = sorted({row["accession_no"] for row in rows if row.get("accession_no")})
+        if not accessions:
+            return 0, 0, len(rows)
+
+        valid_accessions = self.existing_accessions(accessions)
+        insertable_rows = [row for row in rows if row.get("accession_no") in valid_accessions]
+        skipped_rows = len(rows) - len(insertable_rows)
+
+        if not insertable_rows:
+            return 0, 0, skipped_rows
+
+        delete_statement = (
+            text("DELETE FROM non_derivative_transactions WHERE accession_no IN :accession_nos")
+            .bindparams(bindparam("accession_nos", expanding=True))
+        )
+        insert_statement = text(
+            self._upsert_sql(
+                "non_derivative_transactions",
+                self.TRANSACTION_COLUMNS,
+                ("accession_no", "line_number"),
+            )
+        )
+
+        inserted = 0
+        deleted = 0
+        with self.engine.begin() as conn:
+            for batch in chunked(sorted(valid_accessions), 1000):
+                result = conn.execute(delete_statement, {"accession_nos": batch})
+                deleted += result.rowcount or 0
+            for batch in chunked(insertable_rows, batch_size):
+                conn.execute(insert_statement, batch)
+                inserted += len(batch)
+
+        return inserted, deleted, skipped_rows
+
+    def existing_accessions(self, accession_nos: Iterable[str]) -> set[str]:
+        accessions = [accession for accession in accession_nos if accession]
+        if not accessions:
+            return set()
+
+        query = (
+            text("SELECT accession_no FROM filings WHERE accession_no IN :accession_nos")
+            .bindparams(bindparam("accession_nos", expanding=True))
+        )
+        found: set[str] = set()
+        with self.engine.connect() as conn:
+            for batch in chunked([{"accession_no": value} for value in accessions], 1000):
+                values = [row["accession_no"] for row in batch]
+                found.update(str(row[0]) for row in conn.execute(query, {"accession_nos": values}))
+        return found
+
+    def _upsert_sql(self, table_name: str, columns: tuple[str, ...], key_columns: tuple[str, ...]) -> str:
+        quoted_columns = ", ".join(mysql_identifier(column) for column in columns)
+        values = ", ".join(f":{column}" for column in columns)
+        update_columns = [column for column in columns if column not in key_columns]
+        updates = ", ".join(
+            f"{mysql_identifier(column)} = VALUES({mysql_identifier(column)})"
+            for column in update_columns
+        )
+        updates = f"{updates}, loaded_at = CURRENT_TIMESTAMP(6)"
+        return (
+            f"INSERT INTO {mysql_identifier(table_name)} ({quoted_columns}) "
+            f"VALUES ({values}) "
+            f"ON DUPLICATE KEY UPDATE {updates}"
+        )
+
+    def _filings_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS filings (
+            accession_no VARCHAR(25) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            document_type VARCHAR(20) NULL,
+            period_of_report DATE NULL,
+            filed_at DATETIME(6) NULL,
+            issuer_cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            issuer_name VARCHAR(255) NULL,
+            issuer_trading_symbol VARCHAR(32) NULL,
+            reporting_owner_cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            reporting_owner_name VARCHAR(255) NULL,
+            owner_is_director BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_is_officer BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_is_ten_percent_owner BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_is_other BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_officer_title VARCHAR(255) NULL,
+            owner_other_text VARCHAR(255) NULL,
+            not_subject_to_section16 BOOLEAN NOT NULL DEFAULT FALSE,
+            aff10b5_one BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_signature_name VARCHAR(255) NULL,
+            owner_signature_date DATE NULL,
+            remarks TEXT NULL,
+            footnotes_json JSON NULL,
+            raw_json JSON NULL,
+            source_key VARCHAR(255) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (accession_no),
+            KEY idx_form4_filings_symbol (issuer_trading_symbol),
+            KEY idx_form4_filings_filed_at (filed_at),
+            KEY idx_form4_filings_period (period_of_report),
+            KEY idx_form4_filings_owner_cik (reporting_owner_cik),
+            KEY idx_form4_filings_symbol_filed (issuer_trading_symbol, filed_at)
+        ) ENGINE = InnoDB
+        """
+
+    def _transactions_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS non_derivative_transactions (
+            accession_no VARCHAR(25) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            line_number INT UNSIGNED NOT NULL,
+            document_type VARCHAR(20) NULL,
+            period_of_report DATE NULL,
+            filed_at DATETIME(6) NULL,
+            issuer_cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            issuer_name VARCHAR(255) NULL,
+            issuer_trading_symbol VARCHAR(32) NULL,
+            reporting_owner_cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            reporting_owner_name VARCHAR(255) NULL,
+            owner_is_director BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_is_officer BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_is_ten_percent_owner BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_is_other BOOLEAN NOT NULL DEFAULT FALSE,
+            owner_officer_title VARCHAR(255) NULL,
+            security_title VARCHAR(255) NULL,
+            transaction_date DATE NULL,
+            transaction_code VARCHAR(8) NULL,
+            transaction_form_type VARCHAR(20) NULL,
+            equity_swap_involved BOOLEAN NOT NULL DEFAULT FALSE,
+            timeliness VARCHAR(8) NULL,
+            acquired_disposed_code CHAR(1) NULL,
+            shares DECIMAL(24, 4) NULL,
+            price_per_share DECIMAL(24, 6) NULL,
+            transaction_value DECIMAL(28, 6) NULL,
+            shares_owned_following_transaction DECIMAL(24, 4) NULL,
+            direct_or_indirect_ownership CHAR(1) NULL,
+            nature_of_ownership VARCHAR(255) NULL,
+            aff10b5_one BOOLEAN NOT NULL DEFAULT FALSE,
+            raw_transaction_json JSON NULL,
+            raw_filing_json JSON NULL,
+            source_key VARCHAR(255) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (accession_no, line_number),
+            KEY idx_form4_txn_symbol (issuer_trading_symbol),
+            KEY idx_form4_txn_filed_at (filed_at),
+            KEY idx_form4_txn_transaction_date (transaction_date),
+            KEY idx_form4_txn_code (transaction_code),
+            KEY idx_form4_txn_acquired_disposed (acquired_disposed_code),
+            KEY idx_form4_txn_owner_cik (reporting_owner_cik),
+            KEY idx_form4_txn_symbol_date (issuer_trading_symbol, transaction_date),
+            CONSTRAINT fk_form4_transactions_filings
+                FOREIGN KEY (accession_no)
+                REFERENCES filings (accession_no)
+                ON DELETE CASCADE
+        ) ENGINE = InnoDB
+        """
+
+
+class Form4Normalizer:
+    """Normalize sec-api.io Form 4 insider-trading JSON into database rows."""
+
+    @staticmethod
+    def filing_row(
+        record: Mapping[str, Any],
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> dict[str, Any]:
+        issuer = first_mapping(record.get("issuer"))
+        owner = first_mapping(record.get("reportingOwner"))
+        relationship = first_mapping(owner.get("relationship"))
+
+        return {
+            "accession_no": record.get("accessionNo"),
+            "document_type": record.get("documentType"),
+            "period_of_report": parse_date(record.get("periodOfReport")),
+            "filed_at": parse_datetime(record.get("filedAt")),
+            "issuer_cik": issuer.get("cik"),
+            "issuer_name": issuer.get("name"),
+            "issuer_trading_symbol": Form4Normalizer._normalize_symbol(issuer.get("tradingSymbol")),
+            "reporting_owner_cik": owner.get("cik"),
+            "reporting_owner_name": owner.get("name"),
+            "owner_is_director": parse_bool(relationship.get("isDirector")),
+            "owner_is_officer": parse_bool(relationship.get("isOfficer")),
+            "owner_is_ten_percent_owner": parse_bool(relationship.get("isTenPercentOwner")),
+            "owner_is_other": parse_bool(relationship.get("isOther")),
+            "owner_officer_title": relationship.get("officerTitle"),
+            "owner_other_text": relationship.get("otherText"),
+            "not_subject_to_section16": parse_bool(record.get("notSubjectToSection16")),
+            "aff10b5_one": parse_bool(record.get("aff10b5One")),
+            "owner_signature_name": record.get("ownerSignatureName"),
+            "owner_signature_date": parse_date(record.get("ownerSignatureNameDate")),
+            "remarks": record.get("remarks"),
+            "footnotes_json": json_dumps(record.get("footnotes")),
+            "raw_json": json_dumps(record),
+            "source_key": source_key,
+            "source_updated_at": parse_datetime(source_updated_at),
+        }
+
+    @staticmethod
+    def non_derivative_transaction_rows(
+        record: Mapping[str, Any],
+        transaction_codes: Iterable[str] = ("P", "S"),
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> list[dict[str, Any]]:
+        issuer = first_mapping(record.get("issuer"))
+        owner = first_mapping(record.get("reportingOwner"))
+        relationship = first_mapping(owner.get("relationship"))
+        allowed_codes = {str(code).upper() for code in transaction_codes}
+        raw_filing_json = json_dumps(without_key(record, "nonDerivativeTable"))
+        table = first_mapping(record.get("nonDerivativeTable"))
+        rows: list[dict[str, Any]] = []
+
+        filing_values = {
+            "accession_no": record.get("accessionNo"),
+            "document_type": record.get("documentType"),
+            "period_of_report": parse_date(record.get("periodOfReport")),
+            "filed_at": parse_datetime(record.get("filedAt")),
+            "issuer_cik": issuer.get("cik"),
+            "issuer_name": issuer.get("name"),
+            "issuer_trading_symbol": Form4Normalizer._normalize_symbol(issuer.get("tradingSymbol")),
+            "reporting_owner_cik": owner.get("cik"),
+            "reporting_owner_name": owner.get("name"),
+            "owner_is_director": parse_bool(relationship.get("isDirector")),
+            "owner_is_officer": parse_bool(relationship.get("isOfficer")),
+            "owner_is_ten_percent_owner": parse_bool(relationship.get("isTenPercentOwner")),
+            "owner_is_other": parse_bool(relationship.get("isOther")),
+            "owner_officer_title": relationship.get("officerTitle"),
+            "aff10b5_one": parse_bool(record.get("aff10b5One")),
+            "source_key": source_key,
+            "source_updated_at": parse_datetime(source_updated_at),
+        }
+
+        for line_number, transaction in enumerate(table.get("transactions") or [], start=1):
+            if not isinstance(transaction, Mapping):
+                continue
+
+            coding = first_mapping(transaction.get("coding"))
+            transaction_code = str(coding.get("code") or "").upper()
+            if allowed_codes and transaction_code not in allowed_codes:
+                continue
+
+            amounts = first_mapping(transaction.get("amounts"))
+            post_amounts = first_mapping(transaction.get("postTransactionAmounts"))
+            ownership = first_mapping(transaction.get("ownershipNature"))
+            shares = parse_decimal(amounts.get("shares"))
+            price = parse_decimal(amounts.get("pricePerShare"))
+            transaction_value = shares * price if shares is not None and price is not None else None
+
+            rows.append(
+                {
+                    **filing_values,
+                    "line_number": line_number,
+                    "security_title": transaction.get("securityTitle"),
+                    "transaction_date": parse_date(transaction.get("transactionDate")),
+                    "transaction_code": transaction_code or None,
+                    "transaction_form_type": coding.get("formType"),
+                    "equity_swap_involved": parse_bool(coding.get("equitySwapInvolved")),
+                    "timeliness": transaction.get("timeliness"),
+                    "acquired_disposed_code": amounts.get("acquiredDisposedCode"),
+                    "shares": shares,
+                    "price_per_share": price,
+                    "transaction_value": transaction_value,
+                    "shares_owned_following_transaction": parse_decimal(
+                        post_amounts.get("sharesOwnedFollowingTransaction")
+                    ),
+                    "direct_or_indirect_ownership": ownership.get("directOrIndirectOwnership"),
+                    "nature_of_ownership": ownership.get("natureOfOwnership"),
+                    "raw_transaction_json": json_dumps(transaction),
+                    "raw_filing_json": raw_filing_json,
+                }
+            )
+
+        return rows
+
+    @staticmethod
+    def _normalize_symbol(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip().upper()
+
+
+class Form4Importer:
+    """
+    Import Form 4 insider purchases and sales from sec-api.io.
+
+    Public import methods accept explicit date ranges. If no range is supplied,
+    imports default to the trailing `lookback_days` ending today.
+    """
+
+    VALID_DATE_FIELDS = {
+        "filedAt",
+        "periodOfReport",
+        "nonDerivativeTable.transactions.transactionDate",
+    }
+
+    def __init__(
+        self,
+        api_key: str = sec_api_key,
+        database: Form4Database | None = None,
+        normalizer: Form4Normalizer | None = None,
+        batch_size: int = 1000,
+        symbol_batch_size: int = 25,
+        timeout: int = 120,
+        min_request_interval: float = 2.0,
+        max_retries: int = 6,
+        retry_backoff: float = 5.0,
+        max_retry_sleep: float = 120.0,
+        show_progress: bool = True,
+    ) -> None:
+        self.api_key = api_key
+        self.database = database or Form4Database()
+        self.normalizer = normalizer or Form4Normalizer()
+        self.batch_size = batch_size
+        self.symbol_batch_size = symbol_batch_size
+        self.timeout = timeout
+        self.min_request_interval = min_request_interval
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self.max_retry_sleep = max_retry_sleep
+        self.show_progress = show_progress
+        self._last_request_at = 0.0
+        self._last_page_requests = 0
+        self.session = requests.Session()
+
+    def import_watchlist(
+        self,
+        watchlist_location: str | None = None,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        lookback_days: int = DEFAULT_FORM4_LOOKBACK_DAYS,
+        date_field: str = "filedAt",
+        transaction_codes: Iterable[str] = ("P", "S"),
+        document_types: Iterable[str] = ("4", "4/A"),
+    ) -> dict[str, Any]:
+        """Import Form 4 transactions for symbols from a watchlist file."""
+        symbols = self._load_watchlist(watchlist_location)
+        return self.import_symbols(
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            lookback_days=lookback_days,
+            date_field=date_field,
+            transaction_codes=transaction_codes,
+            document_types=document_types,
+        )
+
+    def import_symbols(
+        self,
+        symbols: Iterable[str],
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        lookback_days: int = DEFAULT_FORM4_LOOKBACK_DAYS,
+        date_field: str = "filedAt",
+        transaction_codes: Iterable[str] = ("P", "S"),
+        document_types: Iterable[str] = ("4", "4/A"),
+    ) -> dict[str, Any]:
+        """Import a symbol set over an explicit or default trailing date range."""
+        start, end = self._resolve_date_range(start_date, end_date, lookback_days)
+        return self.import_date_range(
+            symbols=symbols,
+            start_date=start,
+            end_date=end,
+            date_field=date_field,
+            transaction_codes=transaction_codes,
+            document_types=document_types,
+        )
+
+    def import_date_range(
+        self,
+        symbols: Iterable[str],
+        start_date: str | dt.date | dt.datetime,
+        end_date: str | dt.date | dt.datetime,
+        date_field: str = "filedAt",
+        transaction_codes: Iterable[str] = ("P", "S"),
+        document_types: Iterable[str] = ("4", "4/A"),
+    ) -> dict[str, Any]:
+        """Import Form 4 transactions for `symbols` between `start_date` and `end_date`."""
+        self.database.setup()
+        self._validate_date_field(date_field)
+        start = parse_date(start_date)
+        end = parse_date(end_date)
+        if start is None or end is None:
+            raise ValueError("start_date and end_date are required")
+        if end < start:
+            raise ValueError("end_date must be on or after start_date")
+
+        normalized_symbols = self._normalize_symbols(symbols)
+        if not normalized_symbols:
+            raise ValueError("At least one symbol is required")
+        stats = Form4ImportStats(symbols=len(normalized_symbols))
+        symbol_batches = list(self._symbol_batches(normalized_symbols))
+        progress = self._progress(symbol_batches, desc="Form 4 symbol batches", unit="batch")
+
+        for symbol_batch in progress:
+            stats.symbol_batches += 1
+            self._set_progress_postfix(progress, symbols=len(symbol_batch), filings=stats.filings)
+            self._import_symbol_batch_date_window(
+                symbol_batch=symbol_batch,
+                start_date=start,
+                end_date=end,
+                date_field=date_field,
+                transaction_codes=transaction_codes,
+                document_types=document_types,
+                stats=stats,
+            )
+
+        return stats.as_dict()
+
+    def import_filed_since(
+        self,
+        symbols: Iterable[str],
+        filed_since: str | dt.date | dt.datetime,
+        filed_until: str | dt.date | dt.datetime | None = None,
+        transaction_codes: Iterable[str] = ("P", "S"),
+        document_types: Iterable[str] = ("4", "4/A"),
+    ) -> dict[str, Any]:
+        """Import filings submitted in a filedAt date range."""
+        end = parse_date(filed_until) if filed_until is not None else dt.date.today()
+        return self.import_date_range(
+            symbols=symbols,
+            start_date=filed_since,
+            end_date=end,
+            date_field="filedAt",
+            transaction_codes=transaction_codes,
+            document_types=document_types,
+        )
+
+    def import_since_latest(
+        self,
+        symbols: Iterable[str],
+        fallback_lookback_days: int = DEFAULT_FORM4_LOOKBACK_DAYS,
+        overlap_days: int = 3,
+        transaction_codes: Iterable[str] = ("P", "S"),
+        document_types: Iterable[str] = ("4", "4/A"),
+    ) -> dict[str, Any]:
+        """Import from the latest stored filedAt timestamp, with overlap for amended/late rows."""
+        self.database.setup()
+        latest = self.database.latest_filed_at()
+        end = dt.date.today()
+        if latest is None:
+            start = end - dt.timedelta(days=fallback_lookback_days)
+        else:
+            start = latest.date() - dt.timedelta(days=overlap_days)
+        return self.import_date_range(
+            symbols=symbols,
+            start_date=start,
+            end_date=end,
+            date_field="filedAt",
+            transaction_codes=transaction_codes,
+            document_types=document_types,
+        )
+
+    def _import_symbol_batch_date_window(
+        self,
+        symbol_batch: list[str],
+        start_date: dt.date,
+        end_date: dt.date,
+        date_field: str,
+        transaction_codes: Iterable[str],
+        document_types: Iterable[str],
+        stats: Form4ImportStats,
+    ) -> None:
+        query = self._query(
+            symbols=symbol_batch,
+            start_date=start_date,
+            end_date=end_date,
+            date_field=date_field,
+            transaction_codes=transaction_codes,
+            document_types=document_types,
+        )
+        source_key = (
+            f"insider-trading:{date_field}={start_date.isoformat()}..{end_date.isoformat()}:"
+            f"symbols={','.join(symbol_batch)}"
+        )
+        try:
+            self._import_query_or_split(
+                query=query,
+                source_key=source_key,
+                start_date=start_date,
+                end_date=end_date,
+                date_field=date_field,
+                symbol_batch=symbol_batch,
+                transaction_codes=transaction_codes,
+                document_types=document_types,
+                stats=stats,
+            )
+        except Exception as exc:
+            stats.errors.append(f"{source_key}: {exc}")
+
+    def _import_query_or_split(
+        self,
+        query: str,
+        source_key: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        date_field: str,
+        symbol_batch: list[str],
+        transaction_codes: Iterable[str],
+        document_types: Iterable[str],
+        stats: Form4ImportStats,
+    ) -> None:
+        try:
+            records = self._paginate_search(query=query, sort=[{"filedAt": {"order": "asc"}}])
+        except SearchResultLimitError:
+            if start_date >= end_date:
+                if len(symbol_batch) <= 1:
+                    raise
+                midpoint = max(1, len(symbol_batch) // 2)
+                for smaller_batch in (symbol_batch[:midpoint], symbol_batch[midpoint:]):
+                    self._import_symbol_batch_date_window(
+                        symbol_batch=smaller_batch,
+                        start_date=start_date,
+                        end_date=end_date,
+                        date_field=date_field,
+                        transaction_codes=transaction_codes,
+                        document_types=document_types,
+                        stats=stats,
+                    )
+                return
+
+            midpoint_date = start_date + ((end_date - start_date) // 2)
+            self._import_symbol_batch_date_window(
+                symbol_batch=symbol_batch,
+                start_date=start_date,
+                end_date=midpoint_date,
+                date_field=date_field,
+                transaction_codes=transaction_codes,
+                document_types=document_types,
+                stats=stats,
+            )
+            self._import_symbol_batch_date_window(
+                symbol_batch=symbol_batch,
+                start_date=midpoint_date + dt.timedelta(days=1),
+                end_date=end_date,
+                date_field=date_field,
+                transaction_codes=transaction_codes,
+                document_types=document_types,
+                stats=stats,
+            )
+            return
+
+        stats.requests += self._last_page_requests
+        stats.date_windows += 1
+        stats.filings += len(records)
+        filing_rows = [self.normalizer.filing_row(record, source_key=source_key) for record in records]
+        stats.filing_rows += self.database.upsert_filings(filing_rows, batch_size=self.batch_size)
+
+        transaction_rows: list[dict[str, Any]] = []
+        for record in records:
+            transaction_rows.extend(
+                self.normalizer.non_derivative_transaction_rows(
+                    record,
+                    transaction_codes=transaction_codes,
+                    source_key=source_key,
+                )
+            )
+        inserted, deleted, skipped = self.database.replace_transactions_for_filings(
+            transaction_rows,
+            batch_size=self.batch_size,
+        )
+        stats.transaction_rows += inserted
+        stats.deleted_transaction_rows += deleted
+        stats.skipped_transaction_rows += skipped
+
+    def _paginate_search(
+        self,
+        query: str,
+        sort: list[dict[str, Any]] | None = None,
+        page_size: int = SEC_API_FORM4_PAGE_SIZE,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        offset = 0
+        self._last_page_requests = 0
+
+        while True:
+            payload = {
+                "query": query,
+                "from": str(offset),
+                "size": str(page_size),
+            }
+            if sort is not None:
+                payload["sort"] = sort
+
+            response = self._post_search(FORM4_INSIDER_TRADING_ENDPOINT, payload)
+            self._last_page_requests += 1
+            data = response.get("data", response.get("transactions", []))
+            total_value = response.get("total")
+            if isinstance(total_value, Mapping):
+                total_payload = total_value
+                total = int(total_payload.get("value") or len(data))
+                relation = total_payload.get("relation")
+            else:
+                total = int(total_value or len(data))
+                relation = "eq"
+            if total > SEC_API_FORM4_FROM_LIMIT or (total >= SEC_API_FORM4_FROM_LIMIT and relation != "eq"):
+                raise SearchResultLimitError(query, total)
+            if not data:
+                break
+
+            records.extend(data)
+            offset += page_size
+            if len(data) < page_size or offset >= total:
+                break
+
+        return records
+
+    def _post_search(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        with self._post(endpoint, payload) as response:
+            return response.json()
+
+    def _post(self, endpoint: str, payload: Mapping[str, Any]) -> requests.Response:
+        retry_statuses = {429, 500, 502, 503, 504}
+        last_response: requests.Response | None = None
+
+        for attempt in range(self.max_retries + 1):
+            self._wait_for_request_slot()
+            response = self.session.post(
+                endpoint,
+                headers=self._headers(),
+                json=dict(payload),
+                timeout=self.timeout,
+            )
+            self._last_request_at = time.monotonic()
+            last_response = response
+
+            if response.status_code not in retry_statuses:
+                response.raise_for_status()
+                return response
+
+            if attempt >= self.max_retries:
+                response.raise_for_status()
+
+            response.close()
+            time.sleep(self._retry_sleep_seconds(response, attempt))
+
+        if last_response is not None:
+            last_response.raise_for_status()
+        raise RuntimeError(f"Unable to retrieve {endpoint}")
+
+    def _query(
+        self,
+        symbols: Iterable[str],
+        start_date: dt.date,
+        end_date: dt.date,
+        date_field: str,
+        transaction_codes: Iterable[str],
+        document_types: Iterable[str],
+    ) -> str:
+        clauses = [
+            self._document_type_clause(document_types),
+            self._symbol_clause(symbols),
+            self._transaction_code_clause(transaction_codes),
+            f"{date_field}:[{start_date.isoformat()} TO {end_date.isoformat()}]",
+        ]
+        return " AND ".join(clause for clause in clauses if clause)
+
+    def _document_type_clause(self, document_types: Iterable[str]) -> str:
+        values = self._normalize_filter_values(document_types)
+        if not values:
+            return ""
+        return "(" + " OR ".join(f"documentType:{self._lucene_value(value)}" for value in values) + ")"
+
+    def _symbol_clause(self, symbols: Iterable[str]) -> str:
+        values = self._normalize_symbols(symbols)
+        if not values:
+            raise ValueError("At least one symbol is required")
+        return "(" + " OR ".join(f"issuer.tradingSymbol:{self._lucene_value(value)}" for value in values) + ")"
+
+    def _transaction_code_clause(self, transaction_codes: Iterable[str]) -> str:
+        values = self._normalize_filter_values(transaction_codes, uppercase=True)
+        if not values:
+            return ""
+        return (
+            "("
+            + " OR ".join(f"nonDerivativeTable.transactions.coding.code:{self._lucene_value(value)}" for value in values)
+            + ")"
+        )
+
+    def _resolve_date_range(
+        self,
+        start_date: str | dt.date | dt.datetime | None,
+        end_date: str | dt.date | dt.datetime | None,
+        lookback_days: int,
+    ) -> tuple[dt.date, dt.date]:
+        end = parse_date(end_date) if end_date is not None else dt.date.today()
+        if end is None:
+            raise ValueError("end_date could not be parsed")
+        start = parse_date(start_date) if start_date is not None else end - dt.timedelta(days=lookback_days)
+        if start is None:
+            raise ValueError("start_date could not be parsed")
+        if end < start:
+            raise ValueError("end_date must be on or after start_date")
+        return start, end
+
+    def _validate_date_field(self, date_field: str) -> None:
+        if date_field not in self.VALID_DATE_FIELDS:
+            allowed = ", ".join(sorted(self.VALID_DATE_FIELDS))
+            raise ValueError(f"date_field must be one of: {allowed}")
+
+    def _load_watchlist(self, watchlist_location: str | None) -> list[str]:
+        if watchlist_location is None:
+            try:
+                from .watchlists_locations import hadv, make_watchlist
+            except ImportError:
+                from market_data.watchlists_locations import hadv, make_watchlist
+
+            watchlist_location = hadv
+        else:
+            try:
+                from .watchlists_locations import make_watchlist
+            except ImportError:
+                from market_data.watchlists_locations import make_watchlist
+
+        return make_watchlist(watchlist_location)
+
+    def _normalize_symbols(self, symbols: Iterable[str]) -> list[str]:
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        normalized = []
+        seen = set()
+        for symbol in symbols:
+            if symbol in (None, ""):
+                continue
+            value = str(symbol).strip().upper()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    def _normalize_filter_values(self, values: Iterable[str], uppercase: bool = False) -> list[str]:
+        if isinstance(values, str):
+            values = [values]
+        normalized = []
+        for value in values:
+            text_value = str(value).strip()
+            if not text_value:
+                continue
+            normalized.append(text_value.upper() if uppercase else text_value)
+        return normalized
+
+    def _symbol_batches(self, symbols: list[str]) -> Iterator[list[str]]:
+        batch_size = max(1, self.symbol_batch_size)
+        for i in range(0, len(symbols), batch_size):
+            yield symbols[i:i + batch_size]
+
+    def _lucene_value(self, value: str) -> str:
+        if value.replace(".", "").replace("-", "").replace("_", "").isalnum():
+            return value
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def _wait_for_request_slot(self) -> None:
+        if self.min_request_interval <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        wait_seconds = self.min_request_interval - elapsed
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+    def _retry_sleep_seconds(self, response: requests.Response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), self.max_retry_sleep)
+            except ValueError:
+                pass
+
+        exponential_sleep = self.retry_backoff * (2 ** attempt)
+        return min(exponential_sleep, self.max_retry_sleep)
+
+    def _progress(
+        self,
+        iterable: Iterable[Any],
+        desc: str,
+        unit: str,
+        leave: bool = True,
+    ) -> Iterable[Any]:
+        if not self.show_progress or tqdm is None:
+            return iterable
+        return tqdm(iterable, desc=desc, unit=unit, leave=leave)
+
+    def _set_progress_postfix(self, progress: Iterable[Any], **values: Any) -> None:
+        if hasattr(progress, "set_postfix"):
+            progress.set_postfix(**values)
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": self.api_key}
+
+
+class Form4Analytics:
+    """Analytics layer for normalized Form 4 insider transactions."""
+
+    def __init__(self, database: Form4Database | None = None) -> None:
+        self.database = database or Form4Database()
+        self.engine = self.database.engine
+
+    def buys_sells(
+        self,
+        symbols: str | Iterable[str] | None = None,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        owners: str | Iterable[str] | None = None,
+        transaction_codes: Iterable[str] = ("P", "S"),
+        min_value: int | float | Decimal | None = None,
+        summary: bool = False,
+    ) -> pd.DataFrame:
+        """Return insider buys/sells for symbols over a transaction-date range."""
+        where_sql, params, expanding = self._where_clause(
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            owners=owners,
+            transaction_codes=transaction_codes,
+            min_value=min_value,
+        )
+        query = f"""
+        SELECT
+            issuer_trading_symbol AS symbol,
+            issuer_name,
+            reporting_owner_cik,
+            reporting_owner_name,
+            owner_is_director,
+            owner_is_officer,
+            owner_is_ten_percent_owner,
+            owner_officer_title,
+            filed_at,
+            transaction_date,
+            transaction_code,
+            CASE
+                WHEN transaction_code = 'P' THEN 'buy'
+                WHEN transaction_code = 'S' THEN 'sell'
+                ELSE 'other'
+            END AS action,
+            acquired_disposed_code,
+            security_title,
+            shares,
+            price_per_share,
+            transaction_value,
+            shares_owned_following_transaction,
+            direct_or_indirect_ownership,
+            nature_of_ownership,
+            aff10b5_one,
+            accession_no,
+            line_number
+        FROM non_derivative_transactions
+        WHERE {where_sql}
+        ORDER BY transaction_date DESC, filed_at DESC, symbol, reporting_owner_name, line_number
+        """
+        df = self._read_sql(query, params, expanding)
+        if summary and not df.empty:
+            return self._summarize_buys_sells(df)
+        return df
+
+    def _where_clause(
+        self,
+        symbols: str | Iterable[str] | None,
+        start_date: str | dt.date | dt.datetime | None,
+        end_date: str | dt.date | dt.datetime | None,
+        owners: str | Iterable[str] | None,
+        transaction_codes: Iterable[str],
+        min_value: int | float | Decimal | None,
+    ) -> tuple[str, dict[str, Any], list[str]]:
+        clauses = ["1 = 1"]
+        params: dict[str, Any] = {}
+        expanding: list[str] = []
+
+        normalized_symbols = self._normalize_string_filter(symbols, uppercase=True)
+        if normalized_symbols:
+            clauses.append("issuer_trading_symbol IN :symbols")
+            params["symbols"] = normalized_symbols
+            expanding.append("symbols")
+
+        normalized_owners = self._normalize_string_filter(owners)
+        if normalized_owners:
+            clauses.append("(reporting_owner_cik IN :owners OR reporting_owner_name IN :owners)")
+            params["owners"] = normalized_owners
+            expanding.append("owners")
+
+        normalized_codes = self._normalize_string_filter(transaction_codes, uppercase=True)
+        if normalized_codes:
+            clauses.append("transaction_code IN :transaction_codes")
+            params["transaction_codes"] = normalized_codes
+            expanding.append("transaction_codes")
+
+        if start_date is not None:
+            clauses.append("transaction_date >= :start_date")
+            params["start_date"] = parse_date(start_date)
+        if end_date is not None:
+            clauses.append("transaction_date <= :end_date")
+            params["end_date"] = parse_date(end_date)
+        if min_value is not None:
+            clauses.append("ABS(transaction_value) >= :min_value")
+            params["min_value"] = Decimal(str(min_value))
+
+        return " AND ".join(clauses), params, expanding
+
+    def _normalize_string_filter(
+        self,
+        value: str | Iterable[str] | None,
+        uppercase: bool = False,
+    ) -> list[str]:
+        if value is None:
+            return []
+        values = [value] if isinstance(value, str) else list(value)
+        normalized = []
+        for item in values:
+            if item is None:
+                continue
+            text_value = str(item).strip()
+            if not text_value:
+                continue
+            normalized.append(text_value.upper() if uppercase else text_value)
+        return normalized
+
+    def _read_sql(
+        self,
+        query: str,
+        params: dict[str, Any],
+        expanding: list[str],
+    ) -> pd.DataFrame:
+        statement = text(query)
+        for key in expanding:
+            statement = statement.bindparams(bindparam(key, expanding=True))
+        df = pd.read_sql(statement, con=self.engine, params=params)
+        for column in ("transaction_date", "filed_at"):
+            if column in df.columns:
+                df[column] = pd.to_datetime(df[column])
+        return df
+
+    def _summarize_buys_sells(self, df: pd.DataFrame) -> pd.DataFrame:
+        working = df.copy()
+        working["shares"] = pd.to_numeric(working["shares"], errors="coerce").fillna(0)
+        working["transaction_value"] = pd.to_numeric(working["transaction_value"], errors="coerce").fillna(0)
+        return (
+            working.groupby(["symbol", "action"], dropna=False, as_index=False)
+            .agg(
+                transactions=("accession_no", "count"),
+                insiders=("reporting_owner_cik", "nunique"),
+                shares=("shares", "sum"),
+                transaction_value=("transaction_value", "sum"),
+                first_transaction_date=("transaction_date", "min"),
+                last_transaction_date=("transaction_date", "max"),
+            )
+            .sort_values(["symbol", "action"])
+            .reset_index(drop=True)
+        )
+
+
+Form4 = Form4Importer
 Form13F = Form13FImporter
+
+
+def validate_form4_normalizer_sample() -> dict[str, Any]:
+    """Exercise Form4Normalizer with a small embedded sec-api-like payload."""
+    sample = {
+        "accessionNo": "0000000000-26-000004",
+        "filedAt": "2026-06-15T18:30:00-04:00",
+        "documentType": "4",
+        "periodOfReport": "2026-06-13",
+        "issuer": {
+            "cik": "1318605",
+            "name": "Tesla, Inc.",
+            "tradingSymbol": "TSLA",
+        },
+        "reportingOwner": {
+            "cik": "1234567",
+            "name": "Sample Insider",
+            "relationship": {
+                "isDirector": True,
+                "isOfficer": False,
+                "isTenPercentOwner": False,
+                "isOther": False,
+            },
+        },
+        "aff10b5One": False,
+        "nonDerivativeTable": {
+            "transactions": [
+                {
+                    "securityTitle": "Common Stock",
+                    "transactionDate": "2026-06-13",
+                    "coding": {"formType": "4", "code": "P", "equitySwapInvolved": False},
+                    "amounts": {"shares": 100, "pricePerShare": 10.25, "acquiredDisposedCode": "A"},
+                    "postTransactionAmounts": {"sharesOwnedFollowingTransaction": 1100},
+                    "ownershipNature": {"directOrIndirectOwnership": "D"},
+                },
+                {
+                    "securityTitle": "Common Stock",
+                    "transactionDate": "2026-06-14",
+                    "coding": {"formType": "4", "code": "S", "equitySwapInvolved": False},
+                    "amounts": {"shares": 40, "pricePerShare": 11.00, "acquiredDisposedCode": "D"},
+                    "postTransactionAmounts": {"sharesOwnedFollowingTransaction": 1060},
+                    "ownershipNature": {"directOrIndirectOwnership": "D"},
+                },
+                {
+                    "securityTitle": "Common Stock",
+                    "transactionDate": "2026-06-14",
+                    "coding": {"formType": "4", "code": "A", "equitySwapInvolved": False},
+                    "amounts": {"shares": 5, "pricePerShare": 0, "acquiredDisposedCode": "A"},
+                    "postTransactionAmounts": {"sharesOwnedFollowingTransaction": 1065},
+                    "ownershipNature": {"directOrIndirectOwnership": "D"},
+                },
+            ]
+        },
+        "footnotes": [],
+        "ownerSignatureName": "/s/ Sample Insider",
+        "ownerSignatureNameDate": "2026-06-15",
+    }
+    normalizer = Form4Normalizer()
+    filing_row = normalizer.filing_row(sample, "insider-trading:filedAt=2026-06-01..2026-06-30")
+    transaction_rows = normalizer.non_derivative_transaction_rows(sample)
+
+    assert filing_row["accession_no"] == sample["accessionNo"]
+    assert filing_row["issuer_trading_symbol"] == "TSLA"
+    assert filing_row["owner_is_director"] is True
+    assert filing_row["owner_signature_date"] == dt.date(2026, 6, 15)
+    assert len(transaction_rows) == 2
+    assert transaction_rows[0]["transaction_code"] == "P"
+    assert transaction_rows[0]["transaction_value"] == Decimal("1025.00")
+    assert transaction_rows[1]["transaction_code"] == "S"
+
+    return {"filing_row": filing_row, "transaction_rows": transaction_rows}
+
+
+def validate_form4_endpoint_query_sample() -> dict[str, Any]:
+    """Exercise Form 4 query construction without making API requests."""
+    importer = Form4Importer(show_progress=False, min_request_interval=0)
+    query = importer._query(
+        symbols=["TSLA", "AAPL"],
+        start_date=dt.date(2026, 1, 1),
+        end_date=dt.date(2026, 1, 31),
+        date_field="filedAt",
+        transaction_codes=("P", "S"),
+        document_types=("4", "4/A"),
+    )
+    start, end = importer._resolve_date_range(None, dt.date(2026, 6, 21), 365)
+
+    assert "issuer.tradingSymbol:TSLA" in query
+    assert "issuer.tradingSymbol:AAPL" in query
+    assert "nonDerivativeTable.transactions.coding.code:P" in query
+    assert "nonDerivativeTable.transactions.coding.code:S" in query
+    assert "filedAt:[2026-01-01 TO 2026-01-31]" in query
+    assert start == dt.date(2025, 6, 21)
+    assert end == dt.date(2026, 6, 21)
+
+    return {"query": query, "default_range": (start, end)}
+
+
+def form4_row_counts() -> dict[str, int]:
+    """Return row counts for the local `form4` filings and transactions tables."""
+    return Form4Database().row_counts()
 
 
 def validate_form13f_normalizer_sample() -> dict[str, Any]:
