@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -31,17 +32,22 @@ MYSQL_PORT = 3306
 GPTDB_MYSQL_USER = "gptdb"
 FORM13F_DB = "form13f"
 FORM4_DB = "form4"
+EXECUTIVE_COMPENSATION_DB = "executive_compensation"
 SEC_API_BASE_URL = "https://api.sec-api.io"
 FORM4_INSIDER_TRADING_ENDPOINT = f"{SEC_API_BASE_URL}/insider-trading"
 FORM13F_COVER_PAGES_ENDPOINT = f"{SEC_API_BASE_URL}/form-13f/cover-pages"
 FORM13F_HOLDINGS_ENDPOINT = f"{SEC_API_BASE_URL}/form-13f/holdings"
+EXECUTIVE_COMPENSATION_ENDPOINT = f"{SEC_API_BASE_URL}/compensation"
 DEFAULT_13F_THRESHOLD = 1_000_000_000
 DEFAULT_13F_START_PERIOD = "2013-01-01"
+DEFAULT_EXEC_COMP_START_YEAR = 2005
 DEFAULT_FORM4_LOOKBACK_DAYS = 365
 SEC_API_FORM4_PAGE_SIZE = 50
 SEC_API_FORM4_FROM_LIMIT = 10_000
 SEC_API_13F_PAGE_SIZE = 50
 SEC_API_13F_FROM_LIMIT = 10_000
+SEC_API_EXEC_COMP_PAGE_SIZE = 50
+SEC_API_EXEC_COMP_FROM_LIMIT = 10_000
 
 
 def mysql_identifier(name: str) -> str:
@@ -1554,7 +1560,6 @@ class Form13FAnalytics:
         )
         plot_df.plot(title="13F Ownership % of Shares Outstanding")
 
-
 @dataclass
 class Form4ImportStats:
     """Summary returned by Form 4 import methods."""
@@ -2675,8 +2680,744 @@ class Form4Analytics:
         )
 
 
+@dataclass
+class ExecutiveCompensationImportStats:
+    """Summary returned by executive compensation import methods."""
+
+    symbols: int = 0
+    symbol_batches: int = 0
+    year_windows: int = 0
+    requests: int = 0
+    records: int = 0
+    rows: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "symbols": self.symbols,
+            "symbol_batches": self.symbol_batches,
+            "year_windows": self.year_windows,
+            "requests": self.requests,
+            "records": self.records,
+            "rows": self.rows,
+            "errors": self.errors,
+        }
+
+
+class ExecutiveCompensationDatabase:
+    """MySQL storage layer for sec-api.io executive compensation records."""
+
+    COMPENSATION_COLUMNS = (
+        "record_key",
+        "ticker",
+        "cik",
+        "year",
+        "name",
+        "position",
+        "salary",
+        "bonus",
+        "stock_awards",
+        "option_awards",
+        "non_equity_incentive_compensation",
+        "change_in_pension_value_and_deferred_earnings",
+        "other_compensation",
+        "total",
+        "raw_json",
+        "source_key",
+        "source_updated_at",
+    )
+
+    def __init__(
+        self,
+        database: str = EXECUTIVE_COMPENSATION_DB,
+        user: str = GPTDB_MYSQL_USER,
+        password: str = gptdb,
+        host: str = MYSQL_HOST,
+        port: int = MYSQL_PORT,
+        engine: Engine | None = None,
+    ) -> None:
+        self.database = database
+        self.engine = engine or self._make_engine(database, user, password, host, port)
+
+    def _make_engine(
+        self,
+        database: str,
+        user: str,
+        password: str,
+        host: str,
+        port: int,
+    ) -> Engine:
+        url = URL.create(
+            "mysql+pymysql",
+            username=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+        )
+        return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+    def setup(self) -> None:
+        """Create executive compensation tables if they do not already exist."""
+        with self.engine.begin() as conn:
+            conn.execute(text(self._compensation_records_ddl()))
+
+    def latest_year(self) -> int | None:
+        query = text("SELECT MAX(year) FROM compensation_records")
+        with self.engine.connect() as conn:
+            value = conn.execute(query).scalar()
+        return int(value) if value is not None else None
+
+    def row_counts(self) -> dict[str, int]:
+        with self.engine.connect() as conn:
+            return {
+                "compensation_records": int(
+                    conn.execute(text("SELECT COUNT(*) FROM compensation_records")).scalar() or 0
+                )
+            }
+
+    def upsert_compensation_records(self, rows: list[dict[str, Any]], batch_size: int = 1000) -> int:
+        if not rows:
+            return 0
+
+        statement = text(self._upsert_sql("compensation_records", self.COMPENSATION_COLUMNS, ("record_key",)))
+        inserted = 0
+        with self.engine.begin() as conn:
+            for batch in chunked(rows, batch_size):
+                conn.execute(statement, batch)
+                inserted += len(batch)
+        return inserted
+
+    def _upsert_sql(self, table_name: str, columns: tuple[str, ...], key_columns: tuple[str, ...]) -> str:
+        quoted_columns = ", ".join(mysql_identifier(column) for column in columns)
+        values = ", ".join(f":{column}" for column in columns)
+        update_columns = [column for column in columns if column not in key_columns]
+        updates = ", ".join(
+            f"{mysql_identifier(column)} = VALUES({mysql_identifier(column)})"
+            for column in update_columns
+        )
+        updates = f"{updates}, loaded_at = CURRENT_TIMESTAMP(6)"
+        return (
+            f"INSERT INTO {mysql_identifier(table_name)} ({quoted_columns}) "
+            f"VALUES ({values}) "
+            f"ON DUPLICATE KEY UPDATE {updates}"
+        )
+
+    def _compensation_records_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS compensation_records (
+            record_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            ticker VARCHAR(32) NULL,
+            cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            `year` SMALLINT UNSIGNED NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            position VARCHAR(512) NULL,
+            salary DECIMAL(28, 6) NULL,
+            bonus DECIMAL(28, 6) NULL,
+            stock_awards DECIMAL(28, 6) NULL,
+            option_awards DECIMAL(28, 6) NULL,
+            non_equity_incentive_compensation DECIMAL(28, 6) NULL,
+            change_in_pension_value_and_deferred_earnings DECIMAL(28, 6) NULL,
+            other_compensation DECIMAL(28, 6) NULL,
+            total DECIMAL(28, 6) NULL,
+            raw_json JSON NULL,
+            source_key VARCHAR(1024) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (record_key),
+            KEY idx_exec_comp_ticker (ticker),
+            KEY idx_exec_comp_cik (cik),
+            KEY idx_exec_comp_year (`year`),
+            KEY idx_exec_comp_ticker_year (ticker, `year`),
+            KEY idx_exec_comp_cik_year (cik, `year`)
+        ) ENGINE = InnoDB
+        """
+
+
+class ExecutiveCompensationNormalizer:
+    """Normalize sec-api.io executive compensation JSON into database rows."""
+
+    COMPENSATION_FIELD_MAP = {
+        "salary": "salary",
+        "bonus": "bonus",
+        "stockAwards": "stock_awards",
+        "optionAwards": "option_awards",
+        "nonEquityIncentiveCompensation": "non_equity_incentive_compensation",
+        "changeInPensionValueAndDeferredEarnings": "change_in_pension_value_and_deferred_earnings",
+        "otherCompensation": "other_compensation",
+        "total": "total",
+    }
+
+    @classmethod
+    def compensation_row(
+        cls,
+        record: Mapping[str, Any],
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> dict[str, Any]:
+        ticker = cls._normalize_symbol(record.get("ticker"))
+        cik = cls._normalize_cik(record.get("cik"))
+        year = cls._parse_year(record.get("year"))
+        name = str(record.get("name") or "").strip()
+        position = str(record.get("position") or "").strip() or None
+        row = {
+            "record_key": cls._record_key(ticker, cik, year, name, position),
+            "ticker": ticker,
+            "cik": cik,
+            "year": year,
+            "name": name,
+            "position": position,
+            "raw_json": json_dumps(record),
+            "source_key": source_key,
+            "source_updated_at": parse_datetime(source_updated_at),
+        }
+        for source_field, target_field in cls.COMPENSATION_FIELD_MAP.items():
+            row[target_field] = parse_decimal(record.get(source_field))
+        return row
+
+    @classmethod
+    def compensation_rows(
+        cls,
+        records: Iterable[Mapping[str, Any]],
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> list[dict[str, Any]]:
+        return [
+            cls.compensation_row(record, source_key=source_key, source_updated_at=source_updated_at)
+            for record in records
+            if isinstance(record, Mapping) and cls._parse_year(record.get("year")) is not None
+        ]
+
+    @staticmethod
+    def _record_key(
+        ticker: str | None,
+        cik: str | None,
+        year: int | None,
+        name: str,
+        position: str | None,
+    ) -> str:
+        natural_key = "|".join(
+            (
+                ticker or "",
+                cik or "",
+                str(year or ""),
+                name.casefold(),
+                (position or "").casefold(),
+            )
+        )
+        return hashlib.sha256(natural_key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _normalize_symbol(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip().upper()
+
+    @staticmethod
+    def _normalize_cik(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip()
+
+    @staticmethod
+    def _parse_year(value: Any) -> int | None:
+        if value in (None, ""):
+            return None
+        return int(str(value).strip())
+
+
+class ExecutiveCompensationImporter:
+    """
+    Import executive compensation records from sec-api.io.
+
+    Requests are sequential and symbol-batched. Wide result sets are split by
+    reporting year first, then by symbol batch to stay below sec-api's 10,000
+    result window.
+    """
+
+    def __init__(
+        self,
+        api_key: str = sec_api_key,
+        database: ExecutiveCompensationDatabase | None = None,
+        normalizer: ExecutiveCompensationNormalizer | None = None,
+        batch_size: int = 1000,
+        symbol_batch_size: int = 25,
+        timeout: int = 120,
+        min_request_interval: float = 2.0,
+        max_retries: int = 6,
+        retry_backoff: float = 5.0,
+        max_retry_sleep: float = 120.0,
+        show_progress: bool = True,
+    ) -> None:
+        self.api_key = api_key
+        self.database = database or ExecutiveCompensationDatabase()
+        self.normalizer = normalizer or ExecutiveCompensationNormalizer()
+        self.batch_size = batch_size
+        self.symbol_batch_size = symbol_batch_size
+        self.timeout = timeout
+        self.min_request_interval = min_request_interval
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self.max_retry_sleep = max_retry_sleep
+        self.show_progress = show_progress
+        self._last_request_at = 0.0
+        self._last_page_requests = 0
+        self.session = requests.Session()
+
+    def import_watchlist(
+        self,
+        watchlist_location: str | None = None,
+        start_year: int | str | None = DEFAULT_EXEC_COMP_START_YEAR,
+        end_year: int | str | None = None,
+    ) -> dict[str, Any]:
+        """Import executive compensation for symbols from a watchlist file."""
+        return self.import_symbols(
+            symbols=self._load_watchlist(watchlist_location),
+            start_year=start_year,
+            end_year=end_year,
+        )
+
+    def import_symbols(
+        self,
+        symbols: Iterable[str],
+        start_year: int | str | None = DEFAULT_EXEC_COMP_START_YEAR,
+        end_year: int | str | None = None,
+    ) -> dict[str, Any]:
+        """Import executive compensation for symbols over a reporting-year range."""
+        start, end = self._resolve_year_range(start_year, end_year)
+        return self.import_year_range(symbols=symbols, start_year=start, end_year=end)
+
+    def import_recent_years(
+        self,
+        symbols: Iterable[str] | None = None,
+        watchlist_location: str | None = None,
+        years_back: int = 1,
+    ) -> dict[str, Any]:
+        """
+        Refresh recent reporting years.
+
+        `years_back=1` imports the current calendar year and the prior year.
+        """
+        if years_back < 0:
+            raise ValueError("years_back must be >= 0")
+        end = dt.date.today().year
+        start = end - years_back
+        if symbols is None:
+            symbols = self._load_watchlist(watchlist_location)
+        return self.import_year_range(symbols=symbols, start_year=start, end_year=end)
+
+    def import_year_range(
+        self,
+        symbols: Iterable[str],
+        start_year: int | str,
+        end_year: int | str,
+    ) -> dict[str, Any]:
+        """Import executive compensation for `symbols` between reporting years."""
+        self.database.setup()
+        start, end = self._resolve_year_range(start_year, end_year)
+        normalized_symbols = self._normalize_symbols(symbols)
+        if not normalized_symbols:
+            raise ValueError("At least one symbol is required")
+
+        stats = ExecutiveCompensationImportStats(symbols=len(normalized_symbols))
+        symbol_batches = list(self._symbol_batches(normalized_symbols))
+        progress = self._progress(symbol_batches, desc="Exec comp symbol batches", unit="batch")
+        for symbol_batch in progress:
+            stats.symbol_batches += 1
+            self._set_progress_postfix(progress, symbols=len(symbol_batch), records=stats.records)
+            self._import_symbol_batch_year_window(
+                symbol_batch=symbol_batch,
+                start_year=start,
+                end_year=end,
+                stats=stats,
+            )
+        return stats.as_dict()
+
+    def _import_symbol_batch_year_window(
+        self,
+        symbol_batch: list[str],
+        start_year: int,
+        end_year: int,
+        stats: ExecutiveCompensationImportStats,
+    ) -> None:
+        query = self._query(symbol_batch, start_year, end_year)
+        source_key = (
+            f"compensation:year={start_year}..{end_year}:"
+            f"symbols={','.join(symbol_batch)}"
+        )
+        try:
+            self._import_query_or_split(
+                query=query,
+                source_key=source_key,
+                start_year=start_year,
+                end_year=end_year,
+                symbol_batch=symbol_batch,
+                stats=stats,
+            )
+        except Exception as exc:
+            stats.errors.append(f"{source_key}: {exc}")
+
+    def _import_query_or_split(
+        self,
+        query: str,
+        source_key: str,
+        start_year: int,
+        end_year: int,
+        symbol_batch: list[str],
+        stats: ExecutiveCompensationImportStats,
+    ) -> None:
+        try:
+            records = self._paginate_search(query=query, sort=[{"year": {"order": "asc"}}, {"ticker": {"order": "asc"}}])
+        except SearchResultLimitError:
+            if start_year < end_year:
+                midpoint_year = start_year + ((end_year - start_year) // 2)
+                self._import_symbol_batch_year_window(symbol_batch, start_year, midpoint_year, stats)
+                self._import_symbol_batch_year_window(symbol_batch, midpoint_year + 1, end_year, stats)
+                return
+
+            if len(symbol_batch) > 1:
+                midpoint = max(1, len(symbol_batch) // 2)
+                for smaller_batch in (symbol_batch[:midpoint], symbol_batch[midpoint:]):
+                    self._import_symbol_batch_year_window(smaller_batch, start_year, end_year, stats)
+                return
+
+            raise
+
+        stats.requests += self._last_page_requests
+        stats.year_windows += 1
+        stats.records += len(records)
+        rows = self.normalizer.compensation_rows(records, source_key=source_key)
+        stats.rows += self.database.upsert_compensation_records(rows, batch_size=self.batch_size)
+
+    def _paginate_search(
+        self,
+        query: str,
+        sort: list[dict[str, Any]] | None = None,
+        page_size: int = SEC_API_EXEC_COMP_PAGE_SIZE,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        offset = 0
+        self._last_page_requests = 0
+
+        while True:
+            payload = {
+                "query": query,
+                "from": str(offset),
+                "size": str(page_size),
+            }
+            if sort is not None:
+                payload["sort"] = sort
+
+            response = self._post_search(EXECUTIVE_COMPENSATION_ENDPOINT, payload)
+            self._last_page_requests += 1
+            data = response.get("data", response.get("compensation", []))
+            total_value = response.get("total")
+            if isinstance(total_value, Mapping):
+                total_payload = total_value
+                total = int(total_payload.get("value") or len(data))
+                relation = total_payload.get("relation")
+            else:
+                total = int(total_value or len(data))
+                relation = "eq"
+
+            if total > SEC_API_EXEC_COMP_FROM_LIMIT or (
+                total >= SEC_API_EXEC_COMP_FROM_LIMIT and relation != "eq"
+            ):
+                raise SearchResultLimitError(query, total)
+            if not data:
+                break
+
+            records.extend(data)
+            offset += page_size
+            if len(data) < page_size or offset >= total:
+                break
+
+        return records
+
+    def _post_search(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        with self._post(endpoint, payload) as response:
+            return response.json()
+
+    def _post(self, endpoint: str, payload: Mapping[str, Any]) -> requests.Response:
+        retry_statuses = {429, 500, 502, 503, 504}
+        last_response: requests.Response | None = None
+
+        for attempt in range(self.max_retries + 1):
+            self._wait_for_request_slot()
+            response = self.session.post(
+                endpoint,
+                headers=self._headers(),
+                json=dict(payload),
+                timeout=self.timeout,
+            )
+            self._last_request_at = time.monotonic()
+            last_response = response
+
+            if response.status_code not in retry_statuses:
+                response.raise_for_status()
+                return response
+
+            if attempt >= self.max_retries:
+                response.raise_for_status()
+
+            response.close()
+            time.sleep(self._retry_sleep_seconds(response, attempt))
+
+        if last_response is not None:
+            last_response.raise_for_status()
+        raise RuntimeError(f"Unable to retrieve {endpoint}")
+
+    def _query(self, symbols: Iterable[str], start_year: int, end_year: int) -> str:
+        return f"year:[{int(start_year)} TO {int(end_year)}] AND {self._symbol_clause(symbols)}"
+
+    def _symbol_clause(self, symbols: Iterable[str]) -> str:
+        values = self._normalize_symbols(symbols)
+        if not values:
+            raise ValueError("At least one symbol is required")
+        if len(values) == 1:
+            return f"ticker:{self._lucene_value(values[0])}"
+        return "ticker:(" + " OR ".join(self._lucene_value(value) for value in values) + ")"
+
+    def _resolve_year_range(
+        self,
+        start_year: int | str | None,
+        end_year: int | str | None,
+    ) -> tuple[int, int]:
+        end = int(end_year) if end_year is not None else dt.date.today().year
+        start = int(start_year) if start_year is not None else DEFAULT_EXEC_COMP_START_YEAR
+        if start < DEFAULT_EXEC_COMP_START_YEAR:
+            start = DEFAULT_EXEC_COMP_START_YEAR
+        if end < start:
+            raise ValueError("end_year must be on or after start_year")
+        return start, end
+
+    def _load_watchlist(self, watchlist_location: str | None) -> list[str]:
+        if watchlist_location is None:
+            try:
+                from .watchlists_locations import hadv, make_watchlist
+            except ImportError:
+                from market_data.watchlists_locations import hadv, make_watchlist
+
+            watchlist_location = hadv
+        else:
+            try:
+                from .watchlists_locations import make_watchlist
+            except ImportError:
+                from market_data.watchlists_locations import make_watchlist
+
+        return make_watchlist(watchlist_location)
+
+    def _normalize_symbols(self, symbols: Iterable[str]) -> list[str]:
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        normalized = []
+        seen = set()
+        for symbol in symbols:
+            if symbol in (None, ""):
+                continue
+            value = str(symbol).strip().upper()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    def _symbol_batches(self, symbols: list[str]) -> Iterator[list[str]]:
+        batch_size = max(1, self.symbol_batch_size)
+        for i in range(0, len(symbols), batch_size):
+            yield symbols[i:i + batch_size]
+
+    def _lucene_value(self, value: str) -> str:
+        if value.replace(".", "").replace("-", "").replace("_", "").isalnum():
+            return value
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def _wait_for_request_slot(self) -> None:
+        if self.min_request_interval <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        wait_seconds = self.min_request_interval - elapsed
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+    def _retry_sleep_seconds(self, response: requests.Response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), self.max_retry_sleep)
+            except ValueError:
+                pass
+
+        exponential_sleep = self.retry_backoff * (2 ** attempt)
+        return min(exponential_sleep, self.max_retry_sleep)
+
+    def _progress(
+        self,
+        iterable: Iterable[Any],
+        desc: str,
+        unit: str,
+        leave: bool = True,
+    ) -> Iterable[Any]:
+        if not self.show_progress or tqdm is None:
+            return iterable
+        return tqdm(iterable, desc=desc, unit=unit, leave=leave)
+
+    def _set_progress_postfix(self, progress: Iterable[Any], **values: Any) -> None:
+        if hasattr(progress, "set_postfix"):
+            progress.set_postfix(**values)
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": self.api_key}
+
+
+class ExecutiveCompensationAnalytics:
+    """Analytics layer for normalized executive compensation records."""
+
+    def __init__(self, database: ExecutiveCompensationDatabase | None = None) -> None:
+        self.database = database or ExecutiveCompensationDatabase()
+        self.engine = self.database.engine
+
+    def total_compensation(
+        self,
+        symbols: str | Iterable[str] | None = None,
+        start_year: int | str | None = None,
+        end_year: int | str | None = None,
+        plot: bool = False,
+        detail: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Return total executive compensation for symbols over reporting years.
+
+        By default the result is one row per symbol/year, summing compensation
+        across all reported executives. Use `detail=True` for executive rows.
+        """
+        where_sql, params, expanding = self._where_clause(symbols, start_year, end_year)
+        if detail:
+            query = f"""
+            SELECT
+                ticker AS symbol,
+                cik,
+                `year`,
+                name,
+                position,
+                salary,
+                bonus,
+                stock_awards,
+                option_awards,
+                non_equity_incentive_compensation,
+                change_in_pension_value_and_deferred_earnings,
+                other_compensation,
+                total
+            FROM compensation_records
+            WHERE {where_sql}
+            ORDER BY symbol, `year`, total DESC, name
+            """
+            df = self._read_sql(query, params, expanding)
+        else:
+            query = f"""
+            SELECT
+                ticker AS symbol,
+                MIN(cik) AS cik,
+                `year`,
+                COUNT(*) AS executive_count,
+                SUM(salary) AS salary,
+                SUM(bonus) AS bonus,
+                SUM(stock_awards) AS stock_awards,
+                SUM(option_awards) AS option_awards,
+                SUM(non_equity_incentive_compensation) AS non_equity_incentive_compensation,
+                SUM(change_in_pension_value_and_deferred_earnings)
+                    AS change_in_pension_value_and_deferred_earnings,
+                SUM(other_compensation) AS other_compensation,
+                SUM(total) AS total_compensation
+            FROM compensation_records
+            WHERE {where_sql}
+            GROUP BY ticker, `year`
+            ORDER BY symbol, `year`
+            """
+            df = self._read_sql(query, params, expanding)
+
+        if plot:
+            self._plot_total_compensation(df, detail=detail)
+        return df
+
+    def _where_clause(
+        self,
+        symbols: str | Iterable[str] | None,
+        start_year: int | str | None,
+        end_year: int | str | None,
+    ) -> tuple[str, dict[str, Any], list[str]]:
+        clauses = ["1 = 1"]
+        params: dict[str, Any] = {}
+        expanding: list[str] = []
+
+        normalized_symbols = self._normalize_string_filter(symbols, uppercase=True)
+        if normalized_symbols:
+            clauses.append("ticker IN :symbols")
+            params["symbols"] = normalized_symbols
+            expanding.append("symbols")
+        if start_year is not None:
+            clauses.append("`year` >= :start_year")
+            params["start_year"] = int(start_year)
+        if end_year is not None:
+            clauses.append("`year` <= :end_year")
+            params["end_year"] = int(end_year)
+
+        return " AND ".join(clauses), params, expanding
+
+    def _normalize_string_filter(
+        self,
+        value: str | Iterable[str] | None,
+        uppercase: bool = False,
+    ) -> list[str]:
+        if value is None:
+            return []
+        values = [value] if isinstance(value, str) else list(value)
+        normalized = []
+        for item in values:
+            if item is None:
+                continue
+            text_value = str(item).strip()
+            if not text_value:
+                continue
+            normalized.append(text_value.upper() if uppercase else text_value)
+        return normalized
+
+    def _read_sql(
+        self,
+        query: str,
+        params: dict[str, Any],
+        expanding: list[str],
+    ) -> pd.DataFrame:
+        statement = text(query)
+        for key in expanding:
+            statement = statement.bindparams(bindparam(key, expanding=True))
+        return pd.read_sql(statement, con=self.engine, params=params)
+
+    def _plot_total_compensation(self, df: pd.DataFrame, detail: bool) -> None:
+        if df.empty:
+            return
+        working = df.copy()
+        value_column = "total" if detail else "total_compensation"
+        if detail:
+            working = (
+                working.assign(total=pd.to_numeric(working["total"], errors="coerce").fillna(0))
+                .groupby(["symbol", "year"], dropna=False, as_index=False)
+                .agg(total=(value_column, "sum"))
+            )
+            value_column = "total"
+        plot_df = working.pivot_table(
+            index="year",
+            columns="symbol",
+            values=value_column,
+            aggfunc="sum",
+        )
+        plot_df.plot(title="Total Executive Compensation")
+
+
 Form4 = Form4Importer
 Form13F = Form13FImporter
+ExecutiveCompensation = ExecutiveCompensationImporter
 
 
 def validate_form4_normalizer_sample() -> dict[str, Any]:
@@ -2893,6 +3634,58 @@ def validate_form13f_maintenance_sample() -> dict[str, Any]:
 def form13f_row_counts() -> dict[str, int]:
     """Return row counts for the local `form13f` cover_pages and holdings tables."""
     return Form13FDatabase().row_counts()
+
+
+def validate_executive_compensation_normalizer_sample() -> dict[str, Any]:
+    """Exercise ExecutiveCompensationNormalizer with a small sec-api-like payload."""
+    sample = {
+        "year": 2024,
+        "ticker": "MSFT",
+        "cik": "789019",
+        "name": "Sample Executive",
+        "position": "Chief Executive Officer",
+        "salary": 1500000,
+        "bonus": 0,
+        "stockAwards": 25000000,
+        "optionAwards": 0,
+        "nonEquityIncentiveCompensation": 3600000,
+        "changeInPensionValueAndDeferredEarnings": 0,
+        "otherCompensation": 150000,
+        "total": 30250000,
+    }
+    normalizer = ExecutiveCompensationNormalizer()
+    row = normalizer.compensation_row(sample, "compensation:year=2024..2024:symbols=MSFT")
+
+    assert len(row["record_key"]) == 64
+    assert row["ticker"] == "MSFT"
+    assert row["cik"] == "789019"
+    assert row["year"] == 2024
+    assert row["stock_awards"] == Decimal("25000000")
+    assert row["non_equity_incentive_compensation"] == Decimal("3600000")
+    assert row["total"] == Decimal("30250000")
+    assert json.loads(row["raw_json"])["ticker"] == "MSFT"
+
+    return {"compensation_row": row}
+
+
+def validate_executive_compensation_endpoint_query_sample() -> dict[str, Any]:
+    """Exercise executive compensation query construction without API requests."""
+    importer = ExecutiveCompensationImporter(show_progress=False, min_request_interval=0)
+    query = importer._query(["MSFT", "AAPL", "BRK.B"], 2023, 2024)
+    recent = importer._resolve_year_range(None, 2026)
+    batches = list(importer._symbol_batches(["A", "B", "C"]))
+
+    assert query == "year:[2023 TO 2024] AND ticker:(MSFT OR AAPL OR BRK.B)"
+    assert recent == (DEFAULT_EXEC_COMP_START_YEAR, 2026)
+    assert batches == [["A", "B", "C"]]
+
+    return {"query": query, "default_range": recent, "batches": batches}
+
+
+def executive_compensation_row_counts() -> dict[str, int]:
+    """Return row counts for the local executive compensation table."""
+    return ExecutiveCompensationDatabase().row_counts()
+
 
 def filing_urls(symbol: str, form_type: str=None, filing_date: str=None, no_filings: int=5, query_size: int=10) -> list:
     """
