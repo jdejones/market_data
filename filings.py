@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 import time
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -38,16 +39,123 @@ FORM4_INSIDER_TRADING_ENDPOINT = f"{SEC_API_BASE_URL}/insider-trading"
 FORM13F_COVER_PAGES_ENDPOINT = f"{SEC_API_BASE_URL}/form-13f/cover-pages"
 FORM13F_HOLDINGS_ENDPOINT = f"{SEC_API_BASE_URL}/form-13f/holdings"
 EXECUTIVE_COMPENSATION_ENDPOINT = f"{SEC_API_BASE_URL}/compensation"
+SEC_API_FLOAT_ENDPOINT = f"{SEC_API_BASE_URL}/float"
+SEC_API_XBRL_ENDPOINT = f"{SEC_API_BASE_URL}/xbrl-to-json"
+SEC_API_EXTRACTOR_ENDPOINT = f"{SEC_API_BASE_URL}/extractor"
+SEC_API_FULL_TEXT_SEARCH_ENDPOINT = f"{SEC_API_BASE_URL}/full-text-search"
+SEC_API_FORM_D_ENDPOINT = f"{SEC_API_BASE_URL}/form-d"
 DEFAULT_13F_THRESHOLD = 1_000_000_000
 DEFAULT_13F_START_PERIOD = "2013-01-01"
 DEFAULT_EXEC_COMP_START_YEAR = 2005
 DEFAULT_FORM4_LOOKBACK_DAYS = 365
+DEFAULT_DILUTION_LOOKBACK_DAYS = 365 * 5
 SEC_API_FORM4_PAGE_SIZE = 50
 SEC_API_FORM4_FROM_LIMIT = 10_000
 SEC_API_13F_PAGE_SIZE = 50
 SEC_API_13F_FROM_LIMIT = 10_000
 SEC_API_EXEC_COMP_PAGE_SIZE = 50
 SEC_API_EXEC_COMP_FROM_LIMIT = 10_000
+SEC_API_DILUTION_PAGE_SIZE = 50
+SEC_API_DILUTION_FROM_LIMIT = 10_000
+SEC_API_FULL_TEXT_PAGE_SIZE = 100
+
+PERIODIC_DILUTION_FORMS = ("10-Q", "10-Q/A", "10-K", "10-K/A")
+CURRENT_DILUTION_EVENT_FORMS = ("8-K", "8-K/A")
+OFFERING_DILUTION_FORMS = (
+    "S-1",
+    "S-1/A",
+    "S-1MEF",
+    "S-3",
+    "S-3/A",
+    "S-3ASR",
+    "S-3MEF",
+    "424B2",
+    "424B3",
+    "424B4",
+    "424B5",
+    "424B7",
+    "EFFECT",
+    "POS AM",
+    "POSASR",
+    "RW",
+)
+COMPENSATION_DILUTION_FORMS = ("S-8", "S-8 POS", "DEF 14A", "PRE 14A")
+PRIVATE_OFFERING_DILUTION_FORMS = ("D", "D/A")
+MERGER_DILUTION_FORMS = ("S-4", "S-4/A", "DEFM14A")
+DILUTION_8K_ITEM_CODES = ("1.01", "2.03", "3.02", "3.03", "5.03", "7.01", "8.01", "9.01")
+DILUTION_8K_EXTRACTOR_ITEMS = ("1-1", "2-3", "3-2", "3-3", "5-3", "7-1", "8-1", "9-1")
+PERIODIC_DILUTION_EXTRACTOR_ITEMS = {
+    "10-K": ("5", "8", "15"),
+    "10-K/A": ("5", "8", "15"),
+    "10-Q": ("part1item1", "part2item2", "part2item6"),
+    "10-Q/A": ("part1item1", "part2item2", "part2item6"),
+}
+DILUTION_KEYWORD_QUERY = (
+    '"common stock" OR warrant* OR convertible OR "at-the-market" OR ATM OR '
+    '"equity line" OR "registered direct" OR PIPE OR "shares reserved" OR '
+    '"selling stockholder" OR "employee stock purchase" OR "incentive plan" OR '
+    '"authorized shares" OR "reverse stock split"'
+)
+DILUTION_QUANTITY_CATEGORIES = (
+    "outstanding",
+    "newly_issued",
+    "sold",
+    "issuable",
+    "registered",
+    "reserved",
+    "authorized",
+    "underlying_warrants",
+    "underlying_convertibles",
+    "selling_stockholder",
+    "repurchased",
+    "cancelled",
+)
+DILUTION_SHARE_COUNT_COLUMNS = (
+    "symbol",
+    "cik",
+    "period",
+    "share_class",
+    "shares_outstanding",
+    "period_of_report",
+    "reported_at",
+    "source_accession_no",
+    "actual_dilution_pct",
+    "raw_json",
+)
+DILUTION_EVENT_COLUMNS = (
+    "symbol",
+    "cik",
+    "accession_no",
+    "form_type",
+    "filed_at",
+    "period_of_report",
+    "company_name",
+    "source_endpoint",
+    "source_url",
+    "source_section",
+    "category",
+    "quantity",
+    "amount",
+    "security_type",
+    "confidence",
+    "snippet",
+    "raw_match",
+)
+DILUTION_CANDIDATE_COLUMNS = (
+    "symbol",
+    "cik",
+    "accession_no",
+    "form_type",
+    "filed_at",
+    "period_of_report",
+    "company_name",
+    "source_endpoint",
+    "source_url",
+    "source_section",
+    "matched_keywords",
+    "snippet",
+    "parse_status",
+)
 
 
 def mysql_identifier(name: str) -> str:
@@ -3110,18 +3218,24 @@ class ExecutiveCompensationImporter:
 
             response = self._post_search(EXECUTIVE_COMPENSATION_ENDPOINT, payload)
             self._last_page_requests += 1
-            data = response.get("data", response.get("compensation", []))
-            total_value = response.get("total")
-            if isinstance(total_value, Mapping):
-                total_payload = total_value
-                total = int(total_payload.get("value") or len(data))
-                relation = total_payload.get("relation")
-            else:
-                total = int(total_value or len(data))
+            if isinstance(response, list):
+                data = response
+                total = None
                 relation = "eq"
+            else:
+                data = response.get("data", response.get("compensation", []))
+                total_value = response.get("total")
+                if isinstance(total_value, Mapping):
+                    total_payload = total_value
+                    total = int(total_payload.get("value") or len(data))
+                    relation = total_payload.get("relation")
+                else:
+                    total = int(total_value) if total_value is not None else None
+                    relation = "eq"
 
-            if total > SEC_API_EXEC_COMP_FROM_LIMIT or (
-                total >= SEC_API_EXEC_COMP_FROM_LIMIT and relation != "eq"
+            if total is not None and (
+                total > SEC_API_EXEC_COMP_FROM_LIMIT
+                or (total >= SEC_API_EXEC_COMP_FROM_LIMIT and relation != "eq")
             ):
                 raise SearchResultLimitError(query, total)
             if not data:
@@ -3129,12 +3243,16 @@ class ExecutiveCompensationImporter:
 
             records.extend(data)
             offset += page_size
-            if len(data) < page_size or offset >= total:
+            if len(data) < page_size:
                 break
+            if total is not None and offset >= total:
+                break
+            if offset >= SEC_API_EXEC_COMP_FROM_LIMIT:
+                raise SearchResultLimitError(query, offset)
 
         return records
 
-    def _post_search(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _post_search(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any] | list[dict[str, Any]]:
         with self._post(endpoint, payload) as response:
             return response.json()
 
@@ -3418,6 +3536,1210 @@ class ExecutiveCompensationAnalytics:
 Form4 = Form4Importer
 Form13F = Form13FImporter
 ExecutiveCompensation = ExecutiveCompensationImporter
+
+
+class DilutionSecApiClient:
+    """Small sequential sec-api.io client for on-demand dilution workflows."""
+
+    def __init__(
+        self,
+        api_key: str = sec_api_key,
+        timeout: int = 120,
+        min_request_interval: float = 1.0,
+        max_retries: int = 6,
+        retry_backoff: float = 5.0,
+        max_retry_sleep: float = 120.0,
+    ) -> None:
+        self.api_key = api_key
+        self.timeout = timeout
+        self.min_request_interval = min_request_interval
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self.max_retry_sleep = max_retry_sleep
+        self._last_request_at = 0.0
+        self._last_page_requests = 0
+        self.session = requests.Session()
+
+    def get_float(self, ticker: str | None = None, cik: str | None = None) -> dict[str, Any]:
+        params = {}
+        if ticker:
+            params["ticker"] = ticker.upper()
+        if cik:
+            params["cik"] = str(cik).lstrip("0")
+        return self._get_json(SEC_API_FLOAT_ENDPOINT, params=params)
+
+    def xbrl_to_json(
+        self,
+        accession_no: str | None = None,
+        htm_url: str | None = None,
+        xbrl_url: str | None = None,
+    ) -> dict[str, Any]:
+        params = {}
+        if accession_no:
+            params["accession-no"] = accession_no
+        if htm_url:
+            params["htm-url"] = htm_url
+        if xbrl_url:
+            params["xbrl-url"] = xbrl_url
+        return self._get_json(SEC_API_XBRL_ENDPOINT, params=params)
+
+    def extract_section(self, filing_url: str, section: str, return_type: str = "text") -> str:
+        params = {"url": filing_url, "item": section, "type": return_type}
+        with self._request("GET", SEC_API_EXTRACTOR_ENDPOINT, params=params) as response:
+            return response.text or ""
+
+    def query_filings(
+        self,
+        query: str,
+        sort: list[dict[str, Any]] | None = None,
+        page_size: int = SEC_API_DILUTION_PAGE_SIZE,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        offset = 0
+        self._last_page_requests = 0
+        sort = sort or [{"filedAt": {"order": "desc"}}]
+
+        while True:
+            payload = {
+                "query": query,
+                "from": str(offset),
+                "size": str(page_size),
+                "sort": sort,
+            }
+            response = self._post_json(SEC_API_BASE_URL, payload)
+            self._last_page_requests += 1
+            data = response.get("filings", response.get("data", []))
+            total, relation = self._total_and_relation(response, len(data))
+            if total > SEC_API_DILUTION_FROM_LIMIT or (
+                total >= SEC_API_DILUTION_FROM_LIMIT and relation != "eq"
+            ):
+                raise SearchResultLimitError(query, total)
+            if not data:
+                break
+
+            records.extend(data)
+            offset += page_size
+            if len(data) < page_size or offset >= total:
+                break
+
+        return records
+
+    def full_text_search(
+        self,
+        query: str,
+        form_types: Iterable[str],
+        start_date: dt.date,
+        end_date: dt.date,
+        cik: str | None = None,
+        max_pages: int = 3,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page = 1
+        while page <= max_pages:
+            payload: dict[str, Any] = {
+                "query": query,
+                "formTypes": list(form_types),
+                "startDate": start_date.isoformat(),
+                "endDate": end_date.isoformat(),
+                "page": str(page),
+            }
+            if cik:
+                payload["ciks"] = [str(cik)]
+            response = self._post_json(SEC_API_FULL_TEXT_SEARCH_ENDPOINT, payload)
+            filings = response.get("filings", [])
+            if not filings:
+                break
+            records.extend(filings)
+            total, relation = self._total_and_relation(response, len(filings))
+            if relation == "gte":
+                total = min(total, SEC_API_DILUTION_FROM_LIMIT)
+            if page * SEC_API_FULL_TEXT_PAGE_SIZE >= total:
+                break
+            page += 1
+        return records
+
+    def form_d_offerings(
+        self,
+        query: str,
+        page_size: int = SEC_API_DILUTION_PAGE_SIZE,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        offset = 0
+        self._last_page_requests = 0
+        while True:
+            payload = {
+                "query": query,
+                "from": str(offset),
+                "size": str(page_size),
+                "sort": [{"filedAt": {"order": "desc"}}],
+            }
+            response = self._post_json(SEC_API_FORM_D_ENDPOINT, payload)
+            self._last_page_requests += 1
+            data = response.get("offerings", response.get("data", []))
+            total, relation = self._total_and_relation(response, len(data))
+            if total > SEC_API_DILUTION_FROM_LIMIT or (
+                total >= SEC_API_DILUTION_FROM_LIMIT and relation != "eq"
+            ):
+                raise SearchResultLimitError(query, total)
+            if not data:
+                break
+            records.extend(data)
+            offset += page_size
+            if len(data) < page_size or offset >= total:
+                break
+        return records
+
+    def _get_json(self, endpoint: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        with self._request("GET", endpoint, params=params) as response:
+            return response.json()
+
+    def _post_json(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        with self._request("POST", endpoint, json_payload=payload) as response:
+            return response.json()
+
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Mapping[str, Any] | None = None,
+        json_payload: Mapping[str, Any] | None = None,
+    ) -> requests.Response:
+        retry_statuses = {429, 500, 502, 503, 504}
+        last_response: requests.Response | None = None
+
+        for attempt in range(self.max_retries + 1):
+            self._wait_for_request_slot()
+            response = self.session.request(
+                method,
+                endpoint,
+                headers=self._headers(),
+                params=dict(params or {}),
+                json=dict(json_payload or {}) if json_payload is not None else None,
+                timeout=self.timeout,
+            )
+            self._last_request_at = time.monotonic()
+            last_response = response
+
+            if response.status_code not in retry_statuses:
+                response.raise_for_status()
+                return response
+
+            if attempt >= self.max_retries:
+                response.raise_for_status()
+
+            sleep_seconds = self._retry_sleep_seconds(response, attempt)
+            response.close()
+            time.sleep(sleep_seconds)
+
+        if last_response is not None:
+            last_response.raise_for_status()
+        raise RuntimeError(f"Unable to retrieve {endpoint}")
+
+    def _wait_for_request_slot(self) -> None:
+        if self.min_request_interval <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        wait_seconds = self.min_request_interval - elapsed
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+    def _retry_sleep_seconds(self, response: requests.Response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), self.max_retry_sleep)
+            except ValueError:
+                pass
+        return min(self.retry_backoff * (2 ** attempt), self.max_retry_sleep)
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": self.api_key}
+
+    def _total_and_relation(self, response: Mapping[str, Any], default_total: int) -> tuple[int, str]:
+        total_value = response.get("total")
+        if isinstance(total_value, Mapping):
+            return int(total_value.get("value") or default_total), str(total_value.get("relation") or "eq")
+        return int(total_value or default_total), "eq"
+
+
+class ShareCountHistory:
+    """Normalize the sec-api.io Outstanding Shares API into a historical DataFrame."""
+
+    def __init__(self, client: DilutionSecApiClient | None = None) -> None:
+        self.client = client or DilutionSecApiClient()
+
+    def get(self, symbol: str) -> pd.DataFrame:
+        normalized_symbol = self._normalize_symbol(symbol)
+        payload = self.client.get_float(ticker=normalized_symbol)
+        rows: list[dict[str, Any]] = []
+        for record in payload.get("data", []):
+            float_payload = first_mapping(record.get("float"))
+            for observation in float_payload.get("outstandingShares", []) or []:
+                rows.append(
+                    {
+                        "symbol": normalized_symbol,
+                        "cik": record.get("cik"),
+                        "period": parse_date(observation.get("period")),
+                        "share_class": observation.get("shareClass"),
+                        "shares_outstanding": parse_decimal(observation.get("value")),
+                        "period_of_report": parse_date(record.get("periodOfReport")),
+                        "reported_at": parse_datetime(record.get("reportedAt")),
+                        "source_accession_no": record.get("sourceFilingAccessionNo"),
+                        "actual_dilution_pct": None,
+                        "raw_json": json_dumps(observation),
+                    }
+                )
+
+        df = pd.DataFrame(rows, columns=DILUTION_SHARE_COUNT_COLUMNS)
+        if df.empty:
+            return df
+        df = df.sort_values(["share_class", "period", "reported_at"], na_position="last").reset_index(drop=True)
+        df["shares_outstanding"] = pd.to_numeric(df["shares_outstanding"], errors="coerce")
+        df["actual_dilution_pct"] = df.groupby("share_class", dropna=False)["shares_outstanding"].pct_change()
+        return df
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        value = str(symbol or "").strip().upper()
+        if not value:
+            raise ValueError("symbol is required")
+        return value
+
+
+class DilutionTextParser:
+    """Deterministic dilution-oriented text parser for common share and financing phrases."""
+
+    KEYWORDS = {
+        "warrant": ("warrant", "exercise price"),
+        "convertible": ("convertible", "conversion price", "conversion rate", "convert"),
+        "registered": ("register", "registration statement", "prospectus"),
+        "reserved": ("reserved", "equity incentive", "stock plan", "employee stock purchase"),
+        "authorized": ("authorized shares", "increase authorized", "certificate of amendment"),
+        "selling_stockholder": ("selling stockholder", "selling shareholder", "resale"),
+        "repurchased": ("repurchase", "repurchased", "buyback", "treasury stock"),
+        "issued": ("issued", "issuance", "sold", "sale of"),
+        "atm": ("at-the-market", "atm", "sales agreement", "equity distribution"),
+    }
+    SHARE_PATTERN = re.compile(
+        r"(?P<number>\$?\d[\d,]*(?:\.\d+)?)\s*"
+        r"(?P<scale>thousand|million|billion)?\s*"
+        r"(?P<unit>shares?|common shares?|ordinary shares?|units?|dollars?|principal amount)",
+        re.IGNORECASE,
+    )
+
+    def parse(
+        self,
+        text_value: str,
+        metadata: Mapping[str, Any],
+        source_endpoint: str,
+        source_section: str | None = None,
+        source_url: str | None = None,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        if not text_value:
+            return rows
+        text_value = self._clean_text(text_value)
+        for sentence in self._sentences(text_value):
+            for match in self.SHARE_PATTERN.finditer(sentence):
+                raw_match = " ".join(match.group(0).split())
+                context = self._clean_text(sentence)
+                category = self._classify(context)
+                if category is None:
+                    continue
+                quantity, amount = self._parse_quantity_or_amount(match)
+                if quantity is None and amount is None:
+                    continue
+                security_type = self._security_type(context)
+                confidence = self._confidence(context, category, quantity, amount)
+                rows.append(
+                    {
+                        "symbol": metadata.get("symbol"),
+                        "cik": metadata.get("cik"),
+                        "accession_no": metadata.get("accession_no"),
+                        "form_type": metadata.get("form_type"),
+                        "filed_at": metadata.get("filed_at"),
+                        "period_of_report": metadata.get("period_of_report"),
+                        "company_name": metadata.get("company_name"),
+                        "source_endpoint": source_endpoint,
+                        "source_url": source_url or metadata.get("source_url"),
+                        "source_section": source_section,
+                        "category": category,
+                        "quantity": quantity,
+                        "amount": amount,
+                        "security_type": security_type,
+                        "confidence": confidence,
+                        "snippet": self._snippet(context),
+                        "raw_match": raw_match,
+                    }
+                )
+        return rows
+
+    def candidate_row(
+        self,
+        text_value: str,
+        metadata: Mapping[str, Any],
+        source_endpoint: str,
+        source_section: str | None = None,
+        source_url: str | None = None,
+        parse_status: str = "not_parsed",
+    ) -> dict[str, Any]:
+        cleaned = self._clean_text(text_value)
+        return {
+            "symbol": metadata.get("symbol"),
+            "cik": metadata.get("cik"),
+            "accession_no": metadata.get("accession_no"),
+            "form_type": metadata.get("form_type"),
+            "filed_at": metadata.get("filed_at"),
+            "period_of_report": metadata.get("period_of_report"),
+            "company_name": metadata.get("company_name"),
+            "source_endpoint": source_endpoint,
+            "source_url": source_url or metadata.get("source_url"),
+            "source_section": source_section,
+            "matched_keywords": ", ".join(self.matched_keywords(cleaned)),
+            "snippet": self._snippet(cleaned),
+            "parse_status": parse_status,
+        }
+
+    def matched_keywords(self, text_value: str) -> list[str]:
+        lowered = text_value.lower()
+        matches = []
+        for label, keywords in self.KEYWORDS.items():
+            if any(keyword in lowered for keyword in keywords):
+                matches.append(label)
+        return matches
+
+    def _classify(self, context: str) -> str | None:
+        lowered = context.lower()
+        if any(word in lowered for word in ("repurchase", "repurchased", "buyback", "treasury stock")):
+            return "repurchased"
+        if any(word in lowered for word in ("cancelled", "canceled", "cancel ", "retired")):
+            return "cancelled"
+        if "selling stockholder" in lowered or "selling shareholder" in lowered or "resale" in lowered:
+            if "warrant" in lowered:
+                return "underlying_warrants"
+            if "convertible" in lowered or "conversion" in lowered:
+                return "underlying_convertibles"
+            return "selling_stockholder"
+        if "warrant" in lowered:
+            return "underlying_warrants"
+        if "convertible" in lowered or "conversion" in lowered:
+            return "underlying_convertibles"
+        if "authorized" in lowered:
+            return "authorized"
+        if "reserved" in lowered or "equity incentive" in lowered or "employee stock purchase" in lowered:
+            return "reserved"
+        if "register" in lowered or "prospectus" in lowered:
+            return "registered"
+        if "issuable" in lowered or "underlying" in lowered or "exercise" in lowered:
+            return "issuable"
+        if "outstanding" in lowered:
+            return "outstanding"
+        if "issued" in lowered or "issuance" in lowered:
+            return "newly_issued"
+        if "sold" in lowered or "sale of" in lowered:
+            return "sold"
+        if any(keyword in lowered for keyword in ("at-the-market", "atm", "equity line", "pipe")):
+            return "registered"
+        return None
+
+    def _parse_quantity_or_amount(self, match: re.Match[str]) -> tuple[Decimal | None, Decimal | None]:
+        number = parse_decimal(match.group("number").replace("$", ""))
+        if number is None:
+            return None, None
+        scale = (match.group("scale") or "").lower()
+        multiplier = Decimal("1")
+        if scale == "thousand":
+            multiplier = Decimal("1000")
+        elif scale == "million":
+            multiplier = Decimal("1000000")
+        elif scale == "billion":
+            multiplier = Decimal("1000000000")
+        value = number * multiplier
+        unit = (match.group("unit") or "").lower()
+        if "$" in match.group("number") or "dollar" in unit or "principal amount" in unit:
+            return None, value
+        return value, None
+
+    def _security_type(self, context: str) -> str:
+        lowered = context.lower()
+        if "warrant" in lowered:
+            return "warrant"
+        if "convertible note" in lowered or "convertible debt" in lowered:
+            return "convertible_debt"
+        if "preferred" in lowered:
+            return "preferred_stock"
+        if "option" in lowered:
+            return "option"
+        if "rsu" in lowered or "restricted stock unit" in lowered:
+            return "rsu"
+        if "unit" in lowered:
+            return "unit"
+        if "common" in lowered or "ordinary" in lowered:
+            return "common_stock"
+        return "unknown"
+
+    def _confidence(
+        self,
+        context: str,
+        category: str,
+        quantity: Decimal | None,
+        amount: Decimal | None,
+    ) -> str:
+        if quantity is not None and category in DILUTION_QUANTITY_CATEGORIES:
+            if any(marker in context.lower() for marker in ("approximately", "up to", "maximum", "may issue")):
+                return "medium"
+            return "high"
+        if amount is not None:
+            return "medium"
+        return "low"
+
+    def _clean_text(self, value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    def _sentences(self, value: str) -> list[str]:
+        return [sentence.strip() for sentence in re.split(r"(?<=[.;])\s+", value) if sentence.strip()]
+
+    def _snippet(self, value: str, length: int = 500) -> str:
+        cleaned = self._clean_text(value)
+        if len(cleaned) <= length:
+            return cleaned
+        return cleaned[:length].rsplit(" ", 1)[0] + "..."
+
+
+class DilutionFilingSource:
+    """Base object for Query API filing discovery and text parsing."""
+
+    source_name = "query"
+    forms: tuple[str, ...] = ()
+
+    def __init__(
+        self,
+        client: DilutionSecApiClient | None = None,
+        parser: DilutionTextParser | None = None,
+    ) -> None:
+        self.client = client or DilutionSecApiClient()
+        self.parser = parser or DilutionTextParser()
+
+    def collect(
+        self,
+        symbol: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        cik: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        filings = self._query_filings(symbol, start_date, end_date)
+        candidates: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        for filing in filings:
+            metadata = self._metadata(symbol, filing, cik)
+            text_items = self._text_items(filing)
+            if not text_items:
+                candidates.append(
+                    self.parser.candidate_row(
+                        self._filing_text_seed(filing),
+                        metadata,
+                        source_endpoint=self.source_name,
+                        parse_status="metadata_only",
+                    )
+                )
+                continue
+            parsed_any = False
+            for section, text_value, source_url in text_items:
+                parsed = self.parser.parse(
+                    text_value,
+                    metadata,
+                    source_endpoint=self.source_name,
+                    source_section=section,
+                    source_url=source_url,
+                )
+                parsed_any = parsed_any or bool(parsed)
+                events.extend(parsed)
+                candidates.append(
+                    self.parser.candidate_row(
+                        text_value,
+                        metadata,
+                        source_endpoint=self.source_name,
+                        source_section=section,
+                        source_url=source_url,
+                        parse_status="parsed" if parsed else "no_quantity",
+                    )
+                )
+            if not parsed_any and not text_items:
+                candidates.append(
+                    self.parser.candidate_row(
+                        self._filing_text_seed(filing),
+                        metadata,
+                        source_endpoint=self.source_name,
+                        parse_status="no_quantity",
+                    )
+                )
+        return events, candidates
+
+    def _query_filings(self, symbol: str, start_date: dt.date, end_date: dt.date) -> list[dict[str, Any]]:
+        clauses = [
+            f"ticker:{self._lucene_value(symbol.upper())}",
+            self._form_clause(self.forms),
+            f"filedAt:[{start_date.isoformat()} TO {end_date.isoformat()}]",
+        ]
+        query = " AND ".join(clause for clause in clauses if clause)
+        return self.client.query_filings(query=query)
+
+    def _text_items(self, filing: Mapping[str, Any]) -> list[tuple[str | None, str, str | None]]:
+        return [(None, self._filing_text_seed(filing), filing.get("linkToFilingDetails") or filing.get("linkToHtml"))]
+
+    def _metadata(self, symbol: str, filing: Mapping[str, Any], cik: str | None = None) -> dict[str, Any]:
+        accession_no = first_present(filing, "accessionNo", "accession_no")
+        form_type = first_present(filing, "formType", "form_type")
+        filed_at = first_present(filing, "filedAt", "filed_at")
+        period_of_report = first_present(filing, "periodOfReport", "period_of_report")
+        company_name = first_present(filing, "companyName", "company_name", "companyNameLong")
+        source_url = first_present(
+            filing,
+            "linkToFilingDetails",
+            "linkToHtml",
+            "linkToTxt",
+            "filingUrl",
+            "fileUrl",
+            "url",
+        )
+        return {
+            "symbol": symbol.upper(),
+            "cik": cik or filing.get("cik"),
+            "accession_no": accession_no,
+            "form_type": form_type,
+            "filed_at": parse_datetime(filed_at),
+            "period_of_report": parse_date(period_of_report),
+            "company_name": company_name,
+            "source_url": source_url,
+        }
+
+    def _filing_text_seed(self, filing: Mapping[str, Any]) -> str:
+        parts = [
+            filing.get("description"),
+            filing.get("formType"),
+            filing.get("companyName"),
+            " ".join(str(item) for item in filing.get("items", []) or []),
+        ]
+        for document in filing.get("documentFormatFiles", []) or []:
+            parts.extend([document.get("type"), document.get("description")])
+        return " ".join(str(part) for part in parts if part)
+
+    def _form_clause(self, forms: Iterable[str]) -> str:
+        values = [f"formType:{self._lucene_value(value)}" for value in forms]
+        return "(" + " OR ".join(values) + ")" if values else ""
+
+    def _lucene_value(self, value: str) -> str:
+        if value.replace(".", "").replace("-", "").replace("_", "").isalnum():
+            return value
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+
+class PeriodicDilutionFiling(DilutionFilingSource):
+    source_name = "periodic"
+    forms = PERIODIC_DILUTION_FORMS
+
+    def _text_items(self, filing: Mapping[str, Any]) -> list[tuple[str | None, str, str | None]]:
+        form_type = str(filing.get("formType") or "")
+        filing_url = filing.get("linkToFilingDetails") or filing.get("linkToHtml")
+        items: list[tuple[str | None, str, str | None]] = []
+        if filing_url:
+            for section in PERIODIC_DILUTION_EXTRACTOR_ITEMS.get(form_type, ()):
+                try:
+                    text_value = self.client.extract_section(filing_url, section, return_type="text")
+                except requests.HTTPError:
+                    continue
+                if text_value:
+                    items.append((section, text_value, filing_url))
+        return items or super()._text_items(filing)
+
+    def collect(
+        self,
+        symbol: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        cik: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        events, candidates = super().collect(symbol, start_date, end_date, cik=cik)
+        for filing in self._query_filings(symbol, start_date, end_date):
+            metadata = self._metadata(symbol, filing, cik)
+            try:
+                xbrl_payload = self.client.xbrl_to_json(accession_no=metadata.get("accession_no"))
+            except requests.HTTPError:
+                continue
+            events.extend(self._xbrl_share_events(xbrl_payload, metadata))
+        return events, candidates
+
+    def _xbrl_share_events(
+        self,
+        xbrl_payload: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for statement_name in ("CoverPage", "StatementsOfIncome", "StatementsOfShareholdersEquity"):
+            statement = first_mapping(xbrl_payload.get(statement_name))
+            for tag, facts in statement.items():
+                if not isinstance(facts, list) or not self._is_share_tag(tag):
+                    continue
+                for fact in facts:
+                    value = parse_decimal(first_present(first_mapping(fact), "value"))
+                    if value is None:
+                        continue
+                    period = first_mapping(first_mapping(fact).get("period"))
+                    rows.append(
+                        {
+                            "symbol": metadata.get("symbol"),
+                            "cik": metadata.get("cik"),
+                            "accession_no": metadata.get("accession_no"),
+                            "form_type": metadata.get("form_type"),
+                            "filed_at": metadata.get("filed_at"),
+                            "period_of_report": parse_date(period.get("endDate") or period.get("instant"))
+                            or metadata.get("period_of_report"),
+                            "company_name": metadata.get("company_name"),
+                            "source_endpoint": "xbrl",
+                            "source_url": metadata.get("source_url"),
+                            "source_section": f"{statement_name}.{tag}",
+                            "category": self._xbrl_category(tag),
+                            "quantity": value,
+                            "amount": None,
+                            "security_type": "common_stock",
+                            "confidence": "high",
+                            "snippet": tag,
+                            "raw_match": json_dumps(fact),
+                        }
+                    )
+        return rows
+
+    def _is_share_tag(self, tag: str) -> bool:
+        lowered = tag.lower()
+        return "share" in lowered and any(
+            marker in lowered
+            for marker in ("outstanding", "issued", "repurchased", "reserved", "diluted", "warrant", "convertible")
+        )
+
+    def _xbrl_category(self, tag: str) -> str:
+        lowered = tag.lower()
+        if "repurchase" in lowered or "treasury" in lowered:
+            return "repurchased"
+        if "reserved" in lowered:
+            return "reserved"
+        if "warrant" in lowered:
+            return "underlying_warrants"
+        if "convertible" in lowered:
+            return "underlying_convertibles"
+        if "issued" in lowered:
+            return "newly_issued"
+        return "outstanding"
+
+
+class CurrentDilutionEvent(DilutionFilingSource):
+    source_name = "current_event"
+    forms = CURRENT_DILUTION_EVENT_FORMS
+
+    def _query_filings(self, symbol: str, start_date: dt.date, end_date: dt.date) -> list[dict[str, Any]]:
+        item_clause = "(" + " OR ".join(f"items:{self._lucene_value(item)}" for item in DILUTION_8K_ITEM_CODES) + ")"
+        query = " AND ".join(
+            [
+                f"ticker:{self._lucene_value(symbol.upper())}",
+                self._form_clause(self.forms),
+                item_clause,
+                f"filedAt:[{start_date.isoformat()} TO {end_date.isoformat()}]",
+            ]
+        )
+        return self.client.query_filings(query=query)
+
+    def _text_items(self, filing: Mapping[str, Any]) -> list[tuple[str | None, str, str | None]]:
+        filing_url = filing.get("linkToFilingDetails") or filing.get("linkToHtml")
+        items: list[tuple[str | None, str, str | None]] = []
+        if filing_url:
+            for section in DILUTION_8K_EXTRACTOR_ITEMS:
+                try:
+                    text_value = self.client.extract_section(filing_url, section, return_type="text")
+                except requests.HTTPError:
+                    continue
+                if text_value:
+                    items.append((section, text_value, filing_url))
+        return items or super()._text_items(filing)
+
+
+class FullTextDilutionFilingSource(DilutionFilingSource):
+    source_name = "full_text"
+
+    def collect(
+        self,
+        symbol: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        cik: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        query_candidates = self._query_filings(symbol, start_date, end_date)
+        text_candidates = self.client.full_text_search(
+            DILUTION_KEYWORD_QUERY,
+            form_types=self.forms,
+            start_date=start_date,
+            end_date=end_date,
+            cik=cik,
+        )
+        merged = self._merge_records(query_candidates, text_candidates)
+        events: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
+        for filing in merged:
+            metadata = self._metadata(symbol, filing, cik)
+            text_value = self._filing_text_seed(filing)
+            for key in ("snippet", "text", "description"):
+                if filing.get(key):
+                    text_value = f"{text_value} {filing.get(key)}"
+            parsed = self.parser.parse(
+                text_value,
+                metadata,
+                source_endpoint=self.source_name,
+                source_url=metadata.get("source_url"),
+            )
+            events.extend(parsed)
+            candidates.append(
+                self.parser.candidate_row(
+                    text_value,
+                    metadata,
+                    source_endpoint=self.source_name,
+                    source_url=metadata.get("source_url"),
+                    parse_status="parsed" if parsed else "candidate",
+                )
+            )
+        return events, candidates
+
+    def _merge_records(
+        self,
+        first: Iterable[Mapping[str, Any]],
+        second: Iterable[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for record in list(first) + list(second):
+            accession_no = record.get("accessionNo") or record.get("accessionNo".lower())
+            key = str(accession_no or record.get("id") or len(merged))
+            current = merged.setdefault(key, {})
+            current.update(dict(record))
+        return list(merged.values())
+
+
+class RegisteredOffering(FullTextDilutionFilingSource):
+    source_name = "registered_offering"
+    forms = OFFERING_DILUTION_FORMS
+
+
+class EquityPlan(FullTextDilutionFilingSource):
+    source_name = "equity_plan"
+    forms = COMPENSATION_DILUTION_FORMS
+
+
+class MergerShareIssuance(FullTextDilutionFilingSource):
+    source_name = "merger_share_issuance"
+    forms = MERGER_DILUTION_FORMS
+
+
+class PrivateOffering(DilutionFilingSource):
+    source_name = "private_offering"
+    forms = PRIVATE_OFFERING_DILUTION_FORMS
+
+    def collect(
+        self,
+        symbol: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        cik: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        issuer_clause = f'primaryIssuer.cik:"{str(cik).zfill(10)}"' if cik else f'primaryIssuer.entityName:"{symbol.upper()}"'
+        query = (
+            f"{issuer_clause} AND filedAt:[{start_date.isoformat()} TO {end_date.isoformat()}] "
+            "AND (offeringData.typesOfSecuritiesOffered.isEquityType:true "
+            "OR offeringData.typesOfSecuritiesOffered.isDebtType:true)"
+        )
+        offerings = self.client.form_d_offerings(query)
+        events: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
+        for offering in offerings:
+            metadata = self._form_d_metadata(symbol, offering, cik)
+            text_value = self._form_d_text_seed(offering)
+            parsed = self.parser.parse(text_value, metadata, self.source_name, source_url=metadata.get("source_url"))
+            if not parsed:
+                parsed = [self._form_d_event(metadata, offering)]
+            events.extend(parsed)
+            candidates.append(
+                self.parser.candidate_row(
+                    text_value,
+                    metadata,
+                    self.source_name,
+                    source_url=metadata.get("source_url"),
+                    parse_status="parsed" if parsed else "candidate",
+                )
+            )
+        return events, candidates
+
+    def _form_d_metadata(self, symbol: str, offering: Mapping[str, Any], cik: str | None = None) -> dict[str, Any]:
+        issuer = first_mapping(offering.get("primaryIssuer"))
+        return {
+            "symbol": symbol.upper(),
+            "cik": cik or issuer.get("cik"),
+            "accession_no": offering.get("accessionNo"),
+            "form_type": offering.get("submissionType") or "D",
+            "filed_at": parse_datetime(offering.get("filedAt")),
+            "period_of_report": parse_date(first_mapping(offering.get("offeringData")).get("dateOfFirstSale")),
+            "company_name": issuer.get("entityName"),
+            "source_url": offering.get("linkToFilingDetails") or offering.get("linkToTxt"),
+        }
+
+    def _form_d_text_seed(self, offering: Mapping[str, Any]) -> str:
+        offering_data = first_mapping(offering.get("offeringData"))
+        security_types = first_mapping(offering_data.get("typesOfSecuritiesOffered"))
+        sales_amounts = first_mapping(offering_data.get("offeringSalesAmounts"))
+        return " ".join(
+            str(value)
+            for value in (
+                "Form D private offering",
+                security_types,
+                sales_amounts,
+                offering_data.get("businessCombinationTransaction"),
+                offering_data.get("minimumInvestmentAccepted"),
+            )
+            if value
+        )
+
+    def _form_d_event(self, metadata: Mapping[str, Any], offering: Mapping[str, Any]) -> dict[str, Any]:
+        offering_data = first_mapping(offering.get("offeringData"))
+        sales_amounts = first_mapping(offering_data.get("offeringSalesAmounts"))
+        amount = parse_decimal(
+            first_present(
+                sales_amounts,
+                "totalAmountSold",
+                "totalOfferingAmount",
+                "totalRemaining",
+            )
+        )
+        return {
+            "symbol": metadata.get("symbol"),
+            "cik": metadata.get("cik"),
+            "accession_no": metadata.get("accession_no"),
+            "form_type": metadata.get("form_type"),
+            "filed_at": metadata.get("filed_at"),
+            "period_of_report": metadata.get("period_of_report"),
+            "company_name": metadata.get("company_name"),
+            "source_endpoint": self.source_name,
+            "source_url": metadata.get("source_url"),
+            "source_section": "offeringData.offeringSalesAmounts",
+            "category": "issuable",
+            "quantity": None,
+            "amount": amount,
+            "security_type": "private_offering",
+            "confidence": "medium",
+            "snippet": self.parser._snippet(self._form_d_text_seed(offering)),
+            "raw_match": json_dumps(sales_amounts),
+        }
+
+
+class DilutionTracker:
+    """Facade for on-demand historical and potential dilution DataFrames."""
+
+    def __init__(
+        self,
+        api_key: str = sec_api_key,
+        client: DilutionSecApiClient | None = None,
+        parser: DilutionTextParser | None = None,
+        default_lookback_days: int = DEFAULT_DILUTION_LOOKBACK_DAYS,
+    ) -> None:
+        self.client = client or DilutionSecApiClient(api_key=api_key)
+        self.parser = parser or DilutionTextParser()
+        self.default_lookback_days = default_lookback_days
+        self.share_count_history = ShareCountHistory(self.client)
+        self.sources = [
+            PeriodicDilutionFiling(self.client, self.parser),
+            CurrentDilutionEvent(self.client, self.parser),
+            RegisteredOffering(self.client, self.parser),
+            PrivateOffering(self.client, self.parser),
+            EquityPlan(self.client, self.parser),
+            MergerShareIssuance(self.client, self.parser),
+        ]
+
+    def get_share_count_history(self, symbol: str) -> pd.DataFrame:
+        return self.share_count_history.get(symbol)
+
+    def get_potential_dilution_events(
+        self,
+        symbol: str,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+    ) -> pd.DataFrame:
+        events, _ = self._collect(symbol, start_date, end_date)
+        return self._event_df(events)
+
+    def get_candidate_filings(
+        self,
+        symbol: str,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+    ) -> pd.DataFrame:
+        _, candidates = self._collect(symbol, start_date, end_date)
+        return self._candidate_df(candidates)
+
+    def get_dilution_summary(
+        self,
+        symbol: str,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+    ) -> dict[str, pd.DataFrame]:
+        share_history = self.get_share_count_history(symbol)
+        events, candidates = self._collect(symbol, start_date, end_date, share_history=share_history)
+        event_df = self._event_df(events)
+        candidate_df = self._candidate_df(candidates)
+        return {
+            "share_count_history": share_history,
+            "historical_dilution": self._historical_dilution(share_history),
+            "potential_dilution_events": event_df,
+            "potential_shares_by_category": self._potential_shares_by_category(event_df),
+            "registered_reserved_capacity": self._registered_reserved_capacity(event_df),
+            "low_confidence_review": self._low_confidence_review(event_df, candidate_df),
+            "candidate_filings": candidate_df,
+            "latest_shares_outstanding": self._latest_shares_outstanding(share_history),
+        }
+
+    def _collect(
+        self,
+        symbol: str,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        share_history: pd.DataFrame | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        normalized_symbol = self._normalize_symbol(symbol)
+        start, end = self._resolve_date_range(start_date, end_date)
+        cik = self._resolve_cik(normalized_symbol, share_history)
+        events: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
+        for source in self.sources:
+            try:
+                source_events, source_candidates = source.collect(normalized_symbol, start, end, cik=cik)
+            except SearchResultLimitError:
+                source_events, source_candidates = self._collect_split(source, normalized_symbol, start, end, cik)
+            events.extend(source_events)
+            candidates.extend(source_candidates)
+        return events, candidates
+
+    def _collect_split(
+        self,
+        source: DilutionFilingSource,
+        symbol: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        cik: str | None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        events: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
+        for window_start, window_end in self._month_ranges(start_date, end_date):
+            source_events, source_candidates = source.collect(symbol, window_start, window_end, cik=cik)
+            events.extend(source_events)
+            candidates.extend(source_candidates)
+        return events, candidates
+
+    def _event_df(self, rows: list[dict[str, Any]]) -> pd.DataFrame:
+        df = pd.DataFrame(rows, columns=DILUTION_EVENT_COLUMNS)
+        if df.empty:
+            return df
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce")
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+        return df.drop_duplicates().sort_values(["filed_at", "accession_no"], na_position="last").reset_index(drop=True)
+
+    def _candidate_df(self, rows: list[dict[str, Any]]) -> pd.DataFrame:
+        df = pd.DataFrame(rows, columns=DILUTION_CANDIDATE_COLUMNS)
+        if df.empty:
+            return df
+        return df.drop_duplicates().sort_values(["filed_at", "accession_no"], na_position="last").reset_index(drop=True)
+
+    def _historical_dilution(self, share_history: pd.DataFrame) -> pd.DataFrame:
+        if share_history.empty:
+            return pd.DataFrame(columns=DILUTION_SHARE_COUNT_COLUMNS)
+        return share_history[share_history["actual_dilution_pct"].notna()].copy()
+
+    def _potential_shares_by_category(self, event_df: pd.DataFrame) -> pd.DataFrame:
+        if event_df.empty:
+            return pd.DataFrame(columns=["category", "quantity", "amount", "events"])
+        return (
+            event_df.groupby("category", dropna=False, as_index=False)
+            .agg(quantity=("quantity", "sum"), amount=("amount", "sum"), events=("accession_no", "count"))
+            .sort_values("quantity", ascending=False, na_position="last")
+        )
+
+    def _registered_reserved_capacity(self, event_df: pd.DataFrame) -> pd.DataFrame:
+        if event_df.empty:
+            return pd.DataFrame(columns=DILUTION_EVENT_COLUMNS)
+        return event_df[event_df["category"].isin(["registered", "reserved", "authorized"])].copy()
+
+    def _low_confidence_review(self, event_df: pd.DataFrame, candidate_df: pd.DataFrame) -> pd.DataFrame:
+        low_events = event_df[event_df["confidence"].isin(["low", "medium"])].copy() if not event_df.empty else pd.DataFrame()
+        no_quantity = (
+            candidate_df[candidate_df["parse_status"].isin(["candidate", "no_quantity", "metadata_only"])].copy()
+            if not candidate_df.empty
+            else pd.DataFrame()
+        )
+        if low_events.empty and no_quantity.empty:
+            return pd.DataFrame()
+        low_events = low_events.rename(columns={"raw_match": "parse_status"})
+        return pd.concat([low_events, no_quantity], ignore_index=True, sort=False)
+
+    def _latest_shares_outstanding(self, share_history: pd.DataFrame) -> pd.DataFrame:
+        if share_history.empty:
+            return pd.DataFrame(columns=DILUTION_SHARE_COUNT_COLUMNS)
+        idx = share_history.sort_values(["period", "reported_at"], na_position="last").groupby(
+            "share_class", dropna=False
+        ).tail(1).index
+        return share_history.loc[idx].reset_index(drop=True)
+
+    def _resolve_cik(self, symbol: str, share_history: pd.DataFrame | None = None) -> str | None:
+        if share_history is None:
+            try:
+                share_history = self.get_share_count_history(symbol)
+            except Exception:
+                share_history = pd.DataFrame()
+        if not share_history.empty and "cik" in share_history:
+            values = share_history["cik"].dropna().astype(str)
+            if not values.empty:
+                return values.iloc[-1].lstrip("0")
+        return None
+
+    def _resolve_date_range(
+        self,
+        start_date: str | dt.date | dt.datetime | None,
+        end_date: str | dt.date | dt.datetime | None,
+    ) -> tuple[dt.date, dt.date]:
+        end = parse_date(end_date) if end_date is not None else dt.date.today()
+        start = parse_date(start_date) if start_date is not None else end - dt.timedelta(days=self.default_lookback_days)
+        if end < start:
+            raise ValueError("end_date must be on or after start_date")
+        return start, end
+
+    def _month_ranges(self, start: dt.date, end: dt.date) -> Iterator[tuple[dt.date, dt.date]]:
+        current = start.replace(day=1)
+        while current <= end:
+            if current.month == 12:
+                next_month = dt.date(current.year + 1, 1, 1)
+            else:
+                next_month = dt.date(current.year, current.month + 1, 1)
+            month_end = min(next_month - dt.timedelta(days=1), end)
+            yield max(current, start), month_end
+            current = next_month
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        value = str(symbol or "").strip().upper()
+        if not value:
+            raise ValueError("symbol is required")
+        return value
+
+
+Dilution = DilutionTracker
+
+
+def validate_dilution_text_parser_sample() -> dict[str, Any]:
+    """Exercise DilutionTextParser with embedded dilution disclosure snippets."""
+    parser = DilutionTextParser()
+    metadata = {
+        "symbol": "SAMP",
+        "cik": "1234567",
+        "accession_no": "0000000000-26-000010",
+        "form_type": "8-K",
+        "filed_at": dt.datetime(2026, 6, 1, 12, 0),
+        "period_of_report": dt.date(2026, 5, 31),
+        "company_name": "Sample Corp",
+        "source_url": "https://www.sec.gov/sample.htm",
+    }
+    text_value = """
+    We registered up to 10,000,000 shares of common stock under the shelf registration statement.
+    The company issued warrants to purchase 5,000,000 shares of common stock.
+    The company sold $25 million principal amount of convertible notes.
+    The plan reserves 2,000,000 shares under the 2026 equity incentive plan.
+    During the period, the company repurchased 1,000,000 shares of common stock.
+    Selling stockholders may offer 3,000,000 shares of common stock for resale.
+    """
+    rows = parser.parse(text_value, metadata, "sample", "item")
+    categories = {row["category"] for row in rows}
+
+    assert "registered" in categories
+    assert "underlying_warrants" in categories
+    assert "underlying_convertibles" in categories
+    assert "reserved" in categories
+    assert "repurchased" in categories
+    assert "selling_stockholder" in categories
+    assert any(row["quantity"] == Decimal("10000000") for row in rows)
+    assert any(row["amount"] == Decimal("25000000") for row in rows)
+
+    return {"rows": rows, "categories": sorted(categories)}
+
+
+def validate_dilution_tracker_sample() -> dict[str, Any]:
+    """Exercise DilutionTracker DataFrame schemas without making API requests."""
+
+    class FakeDilutionSecApiClient(DilutionSecApiClient):
+        def __init__(self) -> None:
+            pass
+
+        def get_float(self, ticker: str | None = None, cik: str | None = None) -> dict[str, Any]:
+            return {
+                "data": [
+                    {
+                        "tickers": [ticker or "SAMP"],
+                        "cik": "1234567",
+                        "reportedAt": "2026-06-01T16:00:00-04:00",
+                        "periodOfReport": "2026-03-31",
+                        "sourceFilingAccessionNo": "0000000000-26-000001",
+                        "float": {
+                            "outstandingShares": [
+                                {"period": "2025-03-31", "shareClass": "Common", "value": 10000000},
+                                {"period": "2026-03-31", "shareClass": "Common", "value": 12500000},
+                            ]
+                        },
+                    }
+                ]
+            }
+
+        def query_filings(
+            self,
+            query: str,
+            sort: list[dict[str, Any]] | None = None,
+            page_size: int = SEC_API_DILUTION_PAGE_SIZE,
+        ) -> list[dict[str, Any]]:
+            return []
+
+        def full_text_search(
+            self,
+            query: str,
+            form_types: Iterable[str],
+            start_date: dt.date,
+            end_date: dt.date,
+            cik: str | None = None,
+            max_pages: int = 3,
+        ) -> list[dict[str, Any]]:
+            return []
+
+        def form_d_offerings(
+            self,
+            query: str,
+            page_size: int = SEC_API_DILUTION_PAGE_SIZE,
+        ) -> list[dict[str, Any]]:
+            return []
+
+    tracker = DilutionTracker(client=FakeDilutionSecApiClient())
+    share_history = tracker.get_share_count_history("SAMP")
+    events = tracker.get_potential_dilution_events("SAMP", "2026-01-01", "2026-06-01")
+    candidates = tracker.get_candidate_filings("SAMP", "2026-01-01", "2026-06-01")
+    summary = tracker.get_dilution_summary("SAMP", "2026-01-01", "2026-06-01")
+
+    assert list(share_history.columns) == list(DILUTION_SHARE_COUNT_COLUMNS)
+    assert list(events.columns) == list(DILUTION_EVENT_COLUMNS)
+    assert list(candidates.columns) == list(DILUTION_CANDIDATE_COLUMNS)
+    assert share_history["actual_dilution_pct"].iloc[-1] == 0.25
+    assert "latest_shares_outstanding" in summary
+    assert summary["latest_shares_outstanding"]["shares_outstanding"].iloc[0] == 12500000
+
+    return {
+        "share_count_history": share_history,
+        "events": events,
+        "candidates": candidates,
+        "summary_keys": sorted(summary.keys()),
+    }
 
 
 def validate_form4_normalizer_sample() -> dict[str, Any]:
