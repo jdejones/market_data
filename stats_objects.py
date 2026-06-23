@@ -2797,3 +2797,128 @@ def avg_liquid_vol_plot(
 
     return ind_df.sort_values(["avgdv", "relative_atr"], ascending=False).reset_index(drop=True)
 
+
+def extension_algo(
+    df: pd.DataFrame,
+    max_retracement_periods: int,
+    max_retracement: float,
+    min: float,
+    long_short: str = "long",
+) -> dict:
+    """
+    Find validated markup/markdown extensions in an OHLCV DataFrame.
+
+    A candidate extension starts on the bar before the first directional break
+    (higher High for long, lower Low for short) and is measured from that bar's
+    Open to the most favourable High/Low reached before the extension ends.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        OHLCV DataFrame containing at least ``'Open'``, ``'High'``, and ``'Low'``.
+    max_retracement_periods : int
+        Maximum number of consecutive bars without a new favourable extreme.
+    max_retracement : float
+        Maximum retracement percent allowed from the best extension price.
+    min : float
+        Minimum favourable percent move required for a valid extension.
+    long_short : {'long', 'short'}, default 'long'
+        Direction to scan: ``'long'`` for markups, ``'short'`` for markdowns.
+
+    Returns
+    -------
+    dict
+        Mapping of ``{start_date: peak_extension_percent}`` for valid extensions.
+    """
+    required_cols = {"Open", "High", "Low"}
+    missing_cols = required_cols.difference(df.columns)
+    if missing_cols:
+        raise ValueError(f"df is missing required OHLC columns: {sorted(missing_cols)}")
+
+    direction = long_short.lower()
+    if direction not in {"long", "short"}:
+        raise ValueError("long_short must be either 'long' or 'short'")
+
+    if max_retracement_periods < 0:
+        raise ValueError("max_retracement_periods must be non-negative")
+    if max_retracement < 0:
+        raise ValueError("max_retracement must be non-negative")
+    if min < 0:
+        raise ValueError("min must be non-negative")
+    if df.empty or len(df) < 2:
+        return {}
+
+    results = {}
+    i = 1
+
+    while i < len(df):
+        prev_row = df.iloc[i - 1]
+        current_row = df.iloc[i]
+
+        if direction == "long":
+            starts_extension = current_row["High"] > prev_row["High"]
+        else:
+            starts_extension = current_row["Low"] < prev_row["Low"]
+
+        if not starts_extension:
+            i += 1
+            continue
+
+        start_idx = i - 1
+        start_date = df.index[start_idx]
+        start_price = prev_row["Open"]
+        valid_extension = False
+        retracement_periods = 0
+        j = i
+
+        if direction == "long":
+            extreme_price = current_row["High"]
+            peak_extension_pct = ((extreme_price - start_price) / start_price) * 100
+            retracement_pct = ((extreme_price - current_row["Low"]) / extreme_price) * 100
+        else:
+            extreme_price = current_row["Low"]
+            peak_extension_pct = ((start_price - extreme_price) / start_price) * 100
+            retracement_pct = ((current_row["High"] - extreme_price) / extreme_price) * 100
+
+        if peak_extension_pct >= min:
+            valid_extension = True
+
+        while retracement_pct <= max_retracement and j + 1 < len(df):
+            j += 1
+            row = df.iloc[j]
+
+            if direction == "long":
+                if row["High"] > extreme_price:
+                    extreme_price = row["High"]
+                    retracement_periods = 0
+                    peak_extension_pct = ((extreme_price - start_price) / start_price) * 100
+                else:
+                    retracement_periods += 1
+
+                retracement_pct = ((extreme_price - row["Low"]) / extreme_price) * 100
+            else:
+                if row["Low"] < extreme_price:
+                    extreme_price = row["Low"]
+                    retracement_periods = 0
+                    peak_extension_pct = ((start_price - extreme_price) / start_price) * 100
+                else:
+                    retracement_periods += 1
+
+                retracement_pct = ((row["High"] - extreme_price) / extreme_price) * 100
+
+            if peak_extension_pct >= min:
+                valid_extension = True
+
+            if (
+                retracement_periods > max_retracement_periods
+                or retracement_pct > max_retracement
+            ):
+                break
+
+        if valid_extension:
+            results[start_date] = peak_extension_pct
+
+        i = j + 1
+
+    return results
+
