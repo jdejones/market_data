@@ -34,6 +34,7 @@ GPTDB_MYSQL_USER = "gptdb"
 FORM13F_DB = "form13f"
 FORM4_DB = "form4"
 EXECUTIVE_COMPENSATION_DB = "executive_compensation"
+DILUTION_TRACKER_DB = "dilution_tracker"
 SEC_API_BASE_URL = "https://api.sec-api.io"
 FORM4_INSIDER_TRADING_ENDPOINT = f"{SEC_API_BASE_URL}/insider-trading"
 FORM13F_COVER_PAGES_ENDPOINT = f"{SEC_API_BASE_URL}/form-13f/cover-pages"
@@ -155,6 +156,34 @@ DILUTION_CANDIDATE_COLUMNS = (
     "matched_keywords",
     "snippet",
     "parse_status",
+)
+
+DILUTION_SNAPSHOT_COLUMNS = (
+    "snapshot_key",
+    "symbol",
+    "cik",
+    "window_start",
+    "window_end",
+    "snapshot_at",
+    "latest_shares_outstanding",
+    "latest_share_count_date",
+    "latest_actual_dilution_pct",
+    "trailing_actual_dilution_pct",
+    "total_potential_shares",
+    "potential_dilution_pct",
+    "warrant_shares",
+    "convertible_shares",
+    "registered_shares",
+    "reserved_shares",
+    "authorized_shares",
+    "selling_stockholder_shares",
+    "repurchased_shares",
+    "cancelled_shares",
+    "potential_event_count",
+    "candidate_filing_count",
+    "review_candidate_count",
+    "source_key",
+    "source_updated_at",
 )
 
 
@@ -4633,6 +4662,1100 @@ class DilutionTracker:
 Dilution = DilutionTracker
 
 
+@dataclass
+class DilutionTrackerImportStats:
+    """Summary returned by dilution tracker storage imports."""
+
+    symbols: int = 0
+    runs: int = 0
+    share_count_rows: int = 0
+    event_rows: int = 0
+    candidate_rows: int = 0
+    snapshot_rows: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "symbols": self.symbols,
+            "runs": self.runs,
+            "share_count_rows": self.share_count_rows,
+            "event_rows": self.event_rows,
+            "candidate_rows": self.candidate_rows,
+            "snapshot_rows": self.snapshot_rows,
+            "errors": self.errors,
+        }
+
+
+class DilutionTrackerDatabase:
+    """MySQL storage layer for normalized dilution tracker DataFrames."""
+
+    SHARE_COUNT_COLUMNS = (
+        "record_key",
+        "symbol",
+        "cik",
+        "period",
+        "share_class",
+        "shares_outstanding",
+        "period_of_report",
+        "reported_at",
+        "source_accession_no",
+        "actual_dilution_pct",
+        "raw_json",
+        "source_key",
+        "source_updated_at",
+    )
+    EVENT_COLUMNS = (
+        "event_key",
+        "symbol",
+        "cik",
+        "accession_no",
+        "form_type",
+        "filed_at",
+        "period_of_report",
+        "company_name",
+        "source_endpoint",
+        "source_url",
+        "source_section",
+        "category",
+        "quantity",
+        "amount",
+        "security_type",
+        "confidence",
+        "snippet",
+        "raw_match",
+        "source_key",
+        "source_updated_at",
+    )
+    CANDIDATE_COLUMNS = (
+        "candidate_key",
+        "symbol",
+        "cik",
+        "accession_no",
+        "form_type",
+        "filed_at",
+        "period_of_report",
+        "company_name",
+        "source_endpoint",
+        "source_url",
+        "source_section",
+        "matched_keywords",
+        "snippet",
+        "parse_status",
+        "source_key",
+        "source_updated_at",
+    )
+    SNAPSHOT_COLUMNS = DILUTION_SNAPSHOT_COLUMNS
+    RUN_COLUMNS = (
+        "run_key",
+        "symbol",
+        "window_start",
+        "window_end",
+        "started_at",
+        "completed_at",
+        "share_count_rows",
+        "event_rows",
+        "candidate_rows",
+        "snapshot_rows",
+        "errors_json",
+        "source_key",
+        "source_updated_at",
+    )
+
+    def __init__(
+        self,
+        database: str = DILUTION_TRACKER_DB,
+        user: str = GPTDB_MYSQL_USER,
+        password: str = gptdb,
+        host: str = MYSQL_HOST,
+        port: int = MYSQL_PORT,
+        engine: Engine | None = None,
+    ) -> None:
+        self.database = database
+        self.engine = engine or self._make_engine(database, user, password, host, port)
+
+    def _make_engine(
+        self,
+        database: str,
+        user: str,
+        password: str,
+        host: str,
+        port: int,
+    ) -> Engine:
+        url = URL.create(
+            "mysql+pymysql",
+            username=user,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+        )
+        return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+
+    def setup(self) -> None:
+        """Create dilution tracker tables if they do not already exist."""
+        with self.engine.begin() as conn:
+            conn.execute(text(self._share_count_history_ddl()))
+            conn.execute(text(self._potential_dilution_events_ddl()))
+            conn.execute(text(self._candidate_filings_ddl()))
+            conn.execute(text(self._symbol_dilution_snapshots_ddl()))
+            conn.execute(text(self._collection_runs_ddl()))
+
+    def row_counts(self) -> dict[str, int]:
+        with self.engine.connect() as conn:
+            return {
+                "share_count_history": int(conn.execute(text("SELECT COUNT(*) FROM share_count_history")).scalar() or 0),
+                "potential_dilution_events": int(
+                    conn.execute(text("SELECT COUNT(*) FROM potential_dilution_events")).scalar() or 0
+                ),
+                "candidate_filings": int(conn.execute(text("SELECT COUNT(*) FROM candidate_filings")).scalar() or 0),
+                "symbol_dilution_snapshots": int(
+                    conn.execute(text("SELECT COUNT(*) FROM symbol_dilution_snapshots")).scalar() or 0
+                ),
+                "collection_runs": int(conn.execute(text("SELECT COUNT(*) FROM collection_runs")).scalar() or 0),
+            }
+
+    def upsert_share_count_history(self, rows: list[dict[str, Any]], batch_size: int = 1000) -> int:
+        return self._upsert_rows("share_count_history", self.SHARE_COUNT_COLUMNS, ("record_key",), rows, batch_size)
+
+    def upsert_potential_dilution_events(self, rows: list[dict[str, Any]], batch_size: int = 1000) -> int:
+        return self._upsert_rows("potential_dilution_events", self.EVENT_COLUMNS, ("event_key",), rows, batch_size)
+
+    def upsert_candidate_filings(self, rows: list[dict[str, Any]], batch_size: int = 1000) -> int:
+        return self._upsert_rows("candidate_filings", self.CANDIDATE_COLUMNS, ("candidate_key",), rows, batch_size)
+
+    def upsert_symbol_dilution_snapshots(self, rows: list[dict[str, Any]], batch_size: int = 1000) -> int:
+        return self._upsert_rows("symbol_dilution_snapshots", self.SNAPSHOT_COLUMNS, ("snapshot_key",), rows, batch_size)
+
+    def upsert_collection_runs(self, rows: list[dict[str, Any]], batch_size: int = 1000) -> int:
+        return self._upsert_rows("collection_runs", self.RUN_COLUMNS, ("run_key",), rows, batch_size)
+
+    def _upsert_rows(
+        self,
+        table_name: str,
+        columns: tuple[str, ...],
+        key_columns: tuple[str, ...],
+        rows: list[dict[str, Any]],
+        batch_size: int,
+    ) -> int:
+        if not rows:
+            return 0
+        statement = text(self._upsert_sql(table_name, columns, key_columns))
+        inserted = 0
+        with self.engine.begin() as conn:
+            for batch in chunked(rows, batch_size):
+                conn.execute(statement, batch)
+                inserted += len(batch)
+        return inserted
+
+    def _upsert_sql(self, table_name: str, columns: tuple[str, ...], key_columns: tuple[str, ...]) -> str:
+        quoted_columns = ", ".join(mysql_identifier(column) for column in columns)
+        values = ", ".join(f":{column}" for column in columns)
+        update_columns = [column for column in columns if column not in key_columns]
+        updates = ", ".join(
+            f"{mysql_identifier(column)} = VALUES({mysql_identifier(column)})"
+            for column in update_columns
+        )
+        updates = f"{updates}, loaded_at = CURRENT_TIMESTAMP(6)"
+        return (
+            f"INSERT INTO {mysql_identifier(table_name)} ({quoted_columns}) "
+            f"VALUES ({values}) "
+            f"ON DUPLICATE KEY UPDATE {updates}"
+        )
+
+    def _share_count_history_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS share_count_history (
+            record_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            symbol VARCHAR(32) NOT NULL,
+            cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            period DATE NULL,
+            share_class VARCHAR(255) NULL,
+            shares_outstanding DECIMAL(32, 6) NULL,
+            period_of_report DATE NULL,
+            reported_at DATETIME(6) NULL,
+            source_accession_no VARCHAR(25) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            actual_dilution_pct DECIMAL(18, 10) NULL,
+            raw_json JSON NULL,
+            source_key VARCHAR(255) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (record_key),
+            KEY idx_dilution_share_symbol (symbol),
+            KEY idx_dilution_share_cik (cik),
+            KEY idx_dilution_share_period (period),
+            KEY idx_dilution_share_class (share_class),
+            KEY idx_dilution_share_accession (source_accession_no),
+            KEY idx_dilution_share_symbol_period (symbol, period)
+        ) ENGINE = InnoDB
+        """
+
+    def _potential_dilution_events_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS potential_dilution_events (
+            event_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            symbol VARCHAR(32) NOT NULL,
+            cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            accession_no VARCHAR(25) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            form_type VARCHAR(20) NULL,
+            filed_at DATETIME(6) NULL,
+            period_of_report DATE NULL,
+            company_name VARCHAR(255) NULL,
+            source_endpoint VARCHAR(64) NULL,
+            source_url TEXT NULL,
+            source_section VARCHAR(255) NULL,
+            category VARCHAR(64) NULL,
+            quantity DECIMAL(32, 6) NULL,
+            amount DECIMAL(32, 6) NULL,
+            security_type VARCHAR(64) NULL,
+            confidence VARCHAR(16) NULL,
+            snippet TEXT NULL,
+            raw_match TEXT NULL,
+            source_key VARCHAR(255) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (event_key),
+            KEY idx_dilution_events_symbol (symbol),
+            KEY idx_dilution_events_filed_at (filed_at),
+            KEY idx_dilution_events_category (category),
+            KEY idx_dilution_events_confidence (confidence),
+            KEY idx_dilution_events_accession (accession_no),
+            KEY idx_dilution_events_symbol_filed (symbol, filed_at)
+        ) ENGINE = InnoDB
+        """
+
+    def _candidate_filings_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS candidate_filings (
+            candidate_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            symbol VARCHAR(32) NOT NULL,
+            cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            accession_no VARCHAR(25) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            form_type VARCHAR(20) NULL,
+            filed_at DATETIME(6) NULL,
+            period_of_report DATE NULL,
+            company_name VARCHAR(255) NULL,
+            source_endpoint VARCHAR(64) NULL,
+            source_url TEXT NULL,
+            source_section VARCHAR(255) NULL,
+            matched_keywords VARCHAR(512) NULL,
+            snippet TEXT NULL,
+            parse_status VARCHAR(64) NULL,
+            source_key VARCHAR(255) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (candidate_key),
+            KEY idx_dilution_candidates_symbol (symbol),
+            KEY idx_dilution_candidates_filed_at (filed_at),
+            KEY idx_dilution_candidates_form_type (form_type),
+            KEY idx_dilution_candidates_status (parse_status),
+            KEY idx_dilution_candidates_accession (accession_no),
+            KEY idx_dilution_candidates_symbol_filed (symbol, filed_at)
+        ) ENGINE = InnoDB
+        """
+
+    def _symbol_dilution_snapshots_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS symbol_dilution_snapshots (
+            snapshot_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            symbol VARCHAR(32) NOT NULL,
+            cik VARCHAR(10) CHARACTER SET ascii COLLATE ascii_bin NULL,
+            window_start DATE NULL,
+            window_end DATE NULL,
+            snapshot_at DATETIME(6) NOT NULL,
+            latest_shares_outstanding DECIMAL(32, 6) NULL,
+            latest_share_count_date DATE NULL,
+            latest_actual_dilution_pct DECIMAL(18, 10) NULL,
+            trailing_actual_dilution_pct DECIMAL(18, 10) NULL,
+            total_potential_shares DECIMAL(32, 6) NULL,
+            potential_dilution_pct DECIMAL(18, 10) NULL,
+            warrant_shares DECIMAL(32, 6) NULL,
+            convertible_shares DECIMAL(32, 6) NULL,
+            registered_shares DECIMAL(32, 6) NULL,
+            reserved_shares DECIMAL(32, 6) NULL,
+            authorized_shares DECIMAL(32, 6) NULL,
+            selling_stockholder_shares DECIMAL(32, 6) NULL,
+            repurchased_shares DECIMAL(32, 6) NULL,
+            cancelled_shares DECIMAL(32, 6) NULL,
+            potential_event_count INT UNSIGNED NOT NULL DEFAULT 0,
+            candidate_filing_count INT UNSIGNED NOT NULL DEFAULT 0,
+            review_candidate_count INT UNSIGNED NOT NULL DEFAULT 0,
+            source_key VARCHAR(255) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (snapshot_key),
+            KEY idx_dilution_snapshot_symbol (symbol),
+            KEY idx_dilution_snapshot_window (window_start, window_end),
+            KEY idx_dilution_snapshot_at (snapshot_at),
+            KEY idx_dilution_snapshot_symbol_window (symbol, window_start, window_end)
+        ) ENGINE = InnoDB
+        """
+
+    def _collection_runs_ddl(self) -> str:
+        return """
+        CREATE TABLE IF NOT EXISTS collection_runs (
+            run_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            symbol VARCHAR(32) NOT NULL,
+            window_start DATE NULL,
+            window_end DATE NULL,
+            started_at DATETIME(6) NOT NULL,
+            completed_at DATETIME(6) NULL,
+            share_count_rows INT UNSIGNED NOT NULL DEFAULT 0,
+            event_rows INT UNSIGNED NOT NULL DEFAULT 0,
+            candidate_rows INT UNSIGNED NOT NULL DEFAULT 0,
+            snapshot_rows INT UNSIGNED NOT NULL DEFAULT 0,
+            errors_json JSON NULL,
+            source_key VARCHAR(255) NULL,
+            source_updated_at DATETIME(6) NULL,
+            loaded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            PRIMARY KEY (run_key),
+            KEY idx_dilution_runs_symbol (symbol),
+            KEY idx_dilution_runs_window (window_start, window_end),
+            KEY idx_dilution_runs_started (started_at)
+        ) ENGINE = InnoDB
+        """
+
+
+class DilutionTrackerNormalizer:
+    """Convert dilution tracker DataFrames into database rows."""
+
+    @classmethod
+    def share_count_rows(
+        cls,
+        df: pd.DataFrame,
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> list[dict[str, Any]]:
+        rows = []
+        for record in cls._records(df):
+            row = {
+                "record_key": cls._record_key(
+                    "share_count",
+                    record.get("symbol"),
+                    record.get("cik"),
+                    record.get("period"),
+                    record.get("share_class"),
+                    record.get("source_accession_no"),
+                ),
+                "symbol": cls._normalize_symbol(record.get("symbol")),
+                "cik": cls._normalize_cik(record.get("cik")),
+                "period": parse_date(record.get("period")),
+                "share_class": cls._string_or_none(record.get("share_class")),
+                "shares_outstanding": parse_decimal(record.get("shares_outstanding")),
+                "period_of_report": parse_date(record.get("period_of_report")),
+                "reported_at": parse_datetime(record.get("reported_at")),
+                "source_accession_no": cls._string_or_none(record.get("source_accession_no")),
+                "actual_dilution_pct": parse_decimal(record.get("actual_dilution_pct")),
+                "raw_json": cls._json_or_passthrough(record.get("raw_json")),
+                "source_key": source_key,
+                "source_updated_at": parse_datetime(source_updated_at),
+            }
+            if row["symbol"]:
+                rows.append(row)
+        return rows
+
+    @classmethod
+    def event_rows(
+        cls,
+        df: pd.DataFrame,
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> list[dict[str, Any]]:
+        rows = []
+        for i, record in enumerate(cls._records(df)):
+            row = {
+                "event_key": cls._record_key(
+                    "event",
+                    record.get("symbol"),
+                    record.get("accession_no"),
+                    record.get("source_endpoint"),
+                    record.get("source_section"),
+                    record.get("category"),
+                    record.get("quantity"),
+                    record.get("amount"),
+                    record.get("raw_match"),
+                    i,
+                ),
+                "symbol": cls._normalize_symbol(record.get("symbol")),
+                "cik": cls._normalize_cik(record.get("cik")),
+                "accession_no": cls._string_or_none(record.get("accession_no")),
+                "form_type": cls._string_or_none(record.get("form_type")),
+                "filed_at": parse_datetime(record.get("filed_at")),
+                "period_of_report": parse_date(record.get("period_of_report")),
+                "company_name": cls._string_or_none(record.get("company_name")),
+                "source_endpoint": cls._string_or_none(record.get("source_endpoint")),
+                "source_url": cls._string_or_none(record.get("source_url")),
+                "source_section": cls._string_or_none(record.get("source_section")),
+                "category": cls._string_or_none(record.get("category")),
+                "quantity": parse_decimal(record.get("quantity")),
+                "amount": parse_decimal(record.get("amount")),
+                "security_type": cls._string_or_none(record.get("security_type")),
+                "confidence": cls._string_or_none(record.get("confidence")),
+                "snippet": cls._string_or_none(record.get("snippet")),
+                "raw_match": cls._string_or_none(record.get("raw_match")),
+                "source_key": source_key,
+                "source_updated_at": parse_datetime(source_updated_at),
+            }
+            if row["symbol"]:
+                rows.append(row)
+        return rows
+
+    @classmethod
+    def candidate_rows(
+        cls,
+        df: pd.DataFrame,
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> list[dict[str, Any]]:
+        rows = []
+        for i, record in enumerate(cls._records(df)):
+            row = {
+                "candidate_key": cls._record_key(
+                    "candidate",
+                    record.get("symbol"),
+                    record.get("accession_no"),
+                    record.get("source_endpoint"),
+                    record.get("source_section"),
+                    record.get("parse_status"),
+                    record.get("snippet"),
+                    i,
+                ),
+                "symbol": cls._normalize_symbol(record.get("symbol")),
+                "cik": cls._normalize_cik(record.get("cik")),
+                "accession_no": cls._string_or_none(record.get("accession_no")),
+                "form_type": cls._string_or_none(record.get("form_type")),
+                "filed_at": parse_datetime(record.get("filed_at")),
+                "period_of_report": parse_date(record.get("period_of_report")),
+                "company_name": cls._string_or_none(record.get("company_name")),
+                "source_endpoint": cls._string_or_none(record.get("source_endpoint")),
+                "source_url": cls._string_or_none(record.get("source_url")),
+                "source_section": cls._string_or_none(record.get("source_section")),
+                "matched_keywords": cls._string_or_none(record.get("matched_keywords")),
+                "snippet": cls._string_or_none(record.get("snippet")),
+                "parse_status": cls._string_or_none(record.get("parse_status")),
+                "source_key": source_key,
+                "source_updated_at": parse_datetime(source_updated_at),
+            }
+            if row["symbol"]:
+                rows.append(row)
+        return rows
+
+    @classmethod
+    def snapshot_row(
+        cls,
+        symbol: str,
+        summary: Mapping[str, pd.DataFrame],
+        window_start: str | dt.date | dt.datetime | None,
+        window_end: str | dt.date | dt.datetime | None,
+        snapshot_at: dt.datetime | None = None,
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> dict[str, Any]:
+        normalized_symbol = cls._normalize_symbol(symbol)
+        snapshot_at = snapshot_at or dt.datetime.utcnow()
+        share_history = cls._frame(summary.get("share_count_history"))
+        events = cls._frame(summary.get("potential_dilution_events"))
+        candidates = cls._frame(summary.get("candidate_filings"))
+        window_start_date = parse_date(window_start)
+        window_end_date = parse_date(window_end)
+
+        latest = cls._latest_share_count(share_history)
+        latest_shares = parse_decimal(latest.get("shares_outstanding"))
+        first_shares = cls._first_shares_in_window(share_history, window_start_date, window_end_date)
+        latest_actual_dilution_pct = cls._latest_total_dilution_pct(share_history)
+        trailing_actual_dilution_pct = None
+        if first_shares not in (None, Decimal("0")) and latest_shares is not None:
+            trailing_actual_dilution_pct = (latest_shares / first_shares) - Decimal("1")
+
+        category_totals = cls._category_totals(events)
+        total_potential_shares = sum(
+            (
+                category_totals.get("underlying_warrants", Decimal("0")),
+                category_totals.get("underlying_convertibles", Decimal("0")),
+                category_totals.get("registered", Decimal("0")),
+                category_totals.get("reserved", Decimal("0")),
+                category_totals.get("authorized", Decimal("0")),
+                category_totals.get("issuable", Decimal("0")),
+                category_totals.get("newly_issued", Decimal("0")),
+                category_totals.get("sold", Decimal("0")),
+            ),
+            Decimal("0"),
+        )
+        potential_dilution_pct = None
+        if latest_shares not in (None, Decimal("0")):
+            potential_dilution_pct = total_potential_shares / latest_shares
+
+        review_candidate_count = 0
+        if not candidates.empty and "parse_status" in candidates:
+            review_candidate_count = int(
+                candidates["parse_status"].isin(["candidate", "no_quantity", "metadata_only"]).sum()
+            )
+
+        return {
+            "snapshot_key": cls._record_key("snapshot", normalized_symbol, window_start_date, window_end_date),
+            "symbol": normalized_symbol,
+            "cik": cls._normalize_cik(latest.get("cik")),
+            "window_start": window_start_date,
+            "window_end": window_end_date,
+            "snapshot_at": snapshot_at,
+            "latest_shares_outstanding": latest_shares,
+            "latest_share_count_date": parse_date(latest.get("period")),
+            "latest_actual_dilution_pct": latest_actual_dilution_pct,
+            "trailing_actual_dilution_pct": trailing_actual_dilution_pct,
+            "total_potential_shares": total_potential_shares,
+            "potential_dilution_pct": potential_dilution_pct,
+            "warrant_shares": category_totals.get("underlying_warrants", Decimal("0")),
+            "convertible_shares": category_totals.get("underlying_convertibles", Decimal("0")),
+            "registered_shares": category_totals.get("registered", Decimal("0")),
+            "reserved_shares": category_totals.get("reserved", Decimal("0")),
+            "authorized_shares": category_totals.get("authorized", Decimal("0")),
+            "selling_stockholder_shares": category_totals.get("selling_stockholder", Decimal("0")),
+            "repurchased_shares": category_totals.get("repurchased", Decimal("0")),
+            "cancelled_shares": category_totals.get("cancelled", Decimal("0")),
+            "potential_event_count": int(len(events)),
+            "candidate_filing_count": int(len(candidates)),
+            "review_candidate_count": review_candidate_count,
+            "source_key": source_key,
+            "source_updated_at": parse_datetime(source_updated_at),
+        }
+
+    @classmethod
+    def collection_run_row(
+        cls,
+        symbol: str,
+        window_start: str | dt.date | dt.datetime | None,
+        window_end: str | dt.date | dt.datetime | None,
+        started_at: dt.datetime,
+        completed_at: dt.datetime | None,
+        share_count_rows: int = 0,
+        event_rows: int = 0,
+        candidate_rows: int = 0,
+        snapshot_rows: int = 0,
+        errors: list[str] | None = None,
+        source_key: str | None = None,
+        source_updated_at: Any = None,
+    ) -> dict[str, Any]:
+        normalized_symbol = cls._normalize_symbol(symbol)
+        window_start_date = parse_date(window_start)
+        window_end_date = parse_date(window_end)
+        return {
+            "run_key": cls._record_key("run", normalized_symbol, window_start_date, window_end_date, started_at),
+            "symbol": normalized_symbol,
+            "window_start": window_start_date,
+            "window_end": window_end_date,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "share_count_rows": int(share_count_rows),
+            "event_rows": int(event_rows),
+            "candidate_rows": int(candidate_rows),
+            "snapshot_rows": int(snapshot_rows),
+            "errors_json": json_dumps(errors or []),
+            "source_key": source_key,
+            "source_updated_at": parse_datetime(source_updated_at),
+        }
+
+    @classmethod
+    def _records(cls, df: pd.DataFrame | None) -> list[dict[str, Any]]:
+        if df is None or df.empty:
+            return []
+        return df.where(pd.notna(df), None).to_dict("records")
+
+    @classmethod
+    def _frame(cls, value: Any) -> pd.DataFrame:
+        return value if isinstance(value, pd.DataFrame) else pd.DataFrame()
+
+    @classmethod
+    def _latest_share_count(cls, share_history: pd.DataFrame) -> dict[str, Any]:
+        if share_history.empty:
+            return {}
+        working = share_history.copy()
+        working["period"] = pd.to_datetime(working.get("period"), errors="coerce").dt.date
+        working["reported_at"] = pd.to_datetime(working.get("reported_at"), errors="coerce")
+        working["shares_outstanding"] = pd.to_numeric(working.get("shares_outstanding"), errors="coerce")
+        working = working[working["period"].notna()]
+        if working.empty:
+            return {}
+        latest_period = working["period"].max()
+        latest_period_rows = working[working["period"] == latest_period]
+        latest_row = (
+            latest_period_rows.sort_values("reported_at", na_position="last")
+            .tail(1)
+            .where(pd.notna(latest_period_rows.sort_values("reported_at", na_position="last").tail(1)), None)
+            .to_dict("records")[0]
+        )
+        latest_row["period"] = latest_period
+        latest_row["shares_outstanding"] = Decimal(str(latest_period_rows["shares_outstanding"].fillna(0).sum()))
+        return latest_row
+
+    @classmethod
+    def _first_shares_in_window(
+        cls,
+        share_history: pd.DataFrame,
+        window_start: dt.date | None,
+        window_end: dt.date | None,
+    ) -> Decimal | None:
+        if share_history.empty or "shares_outstanding" not in share_history:
+            return None
+        working = share_history.copy()
+        working["period"] = pd.to_datetime(working.get("period"), errors="coerce").dt.date
+        working["shares_outstanding"] = pd.to_numeric(working.get("shares_outstanding"), errors="coerce")
+        if window_start is not None:
+            working = working[working["period"] >= window_start]
+        if window_end is not None:
+            working = working[working["period"] <= window_end]
+        if working.empty:
+            return None
+        totals = (
+            working.groupby("period", dropna=False, as_index=False)
+            .agg(shares_outstanding=("shares_outstanding", "sum"))
+            .sort_values("period", na_position="last")
+        )
+        return parse_decimal(totals["shares_outstanding"].iloc[0])
+
+    @classmethod
+    def _latest_total_dilution_pct(cls, share_history: pd.DataFrame) -> Decimal | None:
+        if share_history.empty or "shares_outstanding" not in share_history:
+            return None
+        working = share_history.copy()
+        working["period"] = pd.to_datetime(working.get("period"), errors="coerce").dt.date
+        working["shares_outstanding"] = pd.to_numeric(working["shares_outstanding"], errors="coerce")
+        totals = (
+            working[working["period"].notna()]
+            .groupby("period", dropna=False, as_index=False)
+            .agg(shares_outstanding=("shares_outstanding", "sum"))
+            .sort_values("period")
+        )
+        if len(totals) < 2:
+            return None
+        latest = parse_decimal(totals["shares_outstanding"].iloc[-1])
+        previous = parse_decimal(totals["shares_outstanding"].iloc[-2])
+        if latest is None or previous in (None, Decimal("0")):
+            return None
+        return (latest / previous) - Decimal("1")
+
+    @classmethod
+    def _category_totals(cls, events: pd.DataFrame) -> dict[str, Decimal]:
+        if events.empty or "category" not in events or "quantity" not in events:
+            return {}
+        working = events.copy()
+        working["quantity"] = pd.to_numeric(working["quantity"], errors="coerce").fillna(0)
+        totals = working.groupby("category", dropna=False)["quantity"].sum().to_dict()
+        return {str(key): Decimal(str(value)) for key, value in totals.items() if key is not None}
+
+    @staticmethod
+    def _record_key(*values: Any) -> str:
+        natural_key = "|".join("" if value is None else str(value) for value in values)
+        return hashlib.sha256(natural_key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _normalize_symbol(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip().upper()
+
+    @staticmethod
+    def _normalize_cik(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip()
+
+    @staticmethod
+    def _string_or_none(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value)
+
+    @staticmethod
+    def _json_or_passthrough(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        if isinstance(value, str):
+            return value
+        return json_dumps(value)
+
+
+class DilutionTrackerImporter:
+    """Fetch dilution tracker summaries and persist normalized results."""
+
+    def __init__(
+        self,
+        tracker: DilutionTracker | None = None,
+        database: DilutionTrackerDatabase | None = None,
+        normalizer: DilutionTrackerNormalizer | None = None,
+        batch_size: int = 1000,
+        show_progress: bool = True,
+    ) -> None:
+        self.tracker = tracker or DilutionTracker()
+        self.database = database or DilutionTrackerDatabase()
+        self.normalizer = normalizer or DilutionTrackerNormalizer()
+        self.batch_size = batch_size
+        self.show_progress = show_progress
+
+    def import_symbol(
+        self,
+        symbol: str,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        """Fetch, normalize, and persist one symbol's dilution tracker summary."""
+        stats = DilutionTrackerImportStats(symbols=1)
+        self.database.setup()
+        normalized_symbol = self._normalize_symbol(symbol)
+        window_start, window_end = self.tracker._resolve_date_range(start_date, end_date)
+        started_at = dt.datetime.utcnow()
+        source_key = f"dilution_tracker:{normalized_symbol}:{window_start.isoformat()}..{window_end.isoformat()}"
+        errors: list[str] = []
+        snapshot_rows = 0
+        share_rows: list[dict[str, Any]] = []
+        event_rows: list[dict[str, Any]] = []
+        candidate_rows: list[dict[str, Any]] = []
+        completed_at: dt.datetime | None = None
+
+        try:
+            summary = self.tracker.get_dilution_summary(normalized_symbol, window_start, window_end)
+            completed_at = dt.datetime.utcnow()
+            share_rows = self.normalizer.share_count_rows(
+                summary.get("share_count_history"),
+                source_key=source_key,
+                source_updated_at=completed_at,
+            )
+            event_rows = self.normalizer.event_rows(
+                summary.get("potential_dilution_events"),
+                source_key=source_key,
+                source_updated_at=completed_at,
+            )
+            candidate_rows = self.normalizer.candidate_rows(
+                summary.get("candidate_filings"),
+                source_key=source_key,
+                source_updated_at=completed_at,
+            )
+            snapshot_row = self.normalizer.snapshot_row(
+                normalized_symbol,
+                summary,
+                window_start,
+                window_end,
+                snapshot_at=completed_at,
+                source_key=source_key,
+                source_updated_at=completed_at,
+            )
+            stats.share_count_rows += self.database.upsert_share_count_history(share_rows, self.batch_size)
+            stats.event_rows += self.database.upsert_potential_dilution_events(event_rows, self.batch_size)
+            stats.candidate_rows += self.database.upsert_candidate_filings(candidate_rows, self.batch_size)
+            snapshot_rows = self.database.upsert_symbol_dilution_snapshots([snapshot_row], self.batch_size)
+            stats.snapshot_rows += snapshot_rows
+        except Exception as exc:
+            completed_at = dt.datetime.utcnow()
+            errors.append(f"{normalized_symbol}: {exc}")
+            stats.errors.extend(errors)
+
+        run_row = self.normalizer.collection_run_row(
+            normalized_symbol,
+            window_start,
+            window_end,
+            started_at,
+            completed_at,
+            share_count_rows=len(share_rows),
+            event_rows=len(event_rows),
+            candidate_rows=len(candidate_rows),
+            snapshot_rows=snapshot_rows,
+            errors=errors,
+            source_key=source_key,
+            source_updated_at=completed_at,
+        )
+        stats.runs += self.database.upsert_collection_runs([run_row], self.batch_size)
+        return stats.as_dict()
+
+    def import_symbols(
+        self,
+        symbols: Iterable[str],
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        """Sequentially import dilution tracker summaries for multiple symbols."""
+        normalized_symbols = self._normalize_symbols(symbols)
+        if not normalized_symbols:
+            raise ValueError("At least one symbol is required")
+        stats = DilutionTrackerImportStats(symbols=len(normalized_symbols))
+        progress = self._progress(normalized_symbols, desc="Dilution symbols", unit="symbol")
+        for symbol in progress:
+            symbol_stats = self.import_symbol(symbol, start_date=start_date, end_date=end_date)
+            stats.runs += int(symbol_stats.get("runs", 0))
+            stats.share_count_rows += int(symbol_stats.get("share_count_rows", 0))
+            stats.event_rows += int(symbol_stats.get("event_rows", 0))
+            stats.candidate_rows += int(symbol_stats.get("candidate_rows", 0))
+            stats.snapshot_rows += int(symbol_stats.get("snapshot_rows", 0))
+            stats.errors.extend(symbol_stats.get("errors", []))
+            self._set_progress_postfix(progress, events=stats.event_rows, errors=len(stats.errors))
+        return stats.as_dict()
+
+    def import_watchlist(
+        self,
+        watchlist_location: str | None = None,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+    ) -> dict[str, Any]:
+        """Import dilution tracker summaries for symbols from a watchlist file."""
+        return self.import_symbols(self._load_watchlist(watchlist_location), start_date=start_date, end_date=end_date)
+
+    def _load_watchlist(self, watchlist_location: str | None) -> list[str]:
+        if watchlist_location is None:
+            try:
+                from .watchlists_locations import hadv, make_watchlist
+            except ImportError:
+                from market_data.watchlists_locations import hadv, make_watchlist
+
+            watchlist_location = hadv
+        else:
+            try:
+                from .watchlists_locations import make_watchlist
+            except ImportError:
+                from market_data.watchlists_locations import make_watchlist
+        return make_watchlist(watchlist_location)
+
+    def _normalize_symbols(self, symbols: Iterable[str]) -> list[str]:
+        if isinstance(symbols, str):
+            symbols = [symbols]
+        normalized = []
+        seen = set()
+        for symbol in symbols:
+            value = self._normalize_symbol(symbol)
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    def _normalize_symbol(self, symbol: Any) -> str:
+        value = str(symbol or "").strip().upper()
+        if not value:
+            raise ValueError("symbol is required")
+        return value
+
+    def _progress(
+        self,
+        iterable: Iterable[Any],
+        desc: str,
+        unit: str,
+        leave: bool = True,
+    ) -> Iterable[Any]:
+        if not self.show_progress or tqdm is None:
+            return iterable
+        return tqdm(iterable, desc=desc, unit=unit, leave=leave)
+
+    def _set_progress_postfix(self, progress: Iterable[Any], **values: Any) -> None:
+        if hasattr(progress, "set_postfix"):
+            progress.set_postfix(**values)
+
+
+class DilutionTrackerAnalytics:
+    """Analytics layer for stored dilution tracker rows."""
+
+    def __init__(self, database: DilutionTrackerDatabase | None = None) -> None:
+        self.database = database or DilutionTrackerDatabase()
+        self.engine = self.database.engine
+
+    def symbol_snapshot(
+        self,
+        symbols: str | Iterable[str] | None = None,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        latest_only: bool = True,
+    ) -> pd.DataFrame:
+        """Return stored symbol dilution snapshot rows."""
+        where_sql, params, expanding = self._snapshot_where_clause(symbols, start_date, end_date)
+        if latest_only:
+            query = f"""
+            WITH ranked AS (
+                SELECT
+                    s.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.symbol, s.window_start, s.window_end
+                        ORDER BY s.snapshot_at DESC, s.loaded_at DESC
+                    ) AS rn
+                FROM symbol_dilution_snapshots s
+                WHERE {where_sql}
+            )
+            SELECT *
+            FROM ranked
+            WHERE rn = 1
+            ORDER BY symbol, window_end DESC, snapshot_at DESC
+            """
+        else:
+            query = f"""
+            SELECT *
+            FROM symbol_dilution_snapshots s
+            WHERE {where_sql}
+            ORDER BY symbol, window_end DESC, snapshot_at DESC
+            """
+        return self._read_sql(query, params, expanding)
+
+    def compare_symbols(
+        self,
+        symbols: str | Iterable[str] | None = None,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+    ) -> pd.DataFrame:
+        """Return one latest comparable dilution row per symbol."""
+        snapshots = self.symbol_snapshot(symbols=symbols, start_date=start_date, end_date=end_date, latest_only=True)
+        if snapshots.empty:
+            return snapshots
+        snapshots = snapshots.sort_values(["symbol", "snapshot_at"], na_position="last")
+        snapshots = snapshots.groupby("symbol", dropna=False).tail(1).reset_index(drop=True)
+        sort_column = "potential_dilution_pct" if "potential_dilution_pct" in snapshots else "symbol"
+        return snapshots.sort_values(sort_column, ascending=False, na_position="last").reset_index(drop=True)
+
+    def dilution_events(
+        self,
+        symbols: str | Iterable[str] | None = None,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        categories: str | Iterable[str] | None = None,
+        confidence: str | Iterable[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return detailed stored potential dilution event rows."""
+        where_sql, params, expanding = self._event_where_clause(symbols, start_date, end_date, categories, confidence)
+        query = f"""
+        SELECT *
+        FROM potential_dilution_events e
+        WHERE {where_sql}
+        ORDER BY symbol, filed_at DESC, accession_no, category
+        """
+        return self._read_sql(query, params, expanding)
+
+    def candidate_filings(
+        self,
+        symbols: str | Iterable[str] | None = None,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        parse_status: str | Iterable[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return detailed stored candidate filing rows."""
+        where_sql, params, expanding = self._candidate_where_clause(symbols, start_date, end_date, parse_status)
+        query = f"""
+        SELECT *
+        FROM candidate_filings c
+        WHERE {where_sql}
+        ORDER BY symbol, filed_at DESC, accession_no, form_type
+        """
+        return self._read_sql(query, params, expanding)
+
+    def _snapshot_where_clause(
+        self,
+        symbols: str | Iterable[str] | None,
+        start_date: str | dt.date | dt.datetime | None,
+        end_date: str | dt.date | dt.datetime | None,
+    ) -> tuple[str, dict[str, Any], list[str]]:
+        clauses = ["1 = 1"]
+        params: dict[str, Any] = {}
+        expanding: list[str] = []
+        normalized_symbols = self._normalize_string_filter(symbols, uppercase=True)
+        if normalized_symbols:
+            clauses.append("s.symbol IN :symbols")
+            params["symbols"] = normalized_symbols
+            expanding.append("symbols")
+        if start_date is not None:
+            clauses.append("s.window_end >= :start_date")
+            params["start_date"] = parse_date(start_date)
+        if end_date is not None:
+            clauses.append("s.window_start <= :end_date")
+            params["end_date"] = parse_date(end_date)
+        return " AND ".join(clauses), params, expanding
+
+    def _event_where_clause(
+        self,
+        symbols: str | Iterable[str] | None,
+        start_date: str | dt.date | dt.datetime | None,
+        end_date: str | dt.date | dt.datetime | None,
+        categories: str | Iterable[str] | None,
+        confidence: str | Iterable[str] | None,
+    ) -> tuple[str, dict[str, Any], list[str]]:
+        clauses = ["1 = 1"]
+        params: dict[str, Any] = {}
+        expanding: list[str] = []
+        normalized_symbols = self._normalize_string_filter(symbols, uppercase=True)
+        if normalized_symbols:
+            clauses.append("e.symbol IN :symbols")
+            params["symbols"] = normalized_symbols
+            expanding.append("symbols")
+        if start_date is not None:
+            clauses.append("DATE(e.filed_at) >= :start_date")
+            params["start_date"] = parse_date(start_date)
+        if end_date is not None:
+            clauses.append("DATE(e.filed_at) <= :end_date")
+            params["end_date"] = parse_date(end_date)
+        normalized_categories = self._normalize_string_filter(categories)
+        if normalized_categories:
+            clauses.append("e.category IN :categories")
+            params["categories"] = normalized_categories
+            expanding.append("categories")
+        normalized_confidence = self._normalize_string_filter(confidence)
+        if normalized_confidence:
+            clauses.append("e.confidence IN :confidence")
+            params["confidence"] = normalized_confidence
+            expanding.append("confidence")
+        return " AND ".join(clauses), params, expanding
+
+    def _candidate_where_clause(
+        self,
+        symbols: str | Iterable[str] | None,
+        start_date: str | dt.date | dt.datetime | None,
+        end_date: str | dt.date | dt.datetime | None,
+        parse_status: str | Iterable[str] | None,
+    ) -> tuple[str, dict[str, Any], list[str]]:
+        clauses = ["1 = 1"]
+        params: dict[str, Any] = {}
+        expanding: list[str] = []
+        normalized_symbols = self._normalize_string_filter(symbols, uppercase=True)
+        if normalized_symbols:
+            clauses.append("c.symbol IN :symbols")
+            params["symbols"] = normalized_symbols
+            expanding.append("symbols")
+        if start_date is not None:
+            clauses.append("DATE(c.filed_at) >= :start_date")
+            params["start_date"] = parse_date(start_date)
+        if end_date is not None:
+            clauses.append("DATE(c.filed_at) <= :end_date")
+            params["end_date"] = parse_date(end_date)
+        normalized_status = self._normalize_string_filter(parse_status)
+        if normalized_status:
+            clauses.append("c.parse_status IN :parse_status")
+            params["parse_status"] = normalized_status
+            expanding.append("parse_status")
+        return " AND ".join(clauses), params, expanding
+
+    def _normalize_string_filter(
+        self,
+        value: str | Iterable[str] | None,
+        uppercase: bool = False,
+    ) -> list[str]:
+        if value is None:
+            return []
+        values = [value] if isinstance(value, str) else list(value)
+        normalized = []
+        for item in values:
+            if item is None:
+                continue
+            text_value = str(item).strip()
+            if not text_value:
+                continue
+            normalized.append(text_value.upper() if uppercase else text_value)
+        return normalized
+
+    def _read_sql(
+        self,
+        query: str,
+        params: dict[str, Any],
+        expanding: list[str],
+    ) -> pd.DataFrame:
+        statement = text(query)
+        for key in expanding:
+            statement = statement.bindparams(bindparam(key, expanding=True))
+        df = pd.read_sql(statement, con=self.engine, params=params)
+        for column in ("period", "period_of_report", "filed_at", "reported_at", "window_start", "window_end", "snapshot_at"):
+            if column in df.columns:
+                df[column] = pd.to_datetime(df[column])
+        return df
+
+
 def validate_dilution_text_parser_sample() -> dict[str, Any]:
     """Exercise DilutionTextParser with embedded dilution disclosure snippets."""
     parser = DilutionTextParser()
@@ -4739,6 +5862,196 @@ def validate_dilution_tracker_sample() -> dict[str, Any]:
         "events": events,
         "candidates": candidates,
         "summary_keys": sorted(summary.keys()),
+    }
+
+
+def validate_dilution_storage_normalizer_sample() -> dict[str, Any]:
+    """Exercise dilution storage normalization and snapshot math without network or DB access."""
+    normalizer = DilutionTrackerNormalizer()
+    share_history = pd.DataFrame(
+        [
+            {
+                "symbol": "SAMP",
+                "cik": "1234567",
+                "period": dt.date(2025, 3, 31),
+                "share_class": "Common",
+                "shares_outstanding": Decimal("10000000"),
+                "period_of_report": dt.date(2025, 3, 31),
+                "reported_at": dt.datetime(2025, 5, 10, 12, 0),
+                "source_accession_no": "0000000000-25-000001",
+                "actual_dilution_pct": None,
+                "raw_json": {"value": 10000000},
+            },
+            {
+                "symbol": "SAMP",
+                "cik": "1234567",
+                "period": dt.date(2026, 3, 31),
+                "share_class": "Common",
+                "shares_outstanding": Decimal("12500000"),
+                "period_of_report": dt.date(2026, 3, 31),
+                "reported_at": dt.datetime(2026, 5, 10, 12, 0),
+                "source_accession_no": "0000000000-26-000001",
+                "actual_dilution_pct": Decimal("0.25"),
+                "raw_json": {"value": 12500000},
+            },
+        ],
+        columns=DILUTION_SHARE_COUNT_COLUMNS,
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "symbol": "SAMP",
+                "cik": "1234567",
+                "accession_no": "0000000000-26-000010",
+                "form_type": "8-K",
+                "filed_at": dt.datetime(2026, 6, 1, 12, 0),
+                "period_of_report": dt.date(2026, 5, 31),
+                "company_name": "Sample Corp",
+                "source_endpoint": "sample",
+                "source_url": "https://www.sec.gov/sample.htm",
+                "source_section": "3-2",
+                "category": "underlying_warrants",
+                "quantity": Decimal("5000000"),
+                "amount": None,
+                "security_type": "warrant",
+                "confidence": "high",
+                "snippet": "warrants to purchase 5,000,000 shares",
+                "raw_match": "5,000,000 shares",
+            },
+            {
+                "symbol": "SAMP",
+                "cik": "1234567",
+                "accession_no": "0000000000-26-000011",
+                "form_type": "S-8",
+                "filed_at": dt.datetime(2026, 6, 2, 12, 0),
+                "period_of_report": dt.date(2026, 5, 31),
+                "company_name": "Sample Corp",
+                "source_endpoint": "sample",
+                "source_url": "https://www.sec.gov/sample2.htm",
+                "source_section": None,
+                "category": "reserved",
+                "quantity": Decimal("2000000"),
+                "amount": None,
+                "security_type": "common_stock",
+                "confidence": "medium",
+                "snippet": "reserves 2,000,000 shares",
+                "raw_match": "2,000,000 shares",
+            },
+        ],
+        columns=DILUTION_EVENT_COLUMNS,
+    )
+    candidates = pd.DataFrame(
+        [
+            {
+                "symbol": "SAMP",
+                "cik": "1234567",
+                "accession_no": "0000000000-26-000011",
+                "form_type": "S-8",
+                "filed_at": dt.datetime(2026, 6, 2, 12, 0),
+                "period_of_report": dt.date(2026, 5, 31),
+                "company_name": "Sample Corp",
+                "source_endpoint": "sample",
+                "source_url": "https://www.sec.gov/sample2.htm",
+                "source_section": None,
+                "matched_keywords": "reserved",
+                "snippet": "reserves 2,000,000 shares",
+                "parse_status": "parsed",
+            },
+            {
+                "symbol": "SAMP",
+                "cik": "1234567",
+                "accession_no": "0000000000-26-000012",
+                "form_type": "424B5",
+                "filed_at": dt.datetime(2026, 6, 3, 12, 0),
+                "period_of_report": dt.date(2026, 5, 31),
+                "company_name": "Sample Corp",
+                "source_endpoint": "sample",
+                "source_url": "https://www.sec.gov/sample3.htm",
+                "source_section": None,
+                "matched_keywords": "registered",
+                "snippet": "at-the-market offering",
+                "parse_status": "candidate",
+            },
+        ],
+        columns=DILUTION_CANDIDATE_COLUMNS,
+    )
+    summary = {
+        "share_count_history": share_history,
+        "potential_dilution_events": events,
+        "candidate_filings": candidates,
+    }
+    share_rows = normalizer.share_count_rows(share_history, "sample")
+    event_rows = normalizer.event_rows(events, "sample")
+    candidate_rows = normalizer.candidate_rows(candidates, "sample")
+    snapshot = normalizer.snapshot_row(
+        "SAMP",
+        summary,
+        dt.date(2025, 1, 1),
+        dt.date(2026, 6, 30),
+        snapshot_at=dt.datetime(2026, 6, 30, 12, 0),
+        source_key="sample",
+    )
+
+    assert len(share_rows) == 2
+    assert len(event_rows) == 2
+    assert len(candidate_rows) == 2
+    assert len(share_rows[0]["record_key"]) == 64
+    assert share_rows[0]["record_key"] == normalizer.share_count_rows(share_history, "sample")[0]["record_key"]
+    assert snapshot["latest_shares_outstanding"] == Decimal("12500000")
+    assert snapshot["trailing_actual_dilution_pct"] == Decimal("0.25")
+    assert snapshot["warrant_shares"] == Decimal("5000000")
+    assert snapshot["reserved_shares"] == Decimal("2000000")
+    assert snapshot["total_potential_shares"] == Decimal("7000000")
+    assert snapshot["potential_dilution_pct"] == Decimal("0.56")
+    assert snapshot["review_candidate_count"] == 1
+
+    return {
+        "share_rows": share_rows,
+        "event_rows": event_rows,
+        "candidate_rows": candidate_rows,
+        "snapshot": snapshot,
+    }
+
+
+def validate_dilution_storage_query_sample() -> dict[str, Any]:
+    """Exercise stored dilution analytics query helpers without opening a DB connection."""
+    analytics = DilutionTrackerAnalytics.__new__(DilutionTrackerAnalytics)
+    snapshot_where, snapshot_params, snapshot_expanding = analytics._snapshot_where_clause(
+        symbols=["SAMP", "TEST"],
+        start_date="2025-01-01",
+        end_date="2026-06-30",
+    )
+    event_where, event_params, event_expanding = analytics._event_where_clause(
+        symbols="SAMP",
+        start_date="2026-01-01",
+        end_date="2026-06-30",
+        categories=["reserved", "underlying_warrants"],
+        confidence=["high", "medium"],
+    )
+    candidate_where, candidate_params, candidate_expanding = analytics._candidate_where_clause(
+        symbols="SAMP",
+        start_date="2026-01-01",
+        end_date="2026-06-30",
+        parse_status=["candidate", "no_quantity"],
+    )
+
+    assert "s.symbol IN :symbols" in snapshot_where
+    assert snapshot_params["symbols"] == ["SAMP", "TEST"]
+    assert snapshot_expanding == ["symbols"]
+    assert "e.category IN :categories" in event_where
+    assert event_params["categories"] == ["reserved", "underlying_warrants"]
+    assert event_expanding == ["symbols", "categories", "confidence"]
+    assert "c.parse_status IN :parse_status" in candidate_where
+    assert candidate_params["parse_status"] == ["candidate", "no_quantity"]
+    assert candidate_expanding == ["symbols", "parse_status"]
+
+    return {
+        "snapshot_where": snapshot_where,
+        "snapshot_params": snapshot_params,
+        "event_where": event_where,
+        "event_params": event_params,
+        "candidate_where": candidate_where,
+        "candidate_params": candidate_params,
     }
 
 
