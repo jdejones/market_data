@@ -8,6 +8,7 @@ REM expected to finish, so they run in the same terminal and each step waits for
 REM previous one. If any script exits nonzero, log the failure and stop the pipeline.
 set "PYTHON_EXE=C:\Users\jdejo\AppData\Local\Programs\Python\Python313\python.exe"
 set "LOG_FILE=C:\Users\jdejo\Market_Data_Processing\market_data\scripts\script_error_logs.txt"
+set "DETAILED_LOG_FILE=C:\Users\jdejo\Market_Data_Processing\market_data\scripts\scripts_error_logs_detailed.txt"
 
 cd /d "C:\Users\jdejo\Market_Data_Processing\market_data"
 
@@ -28,15 +29,22 @@ exit /b 0
 :run_script
 set "SCRIPT_NAME=%~1"
 set "SCRIPT_PATH=%~2"
+set "SCRIPT_STDERR=%TEMP%\%~n1_stderr_%RANDOM%%RANDOM%.log"
 
 echo Running %SCRIPT_NAME%
-"%PYTHON_EXE%" "%SCRIPT_PATH%"
+"%PYTHON_EXE%" "%SCRIPT_PATH%" 2> "%SCRIPT_STDERR%"
 set "EXIT_CODE=%errorlevel%"
 
 if not "%EXIT_CODE%"=="0" (
+    type nul > "%DETAILED_LOG_FILE%"
+    >> "%DETAILED_LOG_FILE%" echo [%date% %time%] %SCRIPT_NAME% failed with exit code %EXIT_CODE%.
+    >> "%DETAILED_LOG_FILE%" echo.
+    if exist "%SCRIPT_STDERR%" type "%SCRIPT_STDERR%" >> "%DETAILED_LOG_FILE%"
     >> "%LOG_FILE%" echo [%date% %time%] %SCRIPT_NAME% failed with exit code %EXIT_CODE%.
     echo %SCRIPT_NAME% failed with exit code %EXIT_CODE%. See "%LOG_FILE%".
+    if exist "%SCRIPT_STDERR%" del "%SCRIPT_STDERR%" > nul 2>&1
     exit /b %EXIT_CODE%
 )
 
+if exist "%SCRIPT_STDERR%" del "%SCRIPT_STDERR%" > nul 2>&1
 exit /b 0
