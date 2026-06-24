@@ -6,3 +6,4 @@ __pycache__/
 
 db_exports/
 scripts/script_error_logs.txt
+scripts/scripts_error_logs_detailed.txt
