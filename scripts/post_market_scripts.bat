@@ -32,7 +32,7 @@ set "SCRIPT_PATH=%~2"
 set "SCRIPT_STDERR=%TEMP%\%~n1_stderr_%RANDOM%%RANDOM%.log"
 
 echo Running %SCRIPT_NAME%
-"%PYTHON_EXE%" "%SCRIPT_PATH%" 2> "%SCRIPT_STDERR%"
+"%PYTHON_EXE%" -u "%SCRIPT_PATH%" 2> "%SCRIPT_STDERR%"
 set "EXIT_CODE=%errorlevel%"
 
 if not "%EXIT_CODE%"=="0" (

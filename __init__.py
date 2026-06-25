@@ -37,6 +37,12 @@ import threading
 import gzip
 import argparse
 import sklearn
+from tqdm import tqdm as _tqdm
+
+
+def tqdm(*args, **kwargs):
+    kwargs.setdefault("file", sys.stdout)
+    return _tqdm(*args, **kwargs)
 
 #Local imports
 from . import fundamentals as fu
