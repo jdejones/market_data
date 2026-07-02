@@ -5,7 +5,7 @@ def _process_daily_quant_rating_df(
     seeking_alpha_access_token,
     database_password,
     skip_daily_storage,
-):
+    ):
     import datetime
     import sys
     import time
