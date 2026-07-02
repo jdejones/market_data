@@ -1,3 +1,299 @@
+def _process_daily_quant_rating_df(
+    daily_quant_rating_df,
+    syms,
+    seeking_alpha_api_key,
+    seeking_alpha_access_token,
+    database_password,
+    skip_daily_storage,
+):
+    import datetime
+    import sys
+    import time
+    import warnings
+
+    import pandas as pd
+    import requests
+    from sqlalchemy import DateTime, create_engine
+
+    try:
+        import market_data.seeking_alpha as sa
+    except ModuleNotFoundError:
+        sys.path.insert(0, r"C:\Users\jdejo\Market_Data_Processing")
+        import market_data.seeking_alpha as sa
+
+    if not skip_daily_storage:
+        if len(daily_quant_rating_df.columns) > 1000:
+            warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
+
+        daily_quant_rating_df.set_index('index', inplace=True)
+        daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
+
+        i = 0
+        j = 50
+        while True:
+            if i > len(syms):
+                break
+            if j > len(syms):
+                j = None
+
+            url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
+            querystring = {"symbols": f"{','.join(syms[i:j])}", "fields": "quant_rating"}
+            headers = {
+                "x-rapidapi-key": f"{seeking_alpha_api_key}",
+                "x-rapidapi-host": "seeking-alpha.p.rapidapi.com",
+                "accessToken": seeking_alpha_access_token,
+            }
+
+            response_request = requests.get(url, headers=headers, params=querystring)
+
+            if response_request.status_code != 200:
+                if response_request.status_code == 504:
+                    print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+                else:
+                    print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
+                    time.sleep(30)
+                    response_request = requests.get(url, headers=headers, params=querystring)
+
+            response = response_request.json()
+
+            if response_request.status_code != 200:
+                break
+
+            if (j is not None) and (len(response['data']) == 0):
+                raise ValueError('No response from Seeking Alpha API')
+
+            quant_ratings_errors = {}
+            try:
+                sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]: _['attributes']['value'] for _ in response['data']}
+            except Exception:
+                sym_ratings = {}
+                for _ in response['data']:
+                    try:
+                        sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
+                    except Exception as e:
+                        quant_ratings_errors[f'{i}:{j}'] = ((i, j), _, e)
+                        continue
+            if len(quant_ratings_errors) > 3000:
+                break
+
+            for sym in sym_ratings:
+                daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
+
+            i += 50
+            if j is None:
+                break
+            j += 50
+            time.sleep(60)  # Increased sleep as work around to a server side error returning no data.
+
+        daily_quant_rating_df.reset_index(inplace=True)
+        url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+        engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+        daily_quant_rating_df.to_sql(
+            "daily_quant_rating",
+            con=engine,
+            if_exists="replace",
+            index=False,
+            method="multi",
+            chunksize=200,
+            dtype={'date': DateTime},
+        )
+
+    daily_quant_rating_df.set_index('index', inplace=True)
+    daily_quant_rating_df.index.name = 'Symbol'
+    daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
+    return daily_quant_rating_df
+
+
+def _parse_daily_avwap_column(column):
+    import re
+
+    column = str(column)
+    avwap_match = re.fullmatch(r"VWAP (?P<anchor>\d{4}-\d{2}-\d{2})(?: 00:00:00)?", column)
+    if avwap_match:
+        return avwap_match.group("anchor"), "avwap"
+
+    atrs_match = re.fullmatch(r"ATRs_from_AVWAP_(?P<anchor>\d{4}-\d{2}-\d{2})(?: 00:00:00)?", column)
+    if atrs_match:
+        return atrs_match.group("anchor"), "atrs_from_avwap"
+
+    return None
+
+
+def _normalize_daily_ohlcv_column(column):
+    import re
+
+    column = str(column)
+    special_names = {
+        "+DI": "di_plus",
+        "-DI": "di_neg",
+        "%k": "stoch_k",
+        "%d": "stoch_d",
+        "C-O": "close_open_pct",
+        "H-L": "high_low_pct",
+        "H-Cp": "high_prev_close_pct",
+        "L-Cp": "low_prev_close_pct",
+        "Sum CxV": "sum_cxv",
+        "ATRs Traded_ex_gap": "atrs_traded_ex_gap",
+    }
+    if column in special_names:
+        return special_names[column]
+
+    dma_match = re.fullmatch(r"(\d+)DMA", column)
+    if dma_match:
+        return f"dma_{dma_match.group(1)}"
+
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", column).lower()
+    normalized = normalized.replace("+", "plus").replace("-", "_").replace("%", "pct")
+    normalized = re.sub(r"[^0-9a-zA-Z_]+", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized).strip("_").lower()
+    if not normalized:
+        normalized = "value"
+    if normalized[0].isdigit():
+        normalized = f"col_{normalized}"
+    return normalized
+
+
+def _daily_ohlcv_column_map(symbols):
+    stable_columns = []
+    seen_columns = set()
+    for symbol_data in symbols.values():
+        for column in symbol_data.df.columns:
+            if _parse_daily_avwap_column(column):
+                continue
+            if column in seen_columns:
+                continue
+            stable_columns.append(column)
+            seen_columns.add(column)
+
+    column_map = {}
+    used_names = set()
+    for column in stable_columns:
+        base_name = _normalize_daily_ohlcv_column(column)
+        name = base_name
+        suffix = 2
+        while name in used_names:
+            name = f"{base_name}_{suffix}"
+            suffix += 1
+        column_map[column] = name
+        used_names.add(name)
+
+    return stable_columns, column_map
+
+
+def _daily_ohlcv_frames_for_symbol(symbol, df, stable_columns, column_map):
+    import pandas as pd
+
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    date_column = df.index.name or "Date"
+    reset_df = df.reset_index().rename(columns={date_column: "date"})
+    stable_source_columns = [column for column in stable_columns if column in df.columns]
+    bars_df = reset_df[["date", *stable_source_columns]].rename(columns=column_map)
+    bars_df.insert(0, "symbol", symbol)
+    bars_df = bars_df.reindex(columns=["symbol", "date", *column_map.values()])
+    bars_df["date"] = pd.to_datetime(bars_df["date"]).dt.date
+    bars_df = bars_df.drop_duplicates(subset=["symbol", "date"], keep="last")
+
+    avwap_frames = []
+    avwap_columns_by_anchor = {}
+    for column in df.columns:
+        parsed = _parse_daily_avwap_column(column)
+        if not parsed:
+            continue
+        anchor_date, value_column = parsed
+        avwap_columns_by_anchor.setdefault(anchor_date, {})[value_column] = column
+
+    for anchor_date, value_columns in avwap_columns_by_anchor.items():
+        anchor_df = reset_df[["date"]].copy()
+        anchor_df["symbol"] = symbol
+        anchor_df["anchor_date"] = pd.to_datetime(anchor_date).date()
+        anchor_df["avwap"] = reset_df[value_columns["avwap"]] if "avwap" in value_columns else pd.NA
+        anchor_df["atrs_from_avwap"] = (
+            reset_df[value_columns["atrs_from_avwap"]]
+            if "atrs_from_avwap" in value_columns
+            else pd.NA
+        )
+        anchor_df["date"] = pd.to_datetime(anchor_df["date"]).dt.date
+        anchor_df = anchor_df[
+            ["symbol", "date", "anchor_date", "avwap", "atrs_from_avwap"]
+        ].dropna(subset=["avwap", "atrs_from_avwap"], how="all")
+        if not anchor_df.empty:
+            avwap_frames.append(anchor_df)
+
+    avwap_df = (
+        pd.concat(avwap_frames, ignore_index=True)
+        if avwap_frames
+        else pd.DataFrame(columns=["symbol", "date", "anchor_date", "avwap", "atrs_from_avwap"])
+    )
+    if not avwap_df.empty:
+        avwap_df = avwap_df.drop_duplicates(subset=["symbol", "date", "anchor_date"], keep="last")
+
+    return bars_df, avwap_df
+
+
+def _store_daily_ohlcv_symbols(symbols, database_password, progress_bar):
+    from sqlalchemy import Date, String, create_engine, text
+
+    stable_columns, column_map = _daily_ohlcv_column_map(symbols)
+    if not stable_columns:
+        return
+
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/daily_ohlcv"
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+    common_dtype = {"symbol": String(32), "date": Date()}
+    avwap_dtype = {**common_dtype, "anchor_date": Date()}
+
+    wrote_bars = False
+    wrote_avwap = False
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS daily_symbol_avwap"))
+        conn.execute(text("DROP TABLE IF EXISTS daily_symbol_bars"))
+
+    for symbol, symbol_data in progress_bar(
+        symbols.items(),
+        total=len(symbols),
+        desc="Storing daily OHLCV",
+    ):
+        bars_df, avwap_df = _daily_ohlcv_frames_for_symbol(
+            symbol,
+            symbol_data.df,
+            stable_columns,
+            column_map,
+        )
+        if not bars_df.empty:
+            bars_df.to_sql(
+                "daily_symbol_bars",
+                con=engine,
+                if_exists="append" if wrote_bars else "replace",
+                index=False,
+                method="multi",
+                chunksize=200,
+                dtype=common_dtype,
+            )
+            wrote_bars = True
+        if not avwap_df.empty:
+            avwap_df.to_sql(
+                "daily_symbol_avwap",
+                con=engine,
+                if_exists="append" if wrote_avwap else "replace",
+                index=False,
+                method="multi",
+                chunksize=1000,
+                dtype=avwap_dtype,
+            )
+            wrote_avwap = True
+
+    with engine.begin() as conn:
+        if wrote_bars:
+            conn.execute(text("ALTER TABLE daily_symbol_bars ADD PRIMARY KEY (symbol, date)"))
+        if wrote_avwap:
+            conn.execute(text("ALTER TABLE daily_symbol_avwap ADD PRIMARY KEY (symbol, date, anchor_date)"))
+            conn.execute(text("CREATE INDEX ix_daily_symbol_avwap_anchor ON daily_symbol_avwap (anchor_date)"))
+
+
 if __name__ == "__main__":
     # Windows multiprocessing safety:
     # When running from some interactive environments, __main__.__spec__ may not exist.
@@ -48,7 +344,9 @@ if __name__ == "__main__":
             "Skip daily storage of variables to MySQL database."
             """Variables skipped:
             daily_quant_rating_df
-            results_finvizsearch"""
+            results_finvizsearch
+            daily_ohlcv.daily_symbol_bars
+            daily_ohlcv.daily_symbol_avwap"""
         ),
     )
     args = parser.parse_args()
@@ -95,102 +393,16 @@ if __name__ == "__main__":
     daily_quant_rating_df = pd.read_sql("SELECT * FROM daily_quant_rating", con=engine)
     # daily_quant_rating_df = pd.read_csv(r"E:\Market Research\temporary.csv", index_col='Unnamed: 0')
     
-    if not args.skip_daily_storage:
-        if len(daily_quant_rating_df.columns) > 1000:
-            warnings.warn("Number of columns is greater than 1000. Limit is 1017.")
-            
-        daily_quant_rating_df.set_index('index', inplace=True)
-        #Concatenate new column
-        daily_quant_rating_df = pd.concat([daily_quant_rating_df, pd.DataFrame({datetime.datetime.today().date(): []})], axis=1)
-
-        #Request and add new values
-        #list of symbols
-        syms = list(symbols.keys())
-
-        #api requests
-        #assign counters
-        i=0
-        j=50
-        while True:
-                #break when list is exhausted
-                if i > len(syms):
-                    break
-                #assign None near end of list
-                if j > len(syms):
-                    j = None
-                #API call
-                url = "https://seeking-alpha.p.rapidapi.com/symbols/get-metrics"
-
-                querystring = {"symbols":f"{','.join(syms[i:j])}","fields":"quant_rating"}
-
-                headers = {
-                    "x-rapidapi-key": f"{seeking_alpha_api_key}",
-                    "x-rapidapi-host": "seeking-alpha.p.rapidapi.com",
-                    "accessToken": seeking_alpha_access_token
-                }
-
-                response_request = requests.get(url, headers=headers, params=querystring)
-
-                if response_request.status_code != 200:
-                    if response_request.status_code == 504:
-                        print('request status code is 504: Gateway Timeout; sleeping for 30 seconds and retrying')
-                        time.sleep(30)
-                        response_request = requests.get(url, headers=headers, params=querystring)
-                        response = response_request.json()
-                    else:
-                        print(f'request status code is {response_request.status_code}: retrying request after 30 seconds')
-                        time.sleep(30)
-                        response_request = requests.get(url, headers=headers, params=querystring)
-                        response = response_request.json()
-
-                response = response_request.json()
-                        
-                if response_request.status_code != 200:
-                    break
-                
-                if (j is not None) and (len(response['data']) == 0):
-                    raise ValueError('No response from Seeking Alpha API')
-                
-                #Container for symbol and respective rating
-                quant_ratings_errors = {}
-                try:
-                    sym_ratings = {sa.sym_by_id[_['id'].strip('[]').split(',')[0]]:_['attributes']['value'] for _ in response['data']}
-                except:
-                    sym_ratings = {}
-                    for _ in response['data']:
-                        try:
-                            sym_ratings[sa.sym_by_id[_['id'].strip('[]').split(',')[0]]] = _['attributes']['value']
-                        except Exception as e:
-                            quant_ratings_errors[f'{i}:{j}'] = ((i,j), _, e)
-                            continue
-                    pass
-                if len(quant_ratings_errors) > 3000:
-                    break
-                
-                #Insert rating to dataframe
-                for sym in sym_ratings:
-                    daily_quant_rating_df.loc[sym, datetime.datetime.today().date()] = sym_ratings[sym]
-                        
-                #Increment counters
-                i += 50
-                if j == None:
-                    break
-                j += 50
-                time.sleep(2)
-
-        daily_quant_rating_df.reset_index(inplace=True)
-        # write back, replace existing table
-        daily_quant_rating_df.to_sql("daily_quant_rating", 
-                con=engine, 
-                if_exists="replace", 
-                index=False, 
-                method="multi",
-                chunksize=200,
-                dtype={'date': DateTime})
-    daily_quant_rating_df.set_index('index', inplace=True)
-    daily_quant_rating_df.index.name = 'Symbol'
-    # daily_quant_rating_df.to_csv(r"E:\Market Research\temporary.csv")
-    daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
+    daily_quant_rating_executor = ProcessPoolExecutor(max_workers=1)
+    daily_quant_rating_future = daily_quant_rating_executor.submit(
+        _process_daily_quant_rating_df,
+        daily_quant_rating_df,
+        list(symbols.keys()),
+        seeking_alpha_api_key,
+        seeking_alpha_access_token,
+        database_password,
+        args.skip_daily_storage,
+    )
 
     #########################################################################
     
@@ -445,6 +657,12 @@ if __name__ == "__main__":
             )
         except:
             continue
+
+    try:
+        daily_quant_rating_df = daily_quant_rating_future.result()
+    finally:
+        daily_quant_rating_executor.shutdown()
+    print_section_time("Added daily quant rating")
     
     interest_list_long = il(source_symbols=symbols)
     interest_list_long.value_filter(rel_stren, 70, '>=', 'Technical', 'Long', 'rel_stren')
@@ -518,6 +736,9 @@ if __name__ == "__main__":
                 method="multi",
                 chunksize=200,
             )
+
+        _store_daily_ohlcv_symbols(symbols, database_password, tqdm)
+        print_section_time("Stored daily OHLCV tables")
     
     #Pickling most used objects, so I don't have to rerun the script.
     def save_snapshots(obj, name):
