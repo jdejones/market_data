@@ -12,7 +12,6 @@ from datetime import date, timedelta
 from typing import List, Iterable
 import time
 from collections.abc import Iterable, Mapping
-import yfinance as yf
 import seaborn as sns
 from tqdm import tqdm
 import requests

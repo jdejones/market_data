@@ -38,7 +38,7 @@ source .venv/bin/activate
 2) Install dependencies
 ```bash
 pip install \
-  pandas numpy matplotlib tqdm requests ratelimit yfinance \
+  pandas numpy matplotlib tqdm requests ratelimit \
   scipy scikit-posthocs plotly sec-api beautifulsoup4 \
   polygon-api-client SQLAlchemy mysql-connector-python finvizfinance \
   backtesting
@@ -75,8 +75,6 @@ seeking_alpha_api_key = "YOUR_RAPIDAPI_KEY_FOR_SEEKING_ALPHA"
 - **Seeking Alpha via RapidAPI**: meta-data, summary, ratings, earnings, transcripts, analyst targets
   - Hub: [RapidAPI – Seeking Alpha](https://rapidapi.com/)
   - Access: `X-RapidAPI-Key` header with `seeking_alpha_api_key`
-- **Yahoo Finance** via `yfinance` for convenience downloads
-  - Docs: [`yfinance` project page](https://pypi.org/project/yfinance/)
 - **Finviz** via `finvizfinance` for screening helpers
   - Docs: [`finvizfinance` project page](https://pypi.org/project/finvizfinance/)
 
@@ -213,6 +211,6 @@ print(stats[["Return [%]", "Sharpe Ratio", "# Trades"]])
 - Polygon.io for market data APIs.
 - SEC API for float and filings data.
 - Seeking Alpha via RapidAPI for analytics endpoints.
-- Yahoo Finance (via `yfinance`) and Finviz tooling.
+- Finviz tooling.
 
 If you have questions or need help adapting paths for your environment, consider opening an issue with details about your OS, Python version, and the exact error/traceback.

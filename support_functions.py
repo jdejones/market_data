@@ -1,4 +1,3 @@
-import yfinance as yf
 from market_data.price_data_import import api_import, intraday_import
 from market_data.add_technicals import RSI
 from market_data.watchlist_filters import Technical_Score_Calculator
@@ -35,8 +34,8 @@ class relative_strength:
             if sym in self.symbols.keys():
                 target = self.symbols[sym].df['Close'][self.lookback:]
             else:
-                target = yf.download(sym, period='max', interval='1d')['Close'][self.lookback:]
-            
+                target = api_import([sym])[sym]['Close'][self.lookback:]
+                       
             try:
                 try:
                     # Check if target index exactly matches bm index, or if target index matches the end of bm index
