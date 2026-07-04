@@ -18,11 +18,11 @@ if errorlevel 1 exit /b %errorlevel%
 call :run_script "recent_events.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\recent_events.py"
 if errorlevel 1 exit /b %errorlevel%
 
-call :run_script "pkl_to_openclaw.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\pkl_to_openclaw.py"
-if errorlevel 1 exit /b %errorlevel%
+REM call :run_script "pkl_to_openclaw.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\pkl_to_openclaw.py"
+REM if errorlevel 1 exit /b %errorlevel%
 
-call :run_script "db_to_openclaw.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\db_to_openclaw.py"
-if errorlevel 1 exit /b %errorlevel%
+REM call :run_script "db_to_openclaw.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\db_to_openclaw.py"
+REM if errorlevel 1 exit /b %errorlevel%
 
 exit /b 0
 
