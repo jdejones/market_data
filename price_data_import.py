@@ -3,7 +3,7 @@ from functools import wraps
 from market_data.api_keys import polygon_api_key
 from market_data import pd, datetime, tqdm, limits, sleep_and_retry, requests, time, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from sqlalchemy import create_engine
+from sqlalchemy import bindparam, create_engine, text
 from polygon.rest import RESTClient
 
 # at most 75 calls per 1 second window
@@ -305,53 +305,101 @@ def fragmented_intraday_import(dates_dict: dict[str, list[Tuple[datetime.date, d
 
 
 
-#TODO Update this code.
-def db_import(self, wl):
-        # Define the database connection parameters
-        user = 'User1'
-        password = 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
-        host = 'localhost'
-        database = 'historic_price_data_processed'
+def _daily_ohlcv_engine(database_password=None):
+    if database_password is None:
+        from market_data.api_keys import database_password as database_password
 
-        # Create a connection string
-        connection_string = f'mysql+mysqlconnector://{user}:{password}@{host}/{database}'
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/daily_ohlcv"
+    return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
-        # Create an SQLAlchemy engine
-        engine = create_engine(connection_string)
-        # for sym in self.symbols:
-        #     try:
-        #         table_name = sym
-        #         df = pd.read_sql_table(table_name, engine)
-        #         # df.drop('id', axis=1, inplace=True)
-        #         # df.set_index('date', drop=True, inplace=True)
-        #         self.saved_dict[sym] = df
-        #     except Exception as e:
-        #         print(sym , e, sep=': ')
-        # Function to read a single table
-        def read_table(sym, engine):
-            try:
-                sql_kws = pd.read_csv(r"E:\Programming\SQL\keywords", usecols=[1], names=['keywords']).keywords.to_list()
-                if sym in sql_kws:
-                    sym += '_'
-                table_name = sym
-                df = pd.read_sql_table(table_name, engine)
-                query = f"SELECT * FROM {sym}"
-                df = pd.read_sql_query(query, engine)
-                # df.drop('id', axis=1, inplace=True)
-                # df.set_index('date', drop=True, inplace=True)
-                return sym, df
-            except Exception as e:
-                print(sym, e, sep=': ')
-                return sym, None
-        # Use ThreadPoolExecutor to read tables concurrently
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_sym = {executor.submit(read_table, sym, engine): sym for sym in wl}
-            for future in as_completed(future_to_sym):
-                sym = future_to_sym[future]
-                try:
-                    sym, df = future.result()
-                    if df is not None:
-                        self.saved_dict[sym] = df
-                except Exception as e:
-                    print(sym, e, sep=': ')
+
+def _symbol_filter_query(base_query, symbols):
+    symbols = list(dict.fromkeys(symbols))
+    if not symbols:
+        return text(base_query), {}
+    return (
+        text(f"{base_query} WHERE symbol IN :symbols").bindparams(
+            bindparam("symbols", expanding=True)
+        ),
+        {"symbols": symbols},
+    )
+
+
+def daily_ohlcv_latest_dates(wl, database_password=None):
+    symbols = list(dict.fromkeys(wl))
+    if not symbols:
+        return {}
+
+    engine = _daily_ohlcv_engine(database_password)
+    query = text(
+        """
+        SELECT symbol, MAX(date) AS latest_date
+        FROM daily_symbol_bars
+        WHERE symbol IN :symbols
+        GROUP BY symbol
+        """
+    ).bindparams(bindparam("symbols", expanding=True))
+    latest_dates = pd.read_sql_query(query, con=engine, params={"symbols": symbols})
+    if latest_dates.empty:
+        return {}
+
+    latest_dates["latest_date"] = pd.to_datetime(latest_dates["latest_date"]).dt.date
+    return dict(zip(latest_dates["symbol"], latest_dates["latest_date"]))
+
+
+def db_import(wl, database_password=None):
+    symbols = list(dict.fromkeys(wl))
+    if not symbols:
+        return {}
+
+    engine = _daily_ohlcv_engine(database_password)
+    bars_query = text(
+        """
+        SELECT *
+        FROM daily_symbol_bars
+        WHERE symbol IN :symbols
+        ORDER BY symbol, date
+        """
+    ).bindparams(bindparam("symbols", expanding=True))
+    avwap_query = text(
+        """
+        SELECT symbol, date, anchor_date, avwap, atrs_from_avwap
+        FROM daily_symbol_avwap
+        WHERE symbol IN :symbols
+        ORDER BY symbol, date, anchor_date
+        """
+    ).bindparams(bindparam("symbols", expanding=True))
+    params = {"symbols": symbols}
+    bars = pd.read_sql_query(bars_query, con=engine, params=params)
+    avwap = pd.read_sql_query(avwap_query, con=engine, params=params)
+
+    data_dict = {}
+    if bars.empty:
+        return {sym: pd.DataFrame() for sym in symbols}
+
+    bars["date"] = pd.to_datetime(bars["date"])
+    if not avwap.empty:
+        avwap["date"] = pd.to_datetime(avwap["date"])
+        avwap["anchor_date"] = pd.to_datetime(avwap["anchor_date"]).dt.strftime("%Y-%m-%d")
+
+    for sym in symbols:
+        df = bars.loc[bars["symbol"] == sym].drop(columns=["symbol"]).copy()
+        if df.empty:
+            data_dict[sym] = pd.DataFrame()
+            continue
+
+        df = df.set_index("date").sort_index()
+        df.index.name = "Date"
+
+        sym_avwap = avwap.loc[avwap["symbol"] == sym] if not avwap.empty else pd.DataFrame()
+        if not sym_avwap.empty:
+            avwap_wide = sym_avwap.pivot(index="date", columns="anchor_date", values="avwap")
+            avwap_wide = avwap_wide.rename(columns=lambda anchor: f"VWAP {anchor}")
+            atrs_wide = sym_avwap.pivot(index="date", columns="anchor_date", values="atrs_from_avwap")
+            atrs_wide = atrs_wide.rename(columns=lambda anchor: f"ATRs_from_AVWAP_{anchor}")
+            df = df.join(avwap_wide).join(atrs_wide)
+
+        data_dict[sym] = df
+
+    return data_dict
 
