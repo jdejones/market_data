@@ -313,6 +313,24 @@ def _daily_ohlcv_engine(database_password=None):
     return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
 
+def _daily_ohlcv_table_exists(engine, table_name):
+    query = text(
+        """
+        SELECT COUNT(*) AS table_count
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name
+        """
+    )
+    table_count = pd.read_sql_query(query, con=engine, params={"table_name": table_name})
+    return bool(table_count["table_count"].iloc[0])
+
+
+def _is_historical_swing_column(column):
+    import re
+
+    return re.fullmatch(r"(?:Hi|Lo|hi|lo)\d+", str(column)) is not None
+
+
 def _symbol_filter_query(base_query, symbols):
     symbols = list(dict.fromkeys(symbols))
     if not symbols:
@@ -372,6 +390,18 @@ def db_import(wl, database_password=None):
     params = {"symbols": symbols}
     bars = pd.read_sql_query(bars_query, con=engine, params=params)
     avwap = pd.read_sql_query(avwap_query, con=engine, params=params)
+    if _daily_ohlcv_table_exists(engine, "historical_swings"):
+        swings_query = text(
+            """
+            SELECT *
+            FROM historical_swings
+            WHERE symbol IN :symbols
+            ORDER BY symbol, date
+            """
+        ).bindparams(bindparam("symbols", expanding=True))
+        historical_swings = pd.read_sql_query(swings_query, con=engine, params=params)
+    else:
+        historical_swings = pd.DataFrame()
 
     data_dict = {}
     if bars.empty:
@@ -381,6 +411,8 @@ def db_import(wl, database_password=None):
     if not avwap.empty:
         avwap["date"] = pd.to_datetime(avwap["date"])
         avwap["anchor_date"] = pd.to_datetime(avwap["anchor_date"]).dt.strftime("%Y-%m-%d")
+    if not historical_swings.empty:
+        historical_swings["date"] = pd.to_datetime(historical_swings["date"])
 
     for sym in symbols:
         df = bars.loc[bars["symbol"] == sym].drop(columns=["symbol"]).copy()
@@ -398,6 +430,25 @@ def db_import(wl, database_password=None):
             atrs_wide = sym_avwap.pivot(index="date", columns="anchor_date", values="atrs_from_avwap")
             atrs_wide = atrs_wide.rename(columns=lambda anchor: f"ATRs_from_AVWAP_{anchor}")
             df = df.join(avwap_wide).join(atrs_wide)
+
+        bar_swing_columns = [column for column in df.columns if _is_historical_swing_column(column)]
+        sym_swings = (
+            historical_swings.loc[historical_swings["symbol"] == sym]
+            if not historical_swings.empty
+            else pd.DataFrame()
+        )
+        if not sym_swings.empty:
+            if bar_swing_columns:
+                df = df.drop(columns=bar_swing_columns)
+            sym_swings = sym_swings.drop(columns=["symbol"]).set_index("date").sort_index()
+            df = df.join(sym_swings)
+            null_swing_columns = [
+                column
+                for column in df.columns
+                if _is_historical_swing_column(column) and df[column].isna().all()
+            ]
+            if null_swing_columns:
+                df = df.drop(columns=null_swing_columns)
 
         data_dict[sym] = df
 

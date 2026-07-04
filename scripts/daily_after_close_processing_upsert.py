@@ -129,6 +129,12 @@ def _parse_daily_avwap_column(column):
     return None
 
 
+def _is_historical_swing_column(column):
+    import re
+
+    return re.fullmatch(r"(?:Hi|Lo)\d+", str(column)) is not None
+
+
 def _normalize_daily_ohlcv_column(column):
     import re
 
@@ -168,7 +174,7 @@ def _daily_ohlcv_column_map(symbols):
     seen_columns = set()
     for symbol_data in symbols.values():
         for column in symbol_data.df.columns:
-            if _parse_daily_avwap_column(column):
+            if _parse_daily_avwap_column(column) or _is_historical_swing_column(column):
                 continue
             if column in seen_columns:
                 continue
@@ -320,6 +326,90 @@ def _upsert_daily_ohlcv_frame(conn, table_name, df, key_columns):
     return len(records)
 
 
+def _historical_swings_columns(symbols):
+    swing_columns = []
+    seen_columns = set()
+    for symbol_data in symbols.values():
+        for column in symbol_data.df.columns:
+            if not _is_historical_swing_column(column) or column in seen_columns:
+                continue
+            swing_columns.append(column)
+            seen_columns.add(column)
+    return swing_columns
+
+
+def _historical_swings_frame_for_symbol(symbol, df, swing_columns):
+    import pandas as pd
+
+    if df.empty:
+        return pd.DataFrame()
+
+    available_columns = [column for column in swing_columns if column in df.columns]
+    if not available_columns:
+        return pd.DataFrame()
+
+    date_column = df.index.name or "Date"
+    swings_df = df.reset_index().rename(columns={date_column: "date"})
+    swings_df = swings_df[["date", *available_columns]]
+    swings_df.insert(0, "symbol", symbol)
+    swings_df = swings_df.reindex(columns=["symbol", "date", *swing_columns])
+    swings_df["date"] = pd.to_datetime(swings_df["date"]).dt.date
+    swings_df = swings_df.drop_duplicates(subset=["symbol", "date"], keep="last")
+    return swings_df
+
+
+def _store_historical_swings(symbols, engine, progress_bar):
+    import pandas as pd
+
+    from sqlalchemy import Date, Float, String, text
+
+    swing_columns = _historical_swings_columns(symbols)
+    if not swing_columns:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS historical_swings"))
+        print("No historical swing columns found; dropped historical_swings table.")
+        return
+
+    frames = []
+    for symbol, symbol_data in progress_bar(
+        symbols.items(),
+        total=len(symbols),
+        desc="Preparing historical swings",
+    ):
+        swings_df = _historical_swings_frame_for_symbol(
+            symbol,
+            symbol_data.df,
+            swing_columns,
+        )
+        if not swings_df.empty:
+            frames.append(swings_df)
+
+    if not frames:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS historical_swings"))
+        print("No historical swing rows found; dropped historical_swings table.")
+        return
+
+    historical_swings = pd.concat(frames, ignore_index=True)
+    dtype = {
+        "symbol": String(32),
+        "date": Date(),
+        **{column: Float() for column in swing_columns},
+    }
+    with engine.begin() as conn:
+        _mysql_safe_dataframe(historical_swings).to_sql(
+            "historical_swings",
+            con=conn,
+            if_exists="replace",
+            index=False,
+            method="multi",
+            chunksize=1000,
+            dtype=dtype,
+        )
+        conn.execute(text("ALTER TABLE historical_swings ADD PRIMARY KEY (symbol, date)"))
+    print(f"Replaced historical_swings table with {len(historical_swings)} rows.")
+
+
 def _store_daily_ohlcv_symbols(symbols, database_password, progress_bar):
     import pandas as pd
 
@@ -331,6 +421,7 @@ def _store_daily_ohlcv_symbols(symbols, database_password, progress_bar):
 
     url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/daily_ohlcv"
     engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+    _store_historical_swings(symbols, engine, progress_bar)
     try:
         from market_data.price_data_import import daily_ohlcv_latest_dates
     except ModuleNotFoundError:
