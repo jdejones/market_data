@@ -106,6 +106,14 @@ def _process_daily_quant_rating_df(
     return daily_quant_rating_df
 
 
+def _mysql_safe_dataframe(df):
+    import numpy as np
+
+    if df.empty:
+        return df
+    return df.replace([np.inf, -np.inf], np.nan)
+
+
 def _parse_daily_avwap_column(column):
     import re
 
@@ -235,6 +243,8 @@ def _daily_ohlcv_frames_for_symbol(symbol, df, stable_columns, column_map):
 
 
 def _store_daily_ohlcv_symbols(symbols, database_password, progress_bar):
+    import pandas as pd
+
     from sqlalchemy import Date, String, create_engine, text
 
     stable_columns, column_map = _daily_ohlcv_column_map(symbols)
@@ -248,15 +258,50 @@ def _store_daily_ohlcv_symbols(symbols, database_password, progress_bar):
 
     wrote_bars = False
     wrote_avwap = False
+    bars_batch = []
+    avwap_batch = []
+    batch_symbol_count = 50
+
+    def flush_batch():
+        nonlocal wrote_bars, wrote_avwap, bars_batch, avwap_batch
+
+        if bars_batch:
+            bars_df = pd.concat(bars_batch, ignore_index=True)
+            _mysql_safe_dataframe(bars_df).to_sql(
+                "daily_symbol_bars",
+                con=engine,
+                if_exists="append",
+                index=False,
+                method="multi",
+                chunksize=1000,
+                dtype=common_dtype,
+            )
+            wrote_bars = True
+            bars_batch = []
+
+        if avwap_batch:
+            avwap_df = pd.concat(avwap_batch, ignore_index=True)
+            _mysql_safe_dataframe(avwap_df).to_sql(
+                "daily_symbol_avwap",
+                con=engine,
+                if_exists="append",
+                index=False,
+                method="multi",
+                chunksize=5000,
+                dtype=avwap_dtype,
+            )
+            wrote_avwap = True
+            avwap_batch = []
+
     with engine.begin() as conn:
         conn.execute(text("DROP TABLE IF EXISTS daily_symbol_avwap"))
         conn.execute(text("DROP TABLE IF EXISTS daily_symbol_bars"))
 
-    for symbol, symbol_data in progress_bar(
+    for symbol_index, (symbol, symbol_data) in enumerate(progress_bar(
         symbols.items(),
         total=len(symbols),
         desc="Storing daily OHLCV",
-    ):
+    ), start=1):
         bars_df, avwap_df = _daily_ohlcv_frames_for_symbol(
             symbol,
             symbol_data.df,
@@ -264,27 +309,13 @@ def _store_daily_ohlcv_symbols(symbols, database_password, progress_bar):
             column_map,
         )
         if not bars_df.empty:
-            bars_df.to_sql(
-                "daily_symbol_bars",
-                con=engine,
-                if_exists="append" if wrote_bars else "replace",
-                index=False,
-                method="multi",
-                chunksize=200,
-                dtype=common_dtype,
-            )
-            wrote_bars = True
+            bars_batch.append(bars_df)
         if not avwap_df.empty:
-            avwap_df.to_sql(
-                "daily_symbol_avwap",
-                con=engine,
-                if_exists="append" if wrote_avwap else "replace",
-                index=False,
-                method="multi",
-                chunksize=1000,
-                dtype=avwap_dtype,
-            )
-            wrote_avwap = True
+            avwap_batch.append(avwap_df)
+        if symbol_index % batch_symbol_count == 0:
+            flush_batch()
+
+    flush_batch()
 
     with engine.begin() as conn:
         if wrote_bars:
@@ -728,7 +759,7 @@ if __name__ == "__main__":
         summary_df = pd.DataFrame(summary_rows)
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM summary"))
-            summary_df.to_sql(
+            _mysql_safe_dataframe(summary_df).to_sql(
                 "summary",
                 con=conn,
                 if_exists="append",
