@@ -2,7 +2,7 @@
 The next functions that I should work on are those that access the SEC API.
 """
 
-from market_data import pd, json, os, datetime, np, yf, plt, px, FloatApi, find_peaks, create_engine, text
+from market_data import pd, json, os, datetime, np, plt, px, FloatApi, find_peaks, create_engine, text
 from market_data.api_keys import sec_api_key, polygon_api_key, database_password
 from market_data.price_data_import import api_import
 from polygon.rest import RESTClient
