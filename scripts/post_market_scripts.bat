@@ -12,7 +12,7 @@ set "DETAILED_LOG_FILE=C:\Users\jdejo\Market_Data_Processing\market_data\scripts
 
 cd /d "C:\Users\jdejo\Market_Data_Processing\market_data"
 
-call :run_script "daily_after_close_processing.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\daily_after_close_processing.py"
+call :run_script "daily_after_close_processing_upsert.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\daily_after_close_processing_upsert.py"
 if errorlevel 1 exit /b %errorlevel%
 
 call :run_script "recent_events.py" "C:\Users\jdejo\Market_Data_Processing\market_data\scripts\recent_events.py"
