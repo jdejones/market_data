@@ -750,37 +750,37 @@ if __name__ == "__main__":
         except Exception as e:
             print(sym, e, sep=': ')
                         
-    # from finvizfinance.screener.custom import Custom
-    # from finvizfinance.constants import CUSTOM_SCREENER_COLUMNS
-    # custom = Custom()
-    # cols = list(CUSTOM_SCREENER_COLUMNS.keys())
-    # try:
-    #     results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
-    # except ConnectionError:
-    #     results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
-    # results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Previous Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
-    # results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
-    # results_finvizsearch['Market Cap.'] = results_finvizsearch['Market Cap.'].replace(0, np.nan)
-    # results_finvizsearch['DV_Cap'] = results_finvizsearch['DV'] / results_finvizsearch['Market Cap.']
-    # dv_cap = results_finvizsearch[['Ticker', 'DV_Cap']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3).sort_values('DV_Cap')
-    # results_finvizsearch['Performance (YearToDate)'] = pd.to_numeric(results_finvizsearch['Performance (YearToDate)'].str.replace('.', '').str.replace('%', ''), errors='coerce').astype(float) / 100
-    # results_finvizsearch['perf_dvcap_dist'] = results_finvizsearch.apply(lambda x: np.linalg.norm(np.array([x['Performance (YearToDate)'], x['DV_Cap']])), axis=1)
-    # perf_dvcap_dist = results_finvizsearch[['Ticker', 'perf_dvcap_dist']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3)
-    # columns_with_percent = [col for col in results_finvizsearch.columns if (results_finvizsearch[col].astype(str).str.contains('%').any()) and (col != 'Company')]
-    # results_finvizsearch = results_finvizsearch.rename({col: f'{col}(%)' for col in columns_with_percent}, axis=1)
-    # for col in columns_with_percent:
-    #         results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'].str.replace('%', '')
-    #         results_finvizsearch[f'{col}(%)'] = pd.to_numeric(results_finvizsearch[f'{col}(%)'], errors='coerce')
-    #         results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'] / 100
-    # if not args.skip_daily_storage:
-    #     rfs_url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/results_finvizsearch"
-    #     rfs_engine = create_engine(rfs_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
-    #     results_finvizsearch.to_sql(datetime.datetime.today().date().strftime("%Y_%m_%d"),
-    #                                 con=rfs_engine,
-    #                                 if_exists="replace",
-    #                                 index=False,
-    #                                 method="multi",
-    #                                 chunksize=200)
+    from finvizfinance.screener.custom import Custom
+    from finvizfinance.constants import CUSTOM_SCREENER_COLUMNS
+    custom = Custom()
+    cols = list(CUSTOM_SCREENER_COLUMNS.keys())
+    try:
+        results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
+    except ConnectionError:
+        results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
+    results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Previous Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
+    results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
+    results_finvizsearch['Market Cap.'] = results_finvizsearch['Market Cap.'].replace(0, np.nan)
+    results_finvizsearch['DV_Cap'] = results_finvizsearch['DV'] / results_finvizsearch['Market Cap.']
+    dv_cap = results_finvizsearch[['Ticker', 'DV_Cap']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3).sort_values('DV_Cap')
+    results_finvizsearch['Performance (YearToDate)'] = pd.to_numeric(results_finvizsearch['Performance (YearToDate)'].str.replace('.', '').str.replace('%', ''), errors='coerce').astype(float) / 100
+    results_finvizsearch['perf_dvcap_dist'] = results_finvizsearch.apply(lambda x: np.linalg.norm(np.array([x['Performance (YearToDate)'], x['DV_Cap']])), axis=1)
+    perf_dvcap_dist = results_finvizsearch[['Ticker', 'perf_dvcap_dist']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3)
+    columns_with_percent = [col for col in results_finvizsearch.columns if (results_finvizsearch[col].astype(str).str.contains('%').any()) and (col != 'Company')]
+    results_finvizsearch = results_finvizsearch.rename({col: f'{col}(%)' for col in columns_with_percent}, axis=1)
+    for col in columns_with_percent:
+            results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'].str.replace('%', '')
+            results_finvizsearch[f'{col}(%)'] = pd.to_numeric(results_finvizsearch[f'{col}(%)'], errors='coerce')
+            results_finvizsearch[f'{col}(%)'] = results_finvizsearch[f'{col}(%)'] / 100
+    if not args.skip_daily_storage:
+        rfs_url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/results_finvizsearch"
+        rfs_engine = create_engine(rfs_url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
+        results_finvizsearch.to_sql(datetime.datetime.today().date().strftime("%Y_%m_%d"),
+                                    con=rfs_engine,
+                                    if_exists="replace",
+                                    index=False,
+                                    method="multi",
+                                    chunksize=200)
         
     
     top_rstren = [item[0] for item in rel_stren if (item[1] > 70) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
@@ -863,11 +863,11 @@ if __name__ == "__main__":
         except:
             continue
 
-    # try:
-    #     daily_quant_rating_df = daily_quant_rating_future.result()
-    # finally:
-    #     daily_quant_rating_executor.shutdown()
-    # print_section_time("Added daily quant rating")
+    try:
+        daily_quant_rating_df = daily_quant_rating_future.result()
+    finally:
+        daily_quant_rating_executor.shutdown()
+    print_section_time("Added daily quant rating")
     
     interest_list_long = il(source_symbols=symbols)
     interest_list_long.value_filter(rel_stren, 70, '>=', 'Technical', 'Long', 'rel_stren')
@@ -880,11 +880,11 @@ if __name__ == "__main__":
 
     interest_list_long.value_filter(qplus1, 50, '>=', 'Fundamental', 'Long', 'qplus1')
     interest_list_long.value_filter(qplus4, 100, '>=', 'Fundamental', 'Long', 'qplus4')
-    # quant_rating_interest = daily_quant_rating_df[daily_quant_rating_df.columns[-2]].reset_index()
-    # quant_rating_interest = [(sym, val) for sym, val in 
-    #                          zip(quant_rating_interest['Symbol'], quant_rating_interest[quant_rating_interest.columns[-1]])
-    #                          if sym in symbols]
-    # interest_list_long.value_filter(quant_rating_interest, 4.9, '>=', 'Fundamental', 'Long', 'daily_quant_rating')
+    quant_rating_interest = daily_quant_rating_df[daily_quant_rating_df.columns[-2]].reset_index()
+    quant_rating_interest = [(sym, val) for sym, val in 
+                             zip(quant_rating_interest['Symbol'], quant_rating_interest[quant_rating_interest.columns[-1]])
+                             if sym in symbols]
+    interest_list_long.value_filter(quant_rating_interest, 4.9, '>=', 'Fundamental', 'Long', 'daily_quant_rating')
     
     with open(fr"{wl.systematic_watchlists_root}\interest_list_long.txt", "w") as f:
         for sym in interest_list_long.interest_list:
@@ -953,7 +953,7 @@ if __name__ == "__main__":
             
     variables = (
         (symbols,'symbols'),
-        # (daily_quant_rating_df, 'daily_quant_rating_df'),
+        (daily_quant_rating_df, 'daily_quant_rating_df'),
         (sec, 'sec'),
         (ind, 'ind'),
         (sp500, 'sp500'),
@@ -970,7 +970,7 @@ if __name__ == "__main__":
         (perf_since_earnings, 'perf_since_earnings'),
         (days_elevated_rvol, 'days_elevated_rvol'),
         (days_range_expansion, 'days_range_expansion'),
-        # (results_finvizsearch, 'results_finvizsearch'),
+        (results_finvizsearch, 'results_finvizsearch'),
         (tsc, 'tsc'),
         (tsc_sec, 'tsc_sec'),
         (tsc_ind, 'tsc_ind'),
