@@ -289,6 +289,7 @@ class CurrentRvolGUI:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.status_var = tk.StringVar(value="Starting...")
+        self.symbol_count_var = tk.StringVar(value="Shown: 0 / Populated: 0")
         self.threshold_var = tk.StringVar(value=str(config.initial_threshold))
         self.pause_button_text = tk.StringVar(value="Pause Updates")
 
@@ -362,11 +363,14 @@ class CurrentRvolGUI:
             sticky="ew",
             padx=(0, 8),
         )
-        ttk.Label(container, textvariable=self.status_var).grid(
-            row=3,
-            column=4,
-            sticky=tk.W,
+        status_frame = ttk.Frame(container)
+        status_frame.grid(row=3, column=4, sticky="ew")
+        ttk.Label(status_frame, textvariable=self.status_var).pack(
+            side=tk.LEFT,
+            fill=tk.X,
+            expand=True,
         )
+        ttk.Label(status_frame, textvariable=self.symbol_count_var).pack(side=tk.RIGHT)
 
         for column_index in range(5):
             container.columnconfigure(column_index, weight=1)
@@ -426,6 +430,9 @@ class CurrentRvolGUI:
             for row in rows
             if float(row.get(RVOL_COLUMN, float("-inf"))) >= threshold
         ]
+        self.symbol_count_var.set(
+            f"Shown: {len(sorted_rows)} / Populated: {len(rows)}"
+        )
         if self.sort_column == SYMBOL_COLUMN:
             sorted_rows.sort(
                 key=lambda row: str(row.get(SYMBOL_COLUMN, "")).upper(),
