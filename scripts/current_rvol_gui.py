@@ -72,6 +72,7 @@ class GuiConfig:
     process_workers: int
     market_open_only: bool
     events_table: str
+    current_events_refresh_seconds: float
     update_elevated_table: bool
     update_ep_rvol_table: bool
     verbose: bool
@@ -194,59 +195,75 @@ def load_latest_quant_ratings(engine: Engine) -> tuple[dict[str, Any], str | Non
 
 def load_latest_events(
     engine: Engine,
-    preferred_table: str,
+    table_name: str,
+    event_date: dt.date | None = None,
 ) -> tuple[dict[str, str], str | None]:
-    table_candidates = [preferred_table]
-    if preferred_table != FALLBACK_EVENTS_TABLE:
-        table_candidates.append(FALLBACK_EVENTS_TABLE)
+    try:
+        columns = existing_columns(engine, table_name)
+    except Exception:
+        return {}, None
 
-    for table_name in table_candidates:
-        try:
-            columns = existing_columns(engine, table_name)
-        except Exception:
-            continue
+    symbol_column = resolve_column(columns, SYMBOL_COLUMN_CANDIDATES)
+    date_column = resolve_column(columns, DATE_COLUMN_CANDIDATES)
+    event_column = resolve_column(columns, EVENT_SUMMARY_COLUMN_CANDIDATES)
+    if not symbol_column or not date_column or not event_column:
+        return {}, None
 
-        symbol_column = resolve_column(columns, SYMBOL_COLUMN_CANDIDATES)
-        date_column = resolve_column(columns, DATE_COLUMN_CANDIDATES)
-        event_column = resolve_column(columns, EVENT_SUMMARY_COLUMN_CANDIDATES)
-        if not symbol_column or not date_column or not event_column:
-            continue
+    date_filter = (
+        f"AND DATE({mysql_identifier(date_column)}) = :event_date"
+        if event_date is not None
+        else ""
+    )
+    query = text(
+        f"""
+        SELECT
+            {mysql_identifier(symbol_column)} AS symbol,
+            {mysql_identifier(date_column)} AS event_date,
+            {mysql_identifier(event_column)} AS event_summary
+        FROM {mysql_identifier(table_name)}
+        WHERE {mysql_identifier(symbol_column)} IS NOT NULL
+          AND {mysql_identifier(date_column)} IS NOT NULL
+          AND {mysql_identifier(event_column)} IS NOT NULL
+          {date_filter}
+        """
+    )
+    params = {"event_date": event_date} if event_date is not None else None
+    frame = pd.read_sql(query, con=engine, params=params)
+    if frame.empty:
+        return {}, table_name
 
-        query = text(
-            f"""
-            SELECT
-                {mysql_identifier(symbol_column)} AS symbol,
-                {mysql_identifier(date_column)} AS event_date,
-                {mysql_identifier(event_column)} AS event_summary
-            FROM {mysql_identifier(table_name)}
-            WHERE {mysql_identifier(symbol_column)} IS NOT NULL
-              AND {mysql_identifier(date_column)} IS NOT NULL
-              AND {mysql_identifier(event_column)} IS NOT NULL
-            """
-        )
-        frame = pd.read_sql(query, con=engine)
-        if frame.empty:
-            return {}, table_name
+    frame["event_date"] = pd.to_datetime(frame["event_date"], errors="coerce")
+    frame = frame.dropna(subset=["event_date"])
+    if frame.empty:
+        return {}, table_name
 
-        frame["event_date"] = pd.to_datetime(frame["event_date"], errors="coerce")
-        frame = frame.dropna(subset=["event_date"])
-        if frame.empty:
-            return {}, table_name
+    frame["symbol"] = frame["symbol"].astype(str).str.upper()
+    latest = (
+        frame.sort_values(["symbol", "event_date"])
+        .groupby("symbol", as_index=False)
+        .tail(1)
+    )
+    events = {
+        str(row.symbol).upper(): str(row.event_summary).strip()
+        for row in latest.itertuples(index=False)
+        if row.event_summary is not None and str(row.event_summary).strip()
+    }
+    return events, table_name
 
-        frame["symbol"] = frame["symbol"].astype(str).str.upper()
-        latest = (
-            frame.sort_values(["symbol", "event_date"])
-            .groupby("symbol", as_index=False)
-            .tail(1)
-        )
-        events = {
-            str(row.symbol).upper(): str(row.event_summary)
-            for row in latest.itertuples(index=False)
-            if row.event_summary is not None and str(row.event_summary).strip()
-        }
-        return events, table_name
 
-    return {}, None
+def combine_event_summaries(
+    historical_summary: str,
+    current_summary: str,
+) -> str:
+    historical_summary = historical_summary.strip()
+    current_summary = current_summary.strip()
+    if not current_summary:
+        return historical_summary
+    if not historical_summary:
+        return f"Today: {current_summary}"
+    if current_summary.casefold() == historical_summary.casefold():
+        return f"Today: {current_summary}"
+    return f"Today: {current_summary} | Previous: {historical_summary}"
 
 
 def format_number(value: Any) -> str:
@@ -336,41 +353,73 @@ class CurrentRvolGUI:
         y_scroll.grid(row=0, column=5, sticky="ns")
         x_scroll.grid(row=1, column=0, columnspan=5, sticky="ew")
 
-        ttk.Label(container, text="RVol Threshold").grid(
+        footer = ttk.Frame(container)
+        footer.grid(
             row=2,
             column=0,
-            sticky=tk.W,
+            columnspan=5,
+            sticky="ew",
             pady=(10, 0),
         )
-        threshold_entry = ttk.Entry(container, textvariable=self.threshold_var, width=12)
-        threshold_entry.grid(row=3, column=0, sticky="ew", padx=(0, 8))
+        footer.columnconfigure(0, weight=1)
+
+        threshold_frame = ttk.Frame(footer)
+        threshold_frame.grid(row=0, column=0, sticky="w")
+        ttk.Label(threshold_frame, text="RVol Threshold").pack(side=tk.LEFT)
+        threshold_entry = ttk.Entry(
+            threshold_frame,
+            textvariable=self.threshold_var,
+            width=12,
+        )
+        threshold_entry.pack(side=tk.LEFT, padx=(8, 0))
         threshold_entry.bind("<Return>", lambda _event: self.apply_threshold())
 
-        ttk.Button(container, text="Apply Threshold", command=self.apply_threshold).grid(
-            row=3,
-            column=1,
+        controls_frame = ttk.Frame(footer)
+        controls_frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        for column_index in range(3):
+            controls_frame.columnconfigure(column_index, weight=1)
+
+        ttk.Button(
+            controls_frame,
+            text="Apply Threshold",
+            command=self.apply_threshold,
+        ).grid(
+            row=0,
+            column=0,
             sticky="ew",
             padx=(0, 8),
         )
         ttk.Button(
-            container,
+            controls_frame,
             textvariable=self.pause_button_text,
             command=self.toggle_pause,
-        ).grid(row=3, column=2, sticky="ew", padx=(0, 8))
-        ttk.Button(container, text="Refresh Now", command=self.refresh_last_rows).grid(
-            row=3,
-            column=3,
+        ).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Button(
+            controls_frame,
+            text="Refresh Now",
+            command=self.refresh_last_rows,
+        ).grid(
+            row=0,
+            column=2,
             sticky="ew",
-            padx=(0, 8),
         )
-        status_frame = ttk.Frame(container)
-        status_frame.grid(row=3, column=4, sticky="ew")
-        ttk.Label(status_frame, textvariable=self.status_var).pack(
-            side=tk.LEFT,
-            fill=tk.X,
-            expand=True,
+
+        status_label = ttk.Label(
+            footer,
+            textvariable=self.status_var,
+            justify=tk.LEFT,
         )
-        ttk.Label(status_frame, textvariable=self.symbol_count_var).pack(side=tk.RIGHT)
+        status_label.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(footer, textvariable=self.symbol_count_var).grid(
+            row=3,
+            column=0,
+            sticky="w",
+            pady=(2, 0),
+        )
+        footer.bind(
+            "<Configure>",
+            lambda event: status_label.configure(wraplength=max(event.width, 1)),
+        )
 
         for column_index in range(5):
             container.columnconfigure(column_index, weight=1)
@@ -495,13 +544,19 @@ class CurrentRvolGUI:
         metadata_engine = make_metadata_engine(STOCKS_DB)
         stream_engine = make_engine(STREAM_DB)
         current_rvol = load_current_rvol_module()
+        if self.config.update_elevated_table:
+            # Clear yesterday's candidates before the potentially slow profile build.
+            # This prevents independent intraday consumers from reading stale rows.
+            current_rvol.reset_elevated_rvol_table(stocks_engine)
 
         self.output_queue.put(("status", "Loading quant ratings and recent events..."))
         quant_ratings, latest_quant_column = load_latest_quant_ratings(metadata_engine)
-        recent_events, events_table = load_latest_events(
+        recent_events, historical_events_table = load_latest_events(
             metadata_engine,
-            self.config.events_table,
+            FALLBACK_EVENTS_TABLE,
         )
+        current_events: dict[str, str] = {}
+        last_current_events_refresh = float("-inf")
 
         target_date = dt.datetime.now(EASTERN).date()
         self.output_queue.put(("status", "Building historical RVol profiles..."))
@@ -525,8 +580,6 @@ class CurrentRvolGUI:
             alter_chunk_size=self.config.alter_chunk_size,
             insert_chunksize=self.config.insert_chunksize,
         )
-        if self.config.update_elevated_table:
-            current_rvol.reset_elevated_rvol_table(stocks_engine)
         episodic_pivot_symbols: set[str] = set()
         if self.config.update_ep_rvol_table:
             episodic_pivot_symbols = current_rvol.load_symbol_set(
@@ -542,8 +595,9 @@ class CurrentRvolGUI:
         metadata = []
         if latest_quant_column:
             metadata.append(f"quant={latest_quant_column}")
-        if events_table:
-            metadata.append(f"events={events_table}")
+        if historical_events_table:
+            metadata.append(f"historical_events={historical_events_table}")
+        metadata.append(f"current_events={self.config.events_table}")
         if self.config.update_ep_rvol_table:
             metadata.append(f"ep_rvol_symbols={len(episodic_pivot_symbols)}")
         metadata_text = f" ({', '.join(metadata)})" if metadata else ""
@@ -592,10 +646,32 @@ class CurrentRvolGUI:
                     episodic_pivot_symbols,
                 )
 
+            now_monotonic = time.monotonic()
+            if (
+                now_monotonic - last_current_events_refresh
+                >= self.config.current_events_refresh_seconds
+            ):
+                try:
+                    refreshed_events, refreshed_table = load_latest_events(
+                        metadata_engine,
+                        self.config.events_table,
+                        event_date=current_day,
+                    )
+                    if refreshed_table is not None:
+                        current_events = refreshed_events
+                except Exception as exc:
+                    if self.config.verbose:
+                        self.output_queue.put(
+                            ("status", f"Current-events refresh failed: {exc}")
+                        )
+                finally:
+                    last_current_events_refresh = now_monotonic
+
             display_rows = self.display_rows(
                 state.latest_rvol,
                 quant_ratings,
                 recent_events,
+                current_events,
             )
             self.output_queue.put(("rows", display_rows))
 
@@ -621,13 +697,17 @@ class CurrentRvolGUI:
         latest_rvol: dict[str, float],
         quant_ratings: dict[str, Any],
         recent_events: dict[str, str],
+        current_events: dict[str, str],
     ) -> list[dict[str, Any]]:
         return [
             {
                 SYMBOL_COLUMN: symbol,
                 RVOL_COLUMN: rvol,
                 QUANT_RATING_COLUMN: quant_ratings.get(symbol, ""),
-                RECENT_EVENT_COLUMN: recent_events.get(symbol, ""),
+                RECENT_EVENT_COLUMN: combine_event_summaries(
+                    recent_events.get(symbol, ""),
+                    current_events.get(symbol, ""),
+                ),
             }
             for symbol, rvol in latest_rvol.items()
         ]
@@ -665,10 +745,11 @@ def parse_args() -> argparse.Namespace:
         "--events-table",
         default=DEFAULT_EVENTS_TABLE,
         help=(
-            "Stocks database table containing event summaries. "
-            f"Falls back to {FALLBACK_EVENTS_TABLE!r} if available."
+            "Stocks database table containing today's intraday event summaries. "
+            f"Historical summaries always come from {FALLBACK_EVENTS_TABLE!r}."
         ),
     )
+    parser.add_argument("--current-events-refresh-seconds", type=float, default=30.0)
     parser.add_argument(
         "--update-elevated-table",
         action="store_true",
@@ -685,6 +766,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.current_events_refresh_seconds <= 0:
+        raise ValueError("--current-events-refresh-seconds must be greater than zero")
     config = GuiConfig(
         symbols_file=args.symbols_file,
         lookback_days=args.lookback_days,
@@ -698,6 +781,7 @@ def main() -> None:
         process_workers=args.process_workers,
         market_open_only=args.market_open_only,
         events_table=args.events_table,
+        current_events_refresh_seconds=args.current_events_refresh_seconds,
         update_elevated_table=args.update_elevated_table,
         update_ep_rvol_table=args.update_ep_rvol_table,
         verbose=args.verbose,
