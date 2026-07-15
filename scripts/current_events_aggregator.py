@@ -183,15 +183,6 @@ def parse_args() -> argparse.Namespace:
             "elevated_rvol, allowing Current RVol to clear stale startup rows."
         ),
     )
-    parser.add_argument(
-        "--run-duration-hours",
-        type=float,
-        default=None,
-        help=(
-            "Stop automatically after this many hours. By default, run until "
-            "interrupted."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -200,18 +191,11 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--poll-interval must be greater than zero")
     if args.startup_delay < 0:
         raise ValueError("--startup-delay cannot be negative")
-    if args.run_duration_hours is not None and args.run_duration_hours <= 0:
-        raise ValueError("--run-duration-hours must be greater than zero")
 
 
 def main() -> None:
     args = parse_args()
     validate_args(args)
-    deadline = (
-        time.monotonic() + (args.run_duration_hours * 60 * 60)
-        if args.run_duration_hours is not None
-        else None
-    )
     stocks_engine = make_engine(STOCKS_DB)
     news_engine = make_engine(NEWS_DB)
 
@@ -221,12 +205,7 @@ def main() -> None:
         flush=True,
     )
     sleep_with_status(
-        min(
-            args.startup_delay,
-            max(0.0, deadline - time.monotonic()),
-        )
-        if deadline is not None
-        else args.startup_delay,
+        args.startup_delay,
         "Waiting for the Current RVol startup reset to finish.",
     )
 
@@ -240,13 +219,6 @@ def main() -> None:
 
     try:
         while True:
-            if deadline is not None and time.monotonic() >= deadline:
-                print(
-                    f"Run duration of {args.run_duration_hours:g} hour(s) completed.",
-                    flush=True,
-                )
-                break
-
             current_date = dt.datetime.now(EASTERN).date()
             if current_date != event_date:
                 clear_current_events(stocks_engine)
@@ -268,13 +240,7 @@ def main() -> None:
             except Exception as exc:
                 print(f"Candidate polling failed: {exc}", flush=True)
 
-            sleep_seconds = args.poll_interval
-            if deadline is not None:
-                sleep_seconds = min(
-                    sleep_seconds,
-                    max(0.0, deadline - time.monotonic()),
-                )
-            time.sleep(sleep_seconds)
+            time.sleep(args.poll_interval)
     except KeyboardInterrupt:
         print("Current-events aggregator stopped.", flush=True)
 
