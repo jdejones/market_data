@@ -63,6 +63,86 @@ class relative_strength:
     def __getitem__(self, key):
         return self.df[key]
 
+
+def relative(
+    df: pd.DataFrame,
+    bm: pd.Series = None,
+    start=None,
+    end=None,
+    normalize: bool = True,
+    include_rsi: bool = False,
+    rsi_period: int = 21,
+    decimals: int = 3,
+) -> pd.DataFrame:
+    """Calculate OHLC prices relative to a benchmark.
+
+    The default output is normalized to 100 at the first relative Close so
+    relative performance can be compared directly across symbols. Set
+    ``normalize=False`` to retain the unscaled price/benchmark ratios.
+
+    Args:
+        df: OHLC price data using the repository's standard column names.
+        bm: Benchmark Close series. SPY is fetched when no series is supplied.
+        start: Optional beginning label or positional offset for the calculation.
+        end: Optional ending label or positional offset for the calculation.
+        normalize: Normalize the relative series to an initial Close value of 100.
+        include_rsi: Add RSI calculated from the relative Close series.
+        rsi_period: RSI lookback period used when ``include_rsi`` is True.
+        decimals: Number of decimal places used for returned relative values.
+
+    Returns:
+        A copy of the aligned price data with Relative_Open, Relative_High,
+        Relative_Low, and Relative_Close columns, plus RSI_<period> when
+        requested.
+    """
+    price_columns = ["Open", "High", "Low", "Close"]
+    missing_columns = [column for column in price_columns if column not in df.columns]
+    if missing_columns:
+        raise KeyError(f"df is missing required columns: {missing_columns}")
+    if rsi_period <= 0:
+        raise ValueError("rsi_period must be greater than zero")
+
+    result = df[start:end].copy()
+    if bm is None:
+        bm = api_import(["SPY"])["SPY"]["Close"]
+    if not isinstance(bm, pd.Series):
+        raise TypeError("bm must be a pandas Series containing benchmark Close prices")
+
+    benchmark = bm.rename("Benchmark")
+    result = result.join(benchmark, how="inner")
+    result["Benchmark"] = result["Benchmark"].ffill()
+    result = result.dropna(subset=price_columns + ["Benchmark"])
+
+    if result.empty:
+        raise ValueError("df and bm have no usable observations with matching indexes")
+    if result["Benchmark"].eq(0).any():
+        raise ValueError("bm contains zero values and cannot be used as a divisor")
+
+    relative_columns = []
+    for column in price_columns:
+        relative_column = f"Relative_{column}"
+        result[relative_column] = result[column].div(result["Benchmark"])
+        relative_columns.append(relative_column)
+
+    if normalize:
+        initial_relative_close = result["Relative_Close"].iloc[0]
+        if initial_relative_close == 0:
+            raise ValueError("the initial relative Close is zero and cannot be normalized")
+        result[relative_columns] = (
+            result[relative_columns].div(initial_relative_close).mul(100)
+        )
+
+    if include_rsi:
+        RSI(result, base="Relative_Close", period=rsi_period)
+
+    columns_to_round = relative_columns.copy()
+    if include_rsi:
+        columns_to_round.append(f"RSI_{rsi_period}")
+    result[columns_to_round] = result[columns_to_round].round(decimals)
+
+    return result.drop(columns=["Benchmark"])
+
+
 def create_index(symbols, level='sector'):    
     def indexer(dict_of_frames):
         """Indexer accepts a dictionary of dataframes and returns an OHLC time series dataframe with cumulative market cap values
