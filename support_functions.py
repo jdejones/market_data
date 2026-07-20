@@ -73,7 +73,7 @@ def relative(
     include_rsi: bool = False,
     rsi_period: int = 21,
     decimals: int = 3,
-) -> pd.DataFrame:
+    ) -> pd.DataFrame:
     """Calculate OHLC prices relative to a benchmark.
 
     The default output is normalized to 100 at the first relative Close so
