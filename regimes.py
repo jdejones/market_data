@@ -39,13 +39,15 @@ def _floor_ceiling_worker(args):
     ProcessPoolExecutor worker (must be top-level / picklable).
     Returns (symbol, updated_df).
     """
-    sym, df = args
+    sym, df, relative = args
     df = df.copy()  # Performance warning workaround; keep worker side effects local.
     r = Regimes({})
     r.reset_variables()
-    r.lower_upper_OHLC(df)
-    r.regime_args(df)
+    r.lower_upper_OHLC(df, relative=relative)
+    r.regime_args(df, relative=relative)
     r.historical_swings(df)
+    r.latest_swing_variables(df)
+    r.retracement_swing(df)
     r.regime_floor_ceiling(df)
     return sym, df
 
@@ -254,12 +256,14 @@ class Regimes:
         return df
 
     # helper to do one symbol for floor/ceiling combo
-    def _process_floor_ceiling_symbol(self, sym):
+    def _process_floor_ceiling_symbol(self, sym, relative=False):
         df = self.symbols[sym].df.copy() # Performance warning workaround.
         self.reset_variables()
-        self.lower_upper_OHLC(df)
-        self.regime_args(df)
+        self.lower_upper_OHLC(df, relative=relative)
+        self.regime_args(df, relative=relative)
         self.historical_swings(df)
+        self.latest_swing_variables(df)
+        self.retracement_swing(df)
         self.regime_floor_ceiling(df)
         return df
 
@@ -341,7 +345,7 @@ class Regimes:
             df = self._process_regime_ma_symbol(symbol)
             self.symbols[symbol].df = df             
 
-    def floor_ceiling_combo(self, single_symbol=False, symbol=None, watchlist=None):
+    def floor_ceiling_combo(self, single_symbol=False, symbol=None, watchlist=None, relative=False):
         # if watchlist == None:
         #     watchlist = self.symbols.keys()
         # if single_symbol == False:
@@ -366,7 +370,7 @@ class Regimes:
             watchlist = self.symbols.keys()
         if not single_symbol:
             with ProcessPoolExecutor() as executor:
-                items = [(sym, self.symbols[sym].df) for sym in watchlist]
+                items = [(sym, self.symbols[sym].df, relative) for sym in watchlist]
                 futures = {executor.submit(_floor_ceiling_worker, item): item[0] for item in items}
                 for future in as_completed(futures):
                     sym = futures[future]
@@ -377,7 +381,7 @@ class Regimes:
                         errors.append(e)
                         # print(self.floor_ceiling_combo.__name__, sym, e, sep=': ')
         else:
-            df = self._process_floor_ceiling_symbol(symbol)
+            df = self._process_floor_ceiling_symbol(symbol, relative=relative)
             self.symbols[symbol].df = df
         _10percent_symbols = len(self.symbols) * 0.1    
         if len(errors) > _10percent_symbols:
@@ -402,37 +406,31 @@ class Regimes:
                                         title = str.upper(ticker)+' '+str(window)+' days high/low')
 
     #Utility function
-    def lower_upper_OHLC(self, df,relative = False):
-        if relative==True:
-            rel = 'r'
-        else:
-            rel= ''      
-        if 'Open' in df.columns:
-            ohlc = [rel+'Open',rel+'High',rel+'Low',rel+'Close']       
-        elif 'open' in df.columns:
-            ohlc = [rel+'open',rel+'high',rel+'low',rel+'close']
-            
-        try:
-            _o,_h,_l,_c = [ohlc[h] for h in range(len(ohlc))]
-        except:
-            _o=_h=_l=_c= np.nan
-        self._o, self._h, self._l, self._c = _o,_h,_l,_c
+    def lower_upper_OHLC(self, df, relative=False):
+        prefix = 'Relative_' if relative else ''
+        ohlc = [prefix + column for column in ('Open', 'High', 'Low', 'Close')]
+        missing = [column for column in ohlc if column not in df.columns]
+        if missing:
+            raise KeyError(f'df is missing required OHLC columns: {missing}')
+        self._o, self._h, self._l, self._c = ohlc
 
     #Utility function. I'm not sure what the value for lvl should be. 1 & 2 work.
-    def  regime_args(self, df,lvl=2,relative= False):
-        if ('Low' in df.columns) & (relative == False):
-            reg_val = ['Lo1','Hi1','Lo'+str(lvl),'Hi'+str(lvl),'rg','clg','flr','rg_ch']
-        elif ('low' in df.columns) & (relative == False):
-            reg_val = ['lo1','hi1','lo'+str(lvl),'hi'+str(lvl),'rg','clg','flr','rg_ch']
-        elif ('Low' in df.columns) & (relative == True):
-            reg_val = ['rL1','rH1','rL'+str(lvl),'rH'+str(lvl),'rrg','rclg','rflr','rrg_ch']
-        elif ('low' in df.columns) & (relative == True):
-            reg_val = ['rl1','rh1','rl'+str(lvl),'rh'+str(lvl),'rrg','rclg','rflr','rrg_ch']
-        
-        try: 
-            rt_lo,rt_hi,slo,shi,rg,clg,flr,rg_ch = [reg_val[s] for s in range(len(reg_val))]
-        except:
-            rt_lo=rt_hi=slo=shi=rg=clg=flr=rg_ch= np.nan
+    def regime_args(self, df, lvl=2, relative=False):
+        prefix = 'Relative_' if relative else ''
+        required_low = prefix + 'Low'
+        if required_low not in df.columns:
+            raise KeyError(f'df is missing required column: {required_low}')
+        reg_val = [
+            prefix + 'Lo1',
+            prefix + 'Hi1',
+            prefix + 'Lo' + str(lvl),
+            prefix + 'Hi' + str(lvl),
+            prefix + 'rg',
+            prefix + 'clg',
+            prefix + 'flr',
+            prefix + 'rg_ch',
+        ]
+        rt_lo,rt_hi,slo,shi,rg,clg,flr,rg_ch = reg_val
         self.rt_lo, self.rt_hi, self.slo, self.shi, self.rg, self.clg, self.flr, self.rg_ch = rt_lo,rt_hi,slo,shi,rg,clg,flr,rg_ch
 
     #Utility function. Needed for graph regime combo. lower_upper_OHLC() must be called first.
@@ -519,7 +517,14 @@ class Regimes:
         s = np.where((df['ma_st'] > df['ma_mt']) & (df['ma_mt'] > df['ma_lt']), 1, np.where((df['ma_st'] < df['ma_mt']) & (df['ma_mt'] < df['ma_lt']), -1, np.nan))
         df['triple_ma' + str(ma[0]) + str(ma[1]) + str(ma[2])] = pd.Series(index=df.index, data=s)
 
-    def historical_swings(self, df, _o='Open', _h='High', _l='Low', _c='Close', dist= None, hurdle= None):
+    def historical_swings(self, df, _o=None, _h=None, _l=None, _c=None, dist=None, hurdle=None):
+        _o = self._o or _o or 'Open'
+        _h = self._h or _h or 'High'
+        _l = self._l or _l or 'Low'
+        _c = self._c or _c or 'Close'
+        relative = all(column.startswith('Relative_') for column in (_o, _h, _l, _c))
+        high_prefix = 'Relative_Hi' if relative else 'Hi'
+        low_prefix = 'Relative_Lo' if relative else 'Lo'
         
         def hilo_alternation(hilo, dist= None, hurdle= None):
             i=0    
@@ -572,18 +577,20 @@ class Regimes:
 
             # Populate reduction df
             n += 1        
-            reduction[str(_h)[:2]+str(n)] = reduction.loc[reduction['hilo']<0 ,_h]
-            reduction[str(_l)[:2]+str(n)] = reduction.loc[reduction['hilo']>0 ,_l]
+            high_column = high_prefix + str(n)
+            low_column = low_prefix + str(n)
+            reduction[high_column] = reduction.loc[reduction['hilo']<0, _h]
+            reduction[low_column] = reduction.loc[reduction['hilo']>0, _l]
 
             # Populate main dataframe
-            df[str(_h)[:2]+str(n)] = reduction.loc[reduction['hilo']<0 ,_h]
-            df[str(_l)[:2]+str(n)] = reduction.loc[reduction['hilo']>0 ,_l]
+            df[high_column] = reduction.loc[reduction['hilo']<0, _h]
+            df[low_column] = reduction.loc[reduction['hilo']>0, _l]
             
             # Reduce reduction
             reduction = reduction.dropna(subset=['hilo'])
             reduction = reduction.ffill()
-            highs = reduction[str(_h)[:2]+str(n)].values
-            lows = -reduction[str(_l)[:2]+str(n)].values
+            highs = reduction[high_column].values
+            lows = -reduction[low_column].values
             
             if n >= 9:
                 break
@@ -614,10 +621,13 @@ class Regimes:
                     pass
         cleanup_latest_swing(df)
 
-    def latest_swing_variables(self, df, _h='High', _l='Low', _c='Close'):
+    def latest_swing_variables(self, df, _h=None, _l=None, _c=None):
         '''
         Latest swings dates & values
         '''
+        _h = self._h or _h or 'High'
+        _l = self._l or _l or 'Low'
+        _c = self._c or _c or 'Close'
         shi=self.shi
         slo=self.slo
         rt_hi=self.rt_hi
@@ -631,8 +641,8 @@ class Regimes:
             swg_var = [1,s_lo,slo_dt,rt_lo,shi, df.loc[slo_dt:,_h].max(), df.loc[slo_dt:, _h].idxmax()]         
         elif shi_dt > slo_dt: 
             swg_var = [-1,s_hi,shi_dt,rt_hi,slo, df.loc[shi_dt:, _l].min(),df.loc[shi_dt:, _l].idxmin()]        
-        else: 
-            ud = 0
+        else:
+            raise ValueError('latest swing high and low cannot have the same index')
         self.ud, self.bs, self.bs_dt, self._rt, self._swg, self.hh_ll, self.hh_ll_dt = [swg_var[h] for h in range(len(swg_var))]   
 
     def test_distance(self, ud,bs, hh_ll, dist_vol, dist_pct): 
@@ -649,20 +659,26 @@ class Regimes:
             
         return int(max(distance_test,0) * ud)
 
-    def average_true_range(self, df, n, _h='High', _l='Low', _c='Close'):
+    def average_true_range(self, df, n, _h=None, _l=None, _c=None):
         '''
         http://stockcharts.com/school/doku.php?id=chart_school:technical_indicators:average_true_range_atr
         '''
+        _h = self._h or _h or 'High'
+        _l = self._l or _l or 'Low'
+        _c = self._c or _c or 'Close'
         atr =  (df[_h].combine(df[_c].shift(), max) - df[_l].combine(df[_c].shift(), min)).rolling(window=n).mean()
         return atr
 
-    def retest_swing(self, df, _c='Close'):
+    def retest_swing(self, df, _c=None):
+        _h = self._h or 'High'
+        _l = self._l or 'Low'
+        _c = self._c or _c or 'Close'
         _rt = self._rt
         hh_ll_dt = self.hh_ll_dt
         hh_ll = self.hh_ll
         _swg = self._swg
 
-        dist_vol = round(self.average_true_range(df, _h='High', _l='Low', _c='Close', n=63)[hh_ll_dt] * 2,2)
+        dist_vol = round(self.average_true_range(df, _h=_h, _l=_l, _c=_c, n=63)[hh_ll_dt] * 2,2)
         dist_pct = 0.05
         _sign = self.test_distance(self.ud, self.bs, self.hh_ll, dist_vol, dist_pct)
         rt_sgmt = df.loc[hh_ll_dt:, _rt] 
@@ -675,23 +691,23 @@ class Regimes:
                 rt_list = [rt_sgmt.idxmin(), rt_sgmt.min(), df.loc[rt_sgmt.idxmin():, _c].cummax()]
             rt_dt,rt_hurdle, rt_px = [rt_list[h] for h in range(len(rt_list))]
 
-            if str(_c)[0] == 'r':
-                df.loc[rt_dt,'rrt'] = rt_hurdle
-            elif str(_c)[0] != 'r':
-                df.loc[rt_dt,'rt'] = rt_hurdle    
+            retest_column = 'Relative_rt' if _c.startswith('Relative_') else 'rt'
+            df.loc[rt_dt, retest_column] = rt_hurdle
 
             if (np.sign(rt_px - rt_hurdle) == - np.sign(_sign)).any():
                 df.at[hh_ll_dt, _swg] = hh_ll      
 
-    def retracement_swing(self, df, _c='Close', retrace_vol_multiple=2.5, retrace_pct=0.05, dist_vol_multiple=5, dist_pct=0.05):
+    def retracement_swing(self, df, _c=None, retrace_vol_multiple=2.5, retrace_pct=0.05, dist_vol_multiple=5, dist_pct=0.05):
+        _h = self._h or 'High'
+        _l = self._l or 'Low'
+        _c = self._c or _c or 'Close'
         hh_ll_dt = self.hh_ll_dt
         hh_ll = self.hh_ll
-        vlty = round(self.average_true_range(df=df, _h='High', _l='Low', _c='Close', n=63)[self.hh_ll_dt], 2)
+        vlty = round(self.average_true_range(df=df, _h=_h, _l=_l, _c=_c, n=63)[self.hh_ll_dt], 2)
         dist_vol = dist_vol_multiple * vlty
         _sign = self.test_distance(self.ud, self.bs, self.hh_ll, dist_vol, dist_pct)
         retrace_vol = retrace_vol_multiple * vlty
-        retrace_pct = 0.05
-        self.retest_swing(df)
+        self.retest_swing(df, _c=_c)
         _swg = self._swg
         if _sign == 1: #
             retracement = df.loc[hh_ll_dt:, _c].min() - hh_ll
@@ -710,10 +726,18 @@ class Regimes:
         else:
             retracement = 0
 
-    def regime_floor_ceiling(self, df, _h='High', _l='Low', _c='Close'):
-        stdev = df[_c].rolling(63).std(ddof=0)
-        rg_val = ['Lo2','Hi2','flr','clg','rg','rg_ch',1.5]#Lo2 and Hi2 were Lo3 and Hi3. I also swapped their index from the github code.
-        slo, shi,flr,clg,rg,rg_ch,threshold = [rg_val[s] for s in range(len(rg_val))]
+    def regime_floor_ceiling(self, df, _h=None, _l=None, _c=None, threshold=1.5, stdev_window=63):
+        _h = self._h or _h or 'High'
+        _l = self._l or _l or 'Low'
+        _c = self._c or _c or 'Close'
+        prefix = 'Relative_' if _c.startswith('Relative_') else ''
+        slo = self.slo or prefix + 'Lo2'
+        shi = self.shi or prefix + 'Hi2'
+        flr = self.flr or prefix + 'flr'
+        clg = self.clg or prefix + 'clg'
+        rg = self.rg or prefix + 'rg'
+        rg_ch = self.rg_ch or prefix + 'rg_ch'
+        stdev = df[_c].rolling(stdev_window).std(ddof=0)
         # Lists instantiation
         threshold_test,rg_ch_ix_list,rg_ch_list = [],[], []
         floor_ix_list, floor_list, ceiling_ix_list, ceiling_list = [],[],[],[]
@@ -833,6 +857,13 @@ class Regimes:
                 #breakdown = False
                 #breakout = True  
 
+        if not rg_ch_ix_list:
+            df[flr] = np.nan
+            df[clg] = np.nan
+            df[rg_ch] = np.nan
+            df[rg] = np.nan
+            return
+
         ### POPULATE FLOOR,CEILING, RG CHANGE COLUMNS
         df.loc[floor_ix_list[1:], flr] = floor_list
         df.loc[ceiling_ix_list[1:], clg] = ceiling_list
@@ -847,4 +878,4 @@ class Regimes:
                                                     np.sign(df[swing_max_ix:][_c].rolling(5).mean() - rg_ch_list[-1]))) 
         df[rg] = df[rg].ffill()
         #df[rg+'_no_fill'] = df[rg]
-
+        
