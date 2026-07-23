@@ -863,10 +863,10 @@ if __name__ == "__main__":
         except:
             continue
 
-    # try:
-    #     daily_quant_rating_df = daily_quant_rating_future.result()
-    # finally:
-    #     daily_quant_rating_executor.shutdown()
+    try:
+        daily_quant_rating_df = daily_quant_rating_future.result()
+    finally:
+        daily_quant_rating_executor.shutdown()
     print_section_time("Added daily quant rating")
     
     interest_list_long = il(source_symbols=symbols)
