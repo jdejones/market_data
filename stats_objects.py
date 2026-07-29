@@ -2804,7 +2804,7 @@ def extension_algo(
     max_retracement: float,
     min: float,
     long_short: str = "long",
-) -> dict:
+    ) -> dict:
     """
     Find validated markup/markdown extensions in an OHLCV DataFrame.
 
