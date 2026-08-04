@@ -215,7 +215,7 @@ class MarketDataDashboard:
             columns=("state", "pid"),
             show="tree headings",
             height=8,
-            selectmode="browse",
+            selectmode="extended",
         )
         self.process_tree.heading("#0", text="Script")
         self.process_tree.heading("state", text="State")
@@ -280,8 +280,21 @@ class MarketDataDashboard:
 
     def stop_highlighted(self) -> None:
         selected = self.process_tree.selection()
-        if selected:
-            self.stop_script(selected[0])
+        running = [
+            key
+            for key in selected
+            if (
+                (managed := self.processes.get(key)) is not None
+                and managed.process.poll() is None
+            )
+        ]
+        if not running:
+            self.summary_var.set("No highlighted scripts are running.")
+            return
+
+        for key in running:
+            self.stop_script(key)
+        self.summary_var.set(f"Stopping {len(running)} highlighted script(s)...")
 
     def select_tree_row(self) -> None:
         spec = self.optional_by_label[self.selected_script.get()]
@@ -290,7 +303,7 @@ class MarketDataDashboard:
 
     def on_tree_selection(self, _event: tk.Event[tk.Misc]) -> None:
         selected = self.process_tree.selection()
-        if not selected:
+        if len(selected) != 1:
             return
         spec = SPECS_BY_KEY[selected[0]]
         if spec.selectable:
