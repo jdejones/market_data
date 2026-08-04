@@ -2819,7 +2819,9 @@ def extension_algo(
     max_retracement_periods : int
         Maximum number of consecutive bars without a new favourable extreme.
     max_retracement : float
-        Maximum retracement percent allowed from the best extension price.
+        Maximum percentage of the favourable extension that may be retraced.
+        For example, if a long extension moves from 50 to 150, a value of 50
+        allows the price to retrace to 100.
     min : float
         Minimum favourable percent move required for a valid extension.
     long_short : {'long', 'short'}, default 'long'
@@ -2874,11 +2876,17 @@ def extension_algo(
         if direction == "long":
             extreme_price = current_row["High"]
             peak_extension_pct = ((extreme_price - start_price) / start_price) * 100
-            retracement_pct = ((extreme_price - current_row["Low"]) / extreme_price) * 100
+            retracement_pct = (
+                (extreme_price - current_row["Low"])
+                / (extreme_price - start_price)
+            ) * 100
         else:
             extreme_price = current_row["Low"]
             peak_extension_pct = ((start_price - extreme_price) / start_price) * 100
-            retracement_pct = ((current_row["High"] - extreme_price) / extreme_price) * 100
+            retracement_pct = (
+                (current_row["High"] - extreme_price)
+                / (start_price - extreme_price)
+            ) * 100
 
         if peak_extension_pct >= min:
             valid_extension = True
@@ -2895,7 +2903,10 @@ def extension_algo(
                 else:
                     retracement_periods += 1
 
-                retracement_pct = ((extreme_price - row["Low"]) / extreme_price) * 100
+                retracement_pct = (
+                    (extreme_price - row["Low"])
+                    / (extreme_price - start_price)
+                ) * 100
             else:
                 if row["Low"] < extreme_price:
                     extreme_price = row["Low"]
@@ -2904,7 +2915,10 @@ def extension_algo(
                 else:
                     retracement_periods += 1
 
-                retracement_pct = ((row["High"] - extreme_price) / extreme_price) * 100
+                retracement_pct = (
+                    (row["High"] - extreme_price)
+                    / (start_price - extreme_price)
+                ) * 100
 
             if peak_extension_pct >= min:
                 valid_extension = True
