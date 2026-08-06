@@ -8,6 +8,7 @@ set "DETAILED_LOG_FILE=C:\Users\jdejo\Market_Data_Processing\market_data\scripts
 set "MARKET_DATA_ROOT=C:\Users\jdejo\Market_Data_Processing\market_data"
 set "NEWS_TRACKER_ROOT=C:\Users\jdejo\News_Tracker"
 set "SYMBOLS_FILE=E:\Market Research\Studies\Sector Studies\Watchlists\High_AvgDV.txt"
+set "ETF_SYMBOLS_FILE=E:\Market Research\Studies\Sector Studies\Watchlists\ETFs.txt"
 set "NETWORK_CHECK_HOST=api.polygon.io"
 set "NETWORK_CHECK_PORT=443"
 set "NETWORK_READY_TIMEOUT_SECONDS=900"
@@ -18,7 +19,7 @@ set "STARTUP_DELAY_SECONDS=30"
 call :wait_for_network_ready
 if errorlevel 1 exit /b %errorlevel%
 
-start "Intraday Script Dashboard" /D "%MARKET_DATA_ROOT%" cmd /v:on /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\intraday_script_launcher.py" --python-exe "%PYTHON_EXE%" --symbols-file "%SYMBOLS_FILE%" --startup-delay-seconds "%STARTUP_DELAY_SECONDS%" 2> "%TEMP%\market_data_dashboard_stderr.log" & set "EXIT_CODE=!errorlevel!" & if not "!EXIT_CODE!"=="0" (type nul > "%DETAILED_LOG_FILE%" & >> "%DETAILED_LOG_FILE%" echo [!date! !time!] intraday_script_launcher.py failed with exit code !EXIT_CODE!. & >> "%DETAILED_LOG_FILE%" echo. & if exist "%TEMP%\intraday_script_launcher_stderr.log" type "%TEMP%\intraday_script_launcher_stderr.log" >> "%DETAILED_LOG_FILE%" & >> "%LOG_FILE%" echo [!date! !time!] intraday_script_launcher.py failed with exit code !EXIT_CODE!. & echo intraday_script_launcher.py failed with exit code !EXIT_CODE!. See "%LOG_FILE%".) & if exist "%TEMP%\intraday_script_launcher_stderr.log" del "%TEMP%\intraday_script_launcher_stderr.log" > nul 2>&1"
+start "Intraday Script Dashboard" /D "%MARKET_DATA_ROOT%" cmd /v:on /k ""%PYTHON_EXE%" "%MARKET_DATA_ROOT%\scripts\intraday_script_launcher.py" --python-exe "%PYTHON_EXE%" --symbols-file "%SYMBOLS_FILE%" "%ETF_SYMBOLS_FILE%" --startup-delay-seconds "%STARTUP_DELAY_SECONDS%" 2> "%TEMP%\market_data_dashboard_stderr.log" & set "EXIT_CODE=!errorlevel!" & if not "!EXIT_CODE!"=="0" (type nul > "%DETAILED_LOG_FILE%" & >> "%DETAILED_LOG_FILE%" echo [!date! !time!] intraday_script_launcher.py failed with exit code !EXIT_CODE!. & >> "%DETAILED_LOG_FILE%" echo. & if exist "%TEMP%\intraday_script_launcher_stderr.log" type "%TEMP%\intraday_script_launcher_stderr.log" >> "%DETAILED_LOG_FILE%" & >> "%LOG_FILE%" echo [!date! !time!] intraday_script_launcher.py failed with exit code !EXIT_CODE!. & echo intraday_script_launcher.py failed with exit code !EXIT_CODE!. See "%LOG_FILE%".) & if exist "%TEMP%\intraday_script_launcher_stderr.log" del "%TEMP%\intraday_script_launcher_stderr.log" > nul 2>&1"
 
 echo Waiting %STARTUP_DELAY_SECONDS% seconds for intraday_price_stream.py to start writing data...
 timeout /t %STARTUP_DELAY_SECONDS% /nobreak > nul

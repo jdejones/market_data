@@ -44,7 +44,7 @@ class ScriptSpec:
 @dataclass(frozen=True)
 class DashboardConfig:
     python_exe: Path
-    symbols_file: Path
+    symbols_files: tuple[Path, ...]
     startup_delay_seconds: int
 
 
@@ -60,13 +60,13 @@ def no_arguments(_config: DashboardConfig) -> list[str]:
 
 
 def stream_arguments(config: DashboardConfig) -> list[str]:
-    return ["--symbols-file", str(config.symbols_file)]
+    return ["--symbols-file", *(str(path) for path in config.symbols_files)]
 
 
 def current_rvol_arguments(config: DashboardConfig) -> list[str]:
     return [
         "--symbols-file",
-        str(config.symbols_file),
+        str(config.symbols_files[0]),
         "--update-elevated-table",
         "--update-ep-rvol-table",
     ]
@@ -527,7 +527,7 @@ def parse_args() -> argparse.Namespace:
         description="Launch and manage the daily market-data scripts."
     )
     parser.add_argument("--python-exe", type=Path, default=Path(sys.executable))
-    parser.add_argument("--symbols-file", required=True, type=Path)
+    parser.add_argument("--symbols-file", required=True, type=Path, nargs="+")
     parser.add_argument("--startup-delay-seconds", type=int, default=30)
     return parser.parse_args()
 
@@ -538,12 +538,14 @@ def main() -> None:
         raise ValueError("--startup-delay-seconds must be greater than or equal to zero")
     if not args.python_exe.is_file():
         raise FileNotFoundError(f"Python executable not found: {args.python_exe}")
-    if not args.symbols_file.is_file():
-        raise FileNotFoundError(f"Symbols file not found: {args.symbols_file}")
+    missing_symbols_files = [path for path in args.symbols_file if not path.is_file()]
+    if missing_symbols_files:
+        paths = ", ".join(str(path) for path in missing_symbols_files)
+        raise FileNotFoundError(f"Symbols file(s) not found: {paths}")
 
     config = DashboardConfig(
         python_exe=args.python_exe,
-        symbols_file=args.symbols_file,
+        symbols_files=tuple(args.symbols_file),
         startup_delay_seconds=args.startup_delay_seconds,
     )
     root = tk.Tk()

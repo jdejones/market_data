@@ -40,8 +40,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--symbols-file",
         type=Path,
+        nargs="+",
         help=(
-            "Optional text file containing one ticker per line. "
+            "Optional text file(s) containing one ticker per line. "
             "Defaults to all stock symbols via AM.*."
         ),
     )
@@ -165,21 +166,23 @@ def reset_table(engine: Engine) -> None:
     ensure_table_structure(engine)
 
 
-def read_symbols(symbols_file: Path | None) -> list[str]:
-    if symbols_file is None:
+def read_symbols(symbols_files: Sequence[Path] | None) -> list[str]:
+    if not symbols_files:
         return []
 
     symbols = []
-    with symbols_file.open("r", encoding="utf-8") as f:
-        for line in f:
-            symbol = line.strip().upper()
-            if symbol and not symbol.startswith("#"):
-                symbols.append(symbol)
+    for symbols_file in symbols_files:
+        with symbols_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                symbol = line.strip().upper()
+                if symbol and not symbol.startswith("#"):
+                    symbols.append(symbol)
 
     if not symbols:
-        raise ValueError(f"No symbols found in {symbols_file}")
+        paths = ", ".join(str(path) for path in symbols_files)
+        raise ValueError(f"No symbols found in: {paths}")
 
-    return symbols
+    return list(dict.fromkeys(symbols))
 
 
 def build_subscriptions(symbols: Sequence[str]) -> str:
