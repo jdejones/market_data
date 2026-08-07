@@ -1233,6 +1233,22 @@ def regime_watchlists(symbols):
         for sym in neutral_act_vol_rg:
             f.write(sym + '\n')
 
+# TODO The values filtered for limit this function in a way that other functions are not.
+# TODO If I decide to use it in the future I will need to adopt a specific workflow for it.
+def populated_retest_levels(symbols):
+    populated_retest_levels_results = []
+    retest_columns = ('rt', 'Relative_rt')
+    for sym in symbols:
+        try:
+            df = symbols[sym].df
+            if any(column in df.columns and df[column].notna().any() for column in retest_columns):
+                populated_retest_levels_results.append(sym)
+        except Exception:
+            continue
+    with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\populated_retest_levels.txt", "w") as f:
+        for sym in populated_retest_levels_results:
+            f.write(sym + '\n')
+
 #! Refactor incomplete. I may not be getting expected results because of few passing symbols and the limited number of symbols in the watchlist.
 def no_income_price_above_high(symbols):
     no_income_results = open(wl.no_income).read().splitlines()
@@ -1559,6 +1575,7 @@ def run_all(symbols):
     mod.technical_long_list_systematic(symbols, save=True)
     mod.technical_short_list_systematic(symbols, save=True)
     mod.regime_watchlists(symbols)
+    mod.populated_retest_levels(symbols)
     mod.trends(symbols)
     mod.uptrend_retracement(symbols)
     mod.downtrend_retracement(symbols)
