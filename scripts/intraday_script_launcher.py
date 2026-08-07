@@ -100,6 +100,13 @@ SCRIPT_SPECS = (
         window_slot=WindowSlot(0.63, 0.00, 0.37, 0.28),
     ),
     ScriptSpec(
+        key="etf_trader",
+        label="ETF Relative Strength",
+        filename="etf_trader.py",
+        arguments=no_arguments,
+        window_title="ETF Relative Strength",
+    ),
+    ScriptSpec(
         key="vwap_bands",
         label="VWAP Bands",
         filename="vwap_bands.py",
