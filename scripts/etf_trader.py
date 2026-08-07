@@ -15,8 +15,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 import pandas as pd
 import requests
+from sqlalchemy import create_engine
 
 
 # Allow this file to be launched directly from the scripts directory.
@@ -25,7 +28,7 @@ PROJECT_DIR = PACKAGE_DIR.parent
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from market_data.api_keys import finviz_api_key
+from market_data.api_keys import database_password, finviz_api_key
 from market_data import fundamentals as fu
 from market_data.support_functions import relative
 
@@ -85,6 +88,40 @@ def load_saved_objects(
     return symbols, etfs
 
 
+def load_latest_quant_ratings() -> dict[str, object]:
+    """Load only each symbol and the newest daily quant-rating column."""
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
+    engine = create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 5},
+    )
+    try:
+        columns = pd.read_sql("SHOW COLUMNS FROM daily_quant_rating", con=engine)
+        if columns.empty or "Field" not in columns:
+            raise ValueError("daily_quant_rating does not contain any columns")
+
+        latest_column = str(columns.iloc[-1]["Field"])
+        if latest_column == "index":
+            raise ValueError("daily_quant_rating does not contain a rating column")
+        quoted_latest_column = latest_column.replace("`", "``")
+        ratings = pd.read_sql(
+            "SELECT `index` AS Symbol, "
+            f"`{quoted_latest_column}` AS Quant_Rating "
+            "FROM daily_quant_rating",
+            con=engine,
+        )
+    finally:
+        engine.dispose()
+
+    result = {}
+    for symbol, rating in ratings.itertuples(index=False, name=None):
+        if pd.isna(symbol) or pd.isna(rating):
+            continue
+        result[str(symbol).strip().upper()] = rating
+    return result
+
+
 def etf_membership(etf: str) -> pd.DataFrame:
     """Return the Finviz holdings search results for an ETF ticker."""
     ticker = etf.strip().upper()
@@ -115,16 +152,19 @@ class ETFTraderApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("ETF Relative Strength")
-        self.root.geometry("1050x760")
-        self.root.minsize(850, 650)
+        self.root.geometry("1250x760")
+        self.root.minsize(1000, 650)
 
         self.symbols: dict[str, pd.DataFrame] = {}
         self.etfs: dict[str, pd.Series] = {}
+        self.quant_ratings: dict[str, object] = {}
         self.relative_df = pd.DataFrame()
         self.current_row = pd.Series(dtype=float)
         self.calculation_running = False
         self.range_refresh_job: str | None = None
+        self.active_sort_column = "relative"
         self.relative_sort_ascending = False
+        self.quant_sort_ascending = False
 
         self.benchmark_var = tk.StringVar()
         self.start_date_var = tk.StringVar()
@@ -254,16 +294,26 @@ class ETFTraderApp:
         output = ttk.Panedwindow(container, orient="horizontal")
         output.grid(row=3, column=0, sticky="nsew")
 
-        results_frame = ttk.LabelFrame(output, text="Relative values", padding=6)
-        describe_frame = ttk.LabelFrame(output, text="DataFrame describe()", padding=6)
-        output.add(results_frame, weight=3)
-        output.add(describe_frame, weight=2)
+        tables_frame = ttk.Frame(output)
+        tables_frame.columnconfigure(0, weight=1)
+        tables_frame.rowconfigure(0, weight=1)
+
+        results_frame = ttk.LabelFrame(tables_frame, text="Relative values", padding=6)
+        results_frame.grid(row=0, column=0, sticky="nsew")
+        describe_frame = ttk.LabelFrame(
+            tables_frame, text="DataFrame describe()", padding=6
+        )
+        describe_frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+
+        plot_frame = ttk.LabelFrame(output, text="Relative strength history", padding=6)
+        output.add(tables_frame, weight=2)
+        output.add(plot_frame, weight=4)
 
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
         self.results_tree = ttk.Treeview(
             results_frame,
-            columns=("symbol", "relative"),
+            columns=("symbol", "relative", "quant_rating"),
             show="headings",
             selectmode="browse",
         )
@@ -273,14 +323,29 @@ class ETFTraderApp:
             text="Relative Close ▼",
             command=self._toggle_relative_sort,
         )
+        self.results_tree.heading(
+            "quant_rating",
+            text="Quant Rating",
+            command=self._toggle_quant_sort,
+        )
         self.results_tree.column("symbol", width=130, anchor="center")
         self.results_tree.column("relative", width=150, anchor="e")
+        self.results_tree.column("quant_rating", width=120, anchor="center")
         results_scroll = ttk.Scrollbar(
             results_frame, orient="vertical", command=self.results_tree.yview
         )
         self.results_tree.configure(yscrollcommand=results_scroll.set)
         self.results_tree.grid(row=0, column=0, sticky="nsew")
         results_scroll.grid(row=0, column=1, sticky="ns")
+        self.results_tree.bind("<<TreeviewSelect>>", self._plot_selected_symbol)
+
+        plot_frame.columnconfigure(0, weight=1)
+        plot_frame.rowconfigure(0, weight=1)
+        self.plot_figure = Figure(figsize=(5, 4), dpi=100)
+        self.plot_axes = self.plot_figure.add_subplot(111)
+        self.plot_canvas = FigureCanvasTkAgg(self.plot_figure, master=plot_frame)
+        self.plot_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._show_plot_prompt()
 
         describe_frame.columnconfigure(0, weight=1)
         describe_frame.rowconfigure(0, weight=1)
@@ -289,6 +354,7 @@ class ETFTraderApp:
             columns=("statistic", "value"),
             show="headings",
             selectmode="none",
+            height=8,
         )
         self.describe_tree.heading("statistic", text="Statistic")
         self.describe_tree.heading("value", text="Value")
@@ -365,24 +431,28 @@ class ETFTraderApp:
     def _load_data(self) -> None:
         try:
             symbols, etfs = load_saved_objects()
+            quant_ratings = load_latest_quant_ratings()
         except Exception as exc:
             self.root.after(0, self._load_failed, str(exc))
             return
-        self.root.after(0, self._load_complete, symbols, etfs)
+        self.root.after(0, self._load_complete, symbols, etfs, quant_ratings)
 
     def _load_complete(
         self,
         symbols: dict[str, pd.DataFrame],
         etfs: dict[str, pd.Series],
+        quant_ratings: dict[str, object],
     ) -> None:
         self.symbols = symbols
         self.etfs = etfs
+        self.quant_ratings = quant_ratings
         tickers = sorted(etfs)
         self.benchmark_box.configure(values=tickers)
         if tickers:
             self.benchmark_var.set("SPY" if "SPY" in etfs else tickers[0])
         self.status_var.set(
-            f"Ready — {len(symbols):,} symbols, {len(etfs):,} ETFs loaded"
+            f"Ready — {len(symbols):,} symbols, {len(etfs):,} ETFs, "
+            f"{len(quant_ratings):,} quant ratings loaded"
         )
         self._set_controls_enabled(True)
 
@@ -519,6 +589,7 @@ class ETFTraderApp:
             f"Calculated {result.shape[1]:,} of {member_count:,} symbols"
             + (f" ({failure_count:,} skipped)" if failure_count else "")
         )
+        self._show_plot_prompt()
         self._describe_selected_row()
 
     def _calculation_failed(self, error: str) -> None:
@@ -608,13 +679,83 @@ class ETFTraderApp:
         self.high_label_var.set(f"{self.high_var.get():.3f}")
 
     def _toggle_relative_sort(self) -> None:
-        self.relative_sort_ascending = not self.relative_sort_ascending
-        direction = "▲" if self.relative_sort_ascending else "▼"
+        if self.active_sort_column == "relative":
+            self.relative_sort_ascending = not self.relative_sort_ascending
+        self.active_sort_column = "relative"
+        self._update_sort_headings()
+        self._refresh_results()
+
+    def _toggle_quant_sort(self) -> None:
+        if self.active_sort_column == "quant_rating":
+            self.quant_sort_ascending = not self.quant_sort_ascending
+        self.active_sort_column = "quant_rating"
+        self._update_sort_headings()
+        self._refresh_results()
+
+    def _update_sort_headings(self) -> None:
+        relative_direction = "▲" if self.relative_sort_ascending else "▼"
+        quant_direction = "▲" if self.quant_sort_ascending else "▼"
         self.results_tree.heading(
             "relative",
-            text=f"Relative Close {direction}",
+            text=(
+                f"Relative Close {relative_direction}"
+                if self.active_sort_column == "relative"
+                else "Relative Close"
+            ),
         )
-        self._refresh_results()
+        self.results_tree.heading(
+            "quant_rating",
+            text=(
+                f"Quant Rating {quant_direction}"
+                if self.active_sort_column == "quant_rating"
+                else "Quant Rating"
+            ),
+        )
+
+    def _show_plot_prompt(self) -> None:
+        self.plot_axes.clear()
+        self.plot_axes.text(
+            0.5,
+            0.5,
+            "Select a symbol from the Relative values table",
+            ha="center",
+            va="center",
+            transform=self.plot_axes.transAxes,
+        )
+        self.plot_axes.set_axis_off()
+        self.plot_canvas.draw_idle()
+
+    def _plot_selected_symbol(self, _event: tk.Event[tk.Misc]) -> None:
+        selection = self.results_tree.selection()
+        if not selection:
+            return
+        values = self.results_tree.item(selection[0], "values")
+        if not values:
+            return
+        symbol = str(values[0])
+        if symbol not in self.relative_df:
+            return
+
+        relative_values = self.relative_df[symbol].dropna()
+        if relative_values.empty:
+            return
+
+        self.plot_axes.clear()
+        self.plot_axes.set_axis_on()
+        relative_values.plot(
+            ax=self.plot_axes,
+            color="#1f77b4",
+            linewidth=1.5,
+        )
+        self.plot_axes.axhline(100, color="gray", linewidth=0.8, alpha=0.6)
+        self.plot_axes.set_title(
+            f"{symbol} relative to {self.benchmark_var.get()}"
+        )
+        self.plot_axes.set_xlabel("")
+        self.plot_axes.set_ylabel("Relative Close")
+        self.plot_axes.grid(True, alpha=0.25)
+        self.plot_figure.tight_layout()
+        self.plot_canvas.draw_idle()
 
     def _refresh_results(self) -> None:
         self.range_refresh_job = None
@@ -630,13 +771,37 @@ class ETFTraderApp:
             filtered = self.current_row[
                 (self.current_row >= low) & (self.current_row <= high)
             ]
-        filtered = filtered.sort_values(ascending=self.relative_sort_ascending)
+        if self.active_sort_column == "quant_rating":
+            quant_values = pd.Series(
+                {
+                    symbol: pd.to_numeric(
+                        self.quant_ratings.get(str(symbol).upper()),
+                        errors="coerce",
+                    )
+                    for symbol in filtered.index
+                },
+                dtype="float64",
+            )
+            ordered_symbols = quant_values.sort_values(
+                ascending=self.quant_sort_ascending,
+                na_position="last",
+            ).index
+            filtered = filtered.reindex(ordered_symbols)
+        else:
+            filtered = filtered.sort_values(
+                ascending=self.relative_sort_ascending
+            )
 
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
         for symbol, value in filtered.items():
+            quant_rating = self.quant_ratings.get(str(symbol).upper(), "N/A")
+            if quant_rating != "N/A":
+                quant_rating = f"{float(quant_rating):.2f}"
             self.results_tree.insert(
-                "", "end", values=(symbol, f"{float(value):,.3f}")
+                "",
+                "end",
+                values=(symbol, f"{float(value):,.3f}", quant_rating),
             )
 
 
