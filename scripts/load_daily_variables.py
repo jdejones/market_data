@@ -21,6 +21,7 @@ def load_all():
         "all_returns",
         "sector_close_vwap_ratio",
         "industry_close_vwap_ratio",
+        "episodic_pivots",
         "ep_curdur",
         "ep_rr",
         "rel_stren",
@@ -94,6 +95,7 @@ if __name__ == "__main__":
     all_returns = loaded["all_returns"]
     sector_close_vwap_ratio = loaded["sector_close_vwap_ratio"]
     industry_close_vwap_ratio = loaded["industry_close_vwap_ratio"]
+    ep = loaded["episodic_pivots"]
     ep_curdur = loaded["ep_curdur"]
     ep_rr = loaded["ep_rr"]
     rel_stren = loaded["rel_stren"]
