@@ -187,7 +187,7 @@ class Episodic_Pivots:
                 #TODO print(self.__class__, ': ', sym, '-', e) update error handling
                 continue
         
-    def ep_count(self, include_spy=True):
+    def ep_count(self, include_spy=True, plot=True):
         df_dict = {}
         for sym in self.symbols:
             df_dict[sym] = self.symbols[sym].df.ep
@@ -196,7 +196,13 @@ class Episodic_Pivots:
         if include_spy:
             spy = api_import(['SPY'])['SPY']['Close']
             ep_spy = pd.concat([df['total'], spy], keys=['EP Count', '$SPY Close'], axis=1)
-            return ep_spy.plot()
+            if plot:
+                return ep_spy.plot()
+            else:
+                return ep_spy
         df.rename(columns={'total': 'EP Count'}, inplace=True)
-        return df['EP Count'].plot()
+        if plot:
+            return df['EP Count'].plot()
+        else:
+            return df['EP Count']
 
