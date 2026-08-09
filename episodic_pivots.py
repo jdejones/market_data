@@ -139,11 +139,16 @@ class Episodic_Pivots:
         for sym in self.ep_dict:
             self.days_til_new_high_dict[sym] = {}
             for date in self.ep_dict[sym]:
-                try:
-                    self.days_til_new_high_dict[sym].update({date: (datetime.datetime.strptime(self.ep_dict[sym][date].loc[self.ep_dict[sym][date].High > self.ep_dict[sym][date].High.iloc[0]].index[0], '%Y-%m-%d') - datetime.datetime.strptime(date, '%Y-%m-%d')).days})
-                except Exception as e:
-                    #TODO print(sym, e) update error handling
-                    continue
+                ep_frame = self.ep_dict[sym][date]
+                higher_highs = ep_frame.index[
+                    ep_frame.High > ep_frame.High.iloc[0]
+                ]
+                days = None
+                if not higher_highs.empty:
+                    days = (
+                        pd.Timestamp(higher_highs[0]) - pd.Timestamp(date)
+                    ).days
+                self.days_til_new_high_dict[sym][date] = days
      
     def current_duration(self):
         for sym in self.episodic_pivots_results:
