@@ -15,6 +15,7 @@ class Episodic_Pivots:
         self.ep_dict = {}
         self.drawdown_dict = {}
         self.returns_dict = {}
+        self.current_returns_dict = {}
         self.max_return_dict = {}
         self.duration_dict = {}
         self.days_til_new_high_dict = {}
@@ -27,6 +28,7 @@ class Episodic_Pivots:
             self.episodic_pivot_finder(sym, gap_threshold)
         self.drawdown()
         self.returns()
+        self.current_returns()
         self.max_return()
         self.duration()
         self.days_til_new_high()
@@ -111,6 +113,22 @@ class Episodic_Pivots:
                 self.returns_dict[sym] = {}
                 for date in self.ep_dict[sym]:
                     self.returns_dict[sym].update({date: ((self.ep_dict[sym][date].iloc[-1].Close - self.ep_dict[sym][date].iloc[0].Open) / self.ep_dict[sym][date].iloc[0].Open) * 100})
+            except Exception as e:
+                #TODO print(sym, e) update error handling
+                continue
+
+    def current_returns(self):
+        """Stores returns for symbols whose latest episodic pivot is still active."""
+        for sym in self.ep_dict:
+            try:
+                current_eps = [
+                    date for date in self.ep_dict[sym]
+                    if not self.ep_dict[sym][date].empty
+                    and self.ep_dict[sym][date].index[-1] == self.symbols[sym].df.index[-1]
+                ]
+                if current_eps:
+                    current_ep = sorted(current_eps)[-1]
+                    self.current_returns_dict[sym] = self.returns_dict[sym][current_ep]
             except Exception as e:
                 #TODO print(sym, e) update error handling
                 continue
