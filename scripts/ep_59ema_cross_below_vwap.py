@@ -50,8 +50,9 @@ DISPLAY_COLUMNS = (
     "vwap",
     "emacd59",
 )
+GUI_COLUMNS = ("symbol", "rvol", "quant_rating")
 OUTPUT_COLUMNS = ("symbol", "rvol", "quant_rating")
-SORTABLE_COLUMNS = set(DISPLAY_COLUMNS)
+SORTABLE_COLUMNS = set(GUI_COLUMNS)
 RVOL_COLUMN_CANDIDATES = (
     "rvol",
     "RVol",
@@ -461,7 +462,7 @@ class EpEmaCrossBelowVwapGUI:
 
         self.tree = ttk.Treeview(
             container,
-            columns=DISPLAY_COLUMNS,
+            columns=GUI_COLUMNS,
             show="headings",
             selectmode="browse",
         )
@@ -469,21 +470,13 @@ class EpEmaCrossBelowVwapGUI:
             "symbol": 90,
             "rvol": 90,
             "quant_rating": 120,
-            "cross_time": 120,
-            "last_price": 110,
-            "vwap": 110,
-            "emacd59": 110,
         }
         anchors = {
             "symbol": tk.W,
             "rvol": tk.E,
             "quant_rating": tk.E,
-            "cross_time": tk.CENTER,
-            "last_price": tk.E,
-            "vwap": tk.E,
-            "emacd59": tk.E,
         }
-        for column in DISPLAY_COLUMNS:
+        for column in GUI_COLUMNS:
             self.tree.heading(
                 column,
                 text=column,
@@ -614,10 +607,6 @@ class EpEmaCrossBelowVwapGUI:
                     row.get("symbol", ""),
                     format_number(row.get("rvol")),
                     format_number(row.get("quant_rating")),
-                    format_time(row.get("cross_time")),
-                    format_number(row.get("last_price")),
-                    format_number(row.get("vwap")),
-                    format_number(row.get("emacd59"), decimals=4),
                 ),
             )
 
