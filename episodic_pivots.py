@@ -17,6 +17,7 @@ class Episodic_Pivots:
         self.returns_dict = {}
         self.current_returns_dict = {}
         self.max_return_dict = {}
+        self.peak_date_dict = {}
         self.duration_dict = {}
         self.days_til_new_high_dict = {}
         self.current_duration_dict = {}
@@ -136,9 +137,14 @@ class Episodic_Pivots:
     def max_return(self):
         for sym in self.ep_dict:
             self.max_return_dict[sym] = {}
+            self.peak_date_dict[sym] = {}
             for date in self.ep_dict[sym]:
                 try:
-                    self.max_return_dict[sym].update({date: ((self.ep_dict[sym][date].High.max() - self.ep_dict[sym][date].iloc[0].Open) / self.ep_dict[sym][date].iloc[0].Open) * 100})
+                    ep_frame = self.ep_dict[sym][date]
+                    peak_price = ep_frame.High.max()
+                    peak_date = ep_frame.index[ep_frame.High == peak_price][-1]
+                    self.max_return_dict[sym].update({date: ((peak_price - ep_frame.iloc[0].Open) / ep_frame.iloc[0].Open) * 100})
+                    self.peak_date_dict[sym].update({date: peak_date})
                 except Exception as e:
                     #TODO print(sym, e) update error handling
                     continue
