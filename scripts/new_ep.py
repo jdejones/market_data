@@ -51,6 +51,7 @@ DISPLAY_COLUMNS = (
     "event_summary",
     "news_aggregate",
 )
+SORTABLE_COLUMNS = {"symbol", "rvol", "quant_rating"}
 
 
 def mysql_identifier(name: str) -> str:
@@ -584,6 +585,9 @@ class NewEPGUI:
         self.stop_event = threading.Event()
         self.refresh_now_event = threading.Event()
         self.worker: threading.Thread | None = None
+        self.display_rows: list[dict[str, Any]] = []
+        self.sort_column = "symbol"
+        self.sort_descending = False
 
         self.status_var = tk.StringVar(value="Ready")
         self.root.title("New Episodic Pivots")
@@ -612,7 +616,12 @@ class NewEPGUI:
             "news_aggregate": 620,
         }
         for column in DISPLAY_COLUMNS:
-            self.tree.heading(column, text=column)
+            heading_options: dict[str, Any] = {"text": column}
+            if column in SORTABLE_COLUMNS:
+                heading_options["command"] = (
+                    lambda selected_column=column: self.sort_by_column(selected_column)
+                )
+            self.tree.heading(column, **heading_options)
             self.tree.column(column, width=widths[column], anchor=tk.W)
 
         y_scroll = ttk.Scrollbar(container, orient=tk.VERTICAL, command=self.tree.yview)
@@ -690,6 +699,44 @@ class NewEPGUI:
         self.status_var.set("Refresh requested...")
         self.refresh_now_event.set()
 
+    def sort_by_column(self, column: str) -> None:
+        if column == self.sort_column:
+            self.sort_descending = not self.sort_descending
+        else:
+            self.sort_column = column
+            self.sort_descending = False
+        self.populate_tree()
+
+    def populate_tree(self) -> None:
+        present_rows: list[dict[str, Any]] = []
+        missing_rows: list[dict[str, Any]] = []
+        for event in self.display_rows:
+            value = event.get(self.sort_column)
+            if value is None or pd.isna(value):
+                missing_rows.append(event)
+            else:
+                present_rows.append(event)
+
+        def sort_key(event: dict[str, Any]) -> str | float:
+            value = event[self.sort_column]
+            if self.sort_column in {"rvol", "quant_rating"}:
+                return float(value)
+            return str(value).casefold()
+
+        sorted_rows = sorted(
+            present_rows,
+            key=sort_key,
+            reverse=self.sort_descending,
+        )
+
+        self.tree.delete(*self.tree.get_children())
+        for event in sorted_rows + missing_rows:
+            values = [
+                format_display_value(column, event.get(column))
+                for column in DISPLAY_COLUMNS
+            ]
+            self.tree.insert("", tk.END, values=values)
+
     def process_messages(self) -> None:
         while True:
             try:
@@ -721,13 +768,8 @@ class NewEPGUI:
         event_count: int,
         scan_started: dt.datetime,
     ) -> None:
-        self.tree.delete(*self.tree.get_children())
-        for event in events:
-            values = [
-                format_display_value(column, event.get(column))
-                for column in DISPLAY_COLUMNS
-            ]
-            self.tree.insert("", tk.END, values=values)
+        self.display_rows = events
+        self.populate_tree()
 
         self.status_var.set(
             f"{scan_started:%H:%M:%S %Z}: {event_count} EPs found; "
