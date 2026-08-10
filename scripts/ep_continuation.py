@@ -61,7 +61,8 @@ DISPLAY_COLUMNS = (
     "yesterday_high",
 )
 OUTPUT_COLUMNS = ("symbol", "rvol", "quant_rating")
-SORTABLE_COLUMNS = set(DISPLAY_COLUMNS)
+GUI_COLUMNS = OUTPUT_COLUMNS
+SORTABLE_COLUMNS = set(GUI_COLUMNS)
 RVOL_COLUMN_CANDIDATES = (
     "rvol",
     "RVol",
@@ -503,7 +504,7 @@ class EpContinuationGUI:
         self.sort_descending = True
 
         self.root.title("EP Continuation")
-        self.root.geometry("880x520")
+        self.root.geometry("500x520")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.status_var = tk.StringVar(value="Starting...")
@@ -519,7 +520,7 @@ class EpContinuationGUI:
 
         self.tree = ttk.Treeview(
             container,
-            columns=DISPLAY_COLUMNS,
+            columns=GUI_COLUMNS,
             show="headings",
             selectmode="browse",
         )
@@ -527,19 +528,13 @@ class EpContinuationGUI:
             "symbol": 90,
             "rvol": 90,
             "quant_rating": 120,
-            "cross_time": 120,
-            "last_price": 110,
-            "yesterday_high": 130,
         }
         anchors = {
             "symbol": tk.W,
             "rvol": tk.E,
             "quant_rating": tk.E,
-            "cross_time": tk.CENTER,
-            "last_price": tk.E,
-            "yesterday_high": tk.E,
         }
-        for column in DISPLAY_COLUMNS:
+        for column in GUI_COLUMNS:
             self.tree.heading(
                 column,
                 text=column,
@@ -670,9 +665,6 @@ class EpContinuationGUI:
                     row.get("symbol", ""),
                     format_number(row.get("rvol")),
                     format_number(row.get("quant_rating")),
-                    format_time(row.get("cross_time")),
-                    format_number(row.get("last_price")),
-                    format_number(row.get("yesterday_high")),
                 ),
             )
 
