@@ -19,7 +19,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import pandas as pd
 import requests
-from sqlalchemy import create_engine
+from sqlalchemy import bindparam, create_engine, text
 
 
 # Allow this file to be launched directly from the scripts directory.
@@ -30,7 +30,6 @@ if str(PROJECT_DIR) not in sys.path:
 
 from market_data.api_keys import database_password, finviz_api_key
 from market_data import fundamentals as fu
-from market_data.support_functions import relative
 
 
 DEFAULT_DATA_DIR = Path(
@@ -39,7 +38,6 @@ DEFAULT_DATA_DIR = Path(
         r"E:\Market Research\Dataset\daily_after_close_study",
     )
 )
-PRICE_COLUMNS = ("Open", "High", "Low", "Close")
 
 
 def _load_pickle(data_dir: Path, name: str) -> dict:
@@ -48,16 +46,92 @@ def _load_pickle(data_dir: Path, name: str) -> dict:
         return pickle.load(file)
 
 
-def _compact_symbols(objects: dict) -> dict[str, pd.DataFrame]:
-    """Discard technical columns and SymbolData metadata after loading."""
-    for symbol in list(objects):
-        value = objects[symbol]
-        frame = getattr(value, "df", None)
-        if frame is None or any(column not in frame.columns for column in PRICE_COLUMNS):
-            del objects[symbol]
-            continue
-        objects[symbol] = frame.loc[:, PRICE_COLUMNS].copy()
-    return objects
+def _daily_ohlcv_engine():
+    url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/daily_ohlcv"
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 5},
+    )
+
+
+def load_available_symbols() -> set[str]:
+    """Load only the stock tickers available in the daily OHLCV database."""
+    engine = _daily_ohlcv_engine()
+    try:
+        frame = pd.read_sql(
+            text("SELECT DISTINCT symbol FROM daily_symbol_bars"),
+            con=engine,
+        )
+    finally:
+        engine.dispose()
+
+    if "symbol" not in frame:
+        raise ValueError("daily_symbol_bars does not contain a symbol column")
+    return {
+        str(symbol).strip().upper()
+        for symbol in frame["symbol"].dropna()
+        if str(symbol).strip()
+    }
+
+
+def load_symbol_close_prices(symbols: list[str], start: str) -> pd.DataFrame:
+    """Load Close history for only the requested symbols and date range."""
+    if not symbols:
+        return pd.DataFrame(columns=["symbol", "date", "close"])
+
+    query = text(
+        """
+        SELECT symbol, date, close
+        FROM daily_symbol_bars
+        WHERE symbol IN :symbols
+          AND date >= :start
+        ORDER BY symbol, date
+        """
+    ).bindparams(bindparam("symbols", expanding=True))
+    engine = _daily_ohlcv_engine()
+    try:
+        frame = pd.read_sql_query(
+            query,
+            con=engine,
+            params={"symbols": symbols, "start": pd.Timestamp(start).date()},
+        )
+    finally:
+        engine.dispose()
+
+    if frame.empty:
+        return frame
+    frame["symbol"] = frame["symbol"].astype(str).str.strip().str.upper()
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+    return frame.dropna(subset=["symbol", "date", "close"]).drop_duplicates(
+        subset=["symbol", "date"],
+        keep="last",
+    )
+
+
+def relative_close(
+    stock_close: pd.Series,
+    benchmark_close: pd.Series,
+) -> pd.Series:
+    """Return stock Close relative to a benchmark, normalized to 100."""
+    stock = stock_close.rename("Stock")
+    stock.index = pd.to_datetime(stock.index)
+    benchmark = benchmark_close.rename("Benchmark").copy()
+    benchmark.index = pd.to_datetime(benchmark.index)
+    aligned = stock.to_frame().join(benchmark, how="inner")
+    aligned["Benchmark"] = aligned["Benchmark"].ffill()
+    aligned = aligned.dropna(subset=["Stock", "Benchmark"])
+    if aligned.empty:
+        raise ValueError("stock and benchmark have no usable overlapping prices")
+    if aligned["Benchmark"].eq(0).any():
+        raise ValueError("benchmark contains zero values")
+
+    values = aligned["Stock"].div(aligned["Benchmark"])
+    initial_value = values.iloc[0]
+    if initial_value == 0:
+        raise ValueError("initial relative Close is zero")
+    return values.div(initial_value).mul(100).round(3)
 
 
 def _compact_etfs(objects: dict) -> dict[str, pd.Series]:
@@ -74,16 +148,15 @@ def _compact_etfs(objects: dict) -> dict[str, pd.Series]:
 
 def load_saved_objects(
     data_dir: Path = DEFAULT_DATA_DIR,
-) -> tuple[dict[str, pd.DataFrame], dict[str, pd.Series]]:
-    """Load sequentially and retain only price data required by this GUI."""
+) -> tuple[set[str], dict[str, pd.Series]]:
+    """Load available stock tickers from MySQL and ETF prices from disk."""
     try:
-        symbols = _compact_symbols(_load_pickle(data_dir, "symbols"))
-        gc.collect()
+        symbols = load_available_symbols()
         etfs = _compact_etfs(_load_pickle(data_dir, "etfs"))
         gc.collect()
     except Exception as exc:
         raise RuntimeError(
-            f"Could not load saved objects from {data_dir}: {exc}"
+            f"Could not load symbols from MySQL or ETFs from {data_dir}: {exc}"
         ) from exc
     return symbols, etfs
 
@@ -155,7 +228,7 @@ class ETFTraderApp:
         self.root.geometry("1250x760")
         self.root.minsize(1000, 650)
 
-        self.symbols: dict[str, pd.DataFrame] = {}
+        self.symbols: set[str] = set()
         self.etfs: dict[str, pd.Series] = {}
         self.quant_ratings: dict[str, object] = {}
         self.relative_df = pd.DataFrame()
@@ -439,7 +512,7 @@ class ETFTraderApp:
 
     def _load_complete(
         self,
-        symbols: dict[str, pd.DataFrame],
+        symbols: set[str],
         etfs: dict[str, pd.Series],
         quant_ratings: dict[str, object],
     ) -> None:
@@ -544,21 +617,28 @@ class ETFTraderApp:
             if not members:
                 raise ValueError(
                     "The selected source did not contain symbols available "
-                    "in the loaded symbols object."
+                    "in the daily OHLCV database."
                 )
 
             benchmark_close = self.etfs[benchmark]
+            close_prices = load_symbol_close_prices(members, start)
+            if close_prices.empty:
+                raise ValueError(
+                    "No Close data was found for the selected symbols and start date."
+                )
+
             series = {}
-            failures = {}
-            for symbol in members:
+            failures = {
+                symbol: "No Close data was found in the requested date range."
+                for symbol in members
+            }
+            for symbol, frame in close_prices.groupby("symbol", sort=False):
                 try:
-                    values = relative(
-                        df=self.symbols[symbol],
-                        bm=benchmark_close,
-                        start=start,
-                    )["Relative_Close"]
+                    stock_close = frame.set_index("date")["close"].sort_index()
+                    values = relative_close(stock_close, benchmark_close)
                     if not values.empty:
                         series[symbol] = values.astype("float32").rename(symbol)
+                        failures.pop(symbol, None)
                 except Exception as exc:
                     failures[symbol] = str(exc)
 
