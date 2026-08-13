@@ -107,6 +107,13 @@ SCRIPT_SPECS = (
         window_title="ETF Relative Strength",
     ),
     ScriptSpec(
+        key="theme_analysis_gui",
+        label="Theme Performance Dashboard",
+        filename="theme_analysis_gui.py",
+        arguments=no_arguments,
+        window_title="Theme Performance Dashboard",
+    ),
+    ScriptSpec(
         key="vwap_bands",
         label="VWAP Bands",
         filename="vwap_bands.py",
