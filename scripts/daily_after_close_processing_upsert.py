@@ -758,6 +758,13 @@ if __name__ == "__main__":
         results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
     except ConnectionError:
         results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
+    #! There is an error in the finviz library. Lines 762-767 are a workaround until it's fixed.
+    tickers = results_finvizsearch["Ticker"].astype("string")
+    duplicated_prefix = tickers.str[0].eq(tickers.str[1])
+
+    # Guard against corrupting valid values after Finviz/library fixes the issue.
+    if duplicated_prefix.mean() > 0.95:
+        results_finvizsearch["Ticker"] = tickers.str[1:]
     results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Previous Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
     results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
     results_finvizsearch['Market Cap.'] = results_finvizsearch['Market Cap.'].replace(0, np.nan)
