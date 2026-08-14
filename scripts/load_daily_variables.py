@@ -110,6 +110,8 @@ if __name__ == "__main__":
     qplus1 = loaded["qplus1"]
     qplus4 = loaded["qplus4"]
     interest_list_long = loaded["interest_list_long"]
+
+    ep.symbols = symbols
     
     url = f"mysql+pymysql://root:{database_password}@127.0.0.1:3306/stocks"
     engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})

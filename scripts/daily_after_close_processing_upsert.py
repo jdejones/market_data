@@ -952,6 +952,10 @@ if __name__ == "__main__":
     _store_daily_ohlcv_symbols(symbols, database_password, tqdm)
     print_section_time("Stored daily OHLCV tables")
     
+    # Avoid storing a duplicate copy of symbols inside episodic_pivots.
+    ep_symbols = ep.symbols
+    ep.symbols = None
+
     #Pickling most used objects, so I don't have to rerun the script.
     def save_snapshots(obj, name):
         base = r"E:\Market Research\Dataset\daily_after_close_study"
@@ -999,6 +1003,6 @@ if __name__ == "__main__":
         thread.start()
 
     for thread in tqdm(threads, desc="Storing Variables"):
-        thread.join()        
+        thread.join()
 
 
