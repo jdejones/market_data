@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 import re
 import sys
 import tkinter as tk
@@ -498,9 +499,11 @@ class ThemePerformanceDashboard:
             tk.StringVar(value="Quarter (%)"),
         )
         self.status_var = tk.StringVar(value="Ready")
+        self.category_means_var = tk.StringVar(value="Column means: —")
         self.intraday_status_var = tk.StringVar(
             value="Real-time capture is stopped."
         )
+        self.symbol_means_var = tk.StringVar(value="Column means: —")
         self.symbol_status_var = tk.StringVar(
             value="Select a row in either category table."
         )
@@ -567,8 +570,13 @@ class ThemePerformanceDashboard:
         self.category_tree = self._make_tree(category_frame)
         self.category_tree.bind("<<TreeviewSelect>>", self._on_category_selected)
 
-        ttk.Label(container, textvariable=self.status_var).grid(
-            row=2, column=0, sticky="w", pady=(4, 8)
+        category_footer = ttk.Frame(container)
+        category_footer.grid(row=2, column=0, sticky="ew", pady=(4, 8))
+        ttk.Label(category_footer, textvariable=self.category_means_var).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(category_footer, textvariable=self.status_var).grid(
+            row=1, column=0, sticky="w"
         )
 
         intraday_controls = ttk.LabelFrame(
@@ -648,8 +656,13 @@ class ThemePerformanceDashboard:
         self.symbol_frame.rowconfigure(0, weight=1)
         self.symbol_tree = self._make_tree(self.symbol_frame)
 
-        ttk.Label(container, textvariable=self.symbol_status_var).grid(
-            row=7, column=0, sticky="w", pady=(4, 0)
+        symbol_footer = ttk.Frame(container)
+        symbol_footer.grid(row=7, column=0, sticky="ew", pady=(4, 0))
+        ttk.Label(symbol_footer, textvariable=self.symbol_means_var).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(symbol_footer, textvariable=self.symbol_status_var).grid(
+            row=1, column=0, sticky="w"
         )
 
     @staticmethod
@@ -911,6 +924,9 @@ class ThemePerformanceDashboard:
                 *(self.format_percent(row[name]) for name in self.active_intervals),
             )
             self.category_tree.insert("", tk.END, iid=filter_token, values=values)
+        self.category_means_var.set(
+            self.mean_summary(self.category_rows, self.active_intervals)
+        )
 
     def _populate_intraday_category_table(self) -> None:
         self.intraday_category_tree.delete(
@@ -1000,6 +1016,7 @@ class ThemePerformanceDashboard:
         self.symbol_sort = None
         self.symbol_tree.delete(*self.symbol_tree.get_children())
         self.symbol_frame.configure(text="Constituent Performance")
+        self.symbol_means_var.set("Column means: —")
         self.symbol_status_var.set("Select a row in either category table.")
 
     def _populate_symbol_table(self) -> None:
@@ -1010,6 +1027,9 @@ class ThemePerformanceDashboard:
                 *(self.format_percent(row[name]) for name in self.symbol_intervals),
             )
             self.symbol_tree.insert("", tk.END, values=values)
+        self.symbol_means_var.set(
+            self.mean_summary(self.current_symbol_rows, self.symbol_intervals)
+        )
 
     def sort_table(
         self,
@@ -1079,6 +1099,28 @@ class ThemePerformanceDashboard:
     @staticmethod
     def format_percent(value: Any) -> str:
         return "" if value is None else f"{float(value):.2f}%"
+
+    @staticmethod
+    def mean_summary(
+        rows: list[dict[str, Any]],
+        columns: tuple[str, ...],
+    ) -> str:
+        means: list[str] = []
+        for column in columns:
+            values: list[float] = []
+            for row in rows:
+                value = row.get(column)
+                if value is None:
+                    continue
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(numeric_value):
+                    values.append(numeric_value)
+            if values:
+                means.append(f"{column}: {sum(values) / len(values):.2f}%")
+        return "Column means: " + (" | ".join(means) if means else "—")
 
     def close(self) -> None:
         self.closing = True
