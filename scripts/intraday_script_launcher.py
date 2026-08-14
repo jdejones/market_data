@@ -114,6 +114,13 @@ SCRIPT_SPECS = (
         window_title="Theme Performance Dashboard",
     ),
     ScriptSpec(
+        key="recent_events_gui",
+        label="Recent Events",
+        filename="recent_events_gui.py",
+        arguments=no_arguments,
+        window_title="Recent Events",
+    ),
+    ScriptSpec(
         key="vwap_bands",
         label="VWAP Bands",
         filename="vwap_bands.py",
