@@ -114,6 +114,13 @@ SCRIPT_SPECS = (
         window_title="Theme Performance Dashboard",
     ),
     ScriptSpec(
+        key="form13f_gui",
+        label="SEC Form 13F Analytics",
+        filename="form13f_gui.py",
+        arguments=no_arguments,
+        window_title="SEC Form 13F Analytics",
+    ),
+    ScriptSpec(
         key="recent_events_gui",
         label="Recent Events",
         filename="recent_events_gui.py",
