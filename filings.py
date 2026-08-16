@@ -565,6 +565,31 @@ class Form13FDatabase:
                 found.update(str(row[0]) for row in conn.execute(query, {"accession_nos": values}))
         return found
 
+    def existing_complete_accessions(self, accession_nos: Iterable[str]) -> set[str]:
+        """Return accessions that already have both a cover page and holdings."""
+        accessions = [accession for accession in accession_nos if accession]
+        if not accessions:
+            return set()
+
+        query = (
+            text(
+                """
+                SELECT DISTINCT cover_pages.accession_no
+                FROM cover_pages
+                INNER JOIN holdings
+                    ON holdings.accession_no = cover_pages.accession_no
+                WHERE cover_pages.accession_no IN :accession_nos
+                """
+            )
+            .bindparams(bindparam("accession_nos", expanding=True))
+        )
+        found: set[str] = set()
+        with self.engine.connect() as conn:
+            for batch in chunked([{"accession_no": value} for value in accessions], 1000):
+                values = [row["accession_no"] for row in batch]
+                found.update(str(row[0]) for row in conn.execute(query, {"accession_nos": values}))
+        return found
+
     def _upsert_sql(self, table_name: str, columns: tuple[str, ...], key_columns: tuple[str, ...]) -> str:
         quoted_columns = ", ".join(mysql_identifier(column) for column in columns)
         values = ", ".join(f":{column}" for column in columns)
@@ -1011,6 +1036,18 @@ class Form13FImporter:
         stats.cover_requests += self._last_page_requests
         stats.cover_files += 1
 
+        candidate_accessions = {
+            str(record["accessionNo"])
+            for record in cover_records
+            if record.get("accessionNo")
+        }
+        stored_accessions = self.database.existing_complete_accessions(candidate_accessions)
+        cover_records = [
+            record
+            for record in cover_records
+            if str(record.get("accessionNo")) not in stored_accessions
+        ]
+
         cover_rows = [
             self.normalizer.cover_page_row(record, source_key=cover_source_key)
             for record in cover_records
@@ -1033,12 +1070,15 @@ class Form13FImporter:
         stats.holdings_requests += self._last_page_requests
         stats.holdings_files += 1
 
+        holdings_records = [
+            record
+            for record in holdings_records
+            if str(record.get("accessionNo")) in cover_accessions
+        ]
         imported_accessions: set[str] = set()
         holdings_progress = self._progress(holdings_records, desc=progress_desc, unit="filing", leave=False)
         for record in holdings_progress:
             accession_no = record.get("accessionNo")
-            if accession_no not in cover_accessions:
-                continue
             inserted, deleted, skipped = self._replace_holding_record(
                 record,
                 source_key=holdings_source_key,
