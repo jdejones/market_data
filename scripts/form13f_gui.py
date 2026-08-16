@@ -1,0 +1,1379 @@
+from __future__ import annotations
+
+import csv
+import datetime as dt
+import math
+import sys
+import tkinter as tk
+import webbrowser
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
+from decimal import Decimal
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+from typing import Any, Callable, Iterable
+
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+
+
+PACKAGE_PARENT = Path(__file__).resolve().parents[2]
+if str(PACKAGE_PARENT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_PARENT))
+
+from market_data.filings import Form13FDatabase  # type: ignore[import-not-found]
+
+
+ALL_MANAGERS = "All imported managers"
+DEFAULT_LIMIT = 500
+POLL_INTERVAL_MS = 100
+
+
+@dataclass(frozen=True)
+class Column:
+    key: str
+    label: str
+    width: int = 120
+    anchor: str = tk.W
+    formatter: Callable[[Any], str] | None = None
+
+
+@dataclass(frozen=True)
+class Catalog:
+    periods: tuple[dt.date, ...]
+    managers: tuple[tuple[str, str], ...]
+    cover_count: int
+    holding_count: int
+
+
+@dataclass(frozen=True)
+class Overview:
+    period: dt.date
+    metrics: dict[str, Any]
+    managers: list[dict[str, Any]]
+    securities: list[dict[str, Any]]
+
+
+def clean_record(row: Any) -> dict[str, Any]:
+    return dict(row._mapping)
+
+
+def format_date(value: Any) -> str:
+    if isinstance(value, (dt.date, dt.datetime)):
+        return value.isoformat()[:10]
+    return "" if value is None else str(value)
+
+
+def format_datetime(value: Any) -> str:
+    if isinstance(value, dt.datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+    return format_date(value)
+
+
+def format_integer(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return f"{float(value):,.0f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_money(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    sign = "-" if number < 0 else ""
+    number = abs(number)
+    if number >= 1_000_000_000_000:
+        return f"{sign}${number / 1_000_000_000_000:.2f}T"
+    if number >= 1_000_000_000:
+        return f"{sign}${number / 1_000_000_000:.2f}B"
+    if number >= 1_000_000:
+        return f"{sign}${number / 1_000_000:.2f}M"
+    if number >= 1_000:
+        return f"{sign}${number / 1_000:.2f}K"
+    return f"{sign}${number:,.0f}"
+
+
+def format_percent(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return "" if not math.isfinite(number) else f"{number:.2f}%"
+
+
+def raw_sort_key(value: Any) -> tuple[int, Any]:
+    if value is None or value == "":
+        return (1, "")
+    if isinstance(value, (int, float, Decimal, dt.date, dt.datetime)):
+        return (0, value)
+    return (0, str(value).casefold())
+
+
+def parse_positive_int(value: str, default: int = DEFAULT_LIMIT) -> int:
+    try:
+        return max(1, min(int(value), 10_000))
+    except ValueError:
+        return default
+
+
+class Form13FRepository:
+    """Read-only queries over the tables populated by Form13FImporter."""
+
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+
+    def load_catalog(self) -> Catalog:
+        with self.engine.connect() as conn:
+            periods = tuple(
+                row[0]
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT DISTINCT period_of_report
+                        FROM cover_pages
+                        WHERE period_of_report IS NOT NULL
+                        ORDER BY period_of_report DESC
+                        """
+                    )
+                )
+            )
+            managers = tuple(
+                (str(row.cik), str(row.company_name or row.cik))
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT cik, MAX(company_name) AS company_name
+                        FROM cover_pages
+                        WHERE cik IS NOT NULL AND cik <> ''
+                        GROUP BY cik
+                        ORDER BY company_name, cik
+                        """
+                    )
+                )
+            )
+            cover_count = int(
+                conn.execute(text("SELECT COUNT(*) FROM cover_pages")).scalar() or 0
+            )
+            holding_count = int(
+                conn.execute(
+                    text(
+                        """
+                        SELECT TABLE_ROWS
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = DATABASE()
+                          AND TABLE_NAME = 'holdings'
+                        """
+                    )
+                ).scalar()
+                or 0
+            )
+        return Catalog(periods, managers, cover_count, holding_count)
+
+    def overview(self, period: dt.date) -> Overview:
+        latest_cte = self._latest_filings_cte()
+        with self.engine.connect() as conn:
+            metrics = clean_record(
+                conn.execute(
+                    text(
+                        latest_cte
+                        + """
+                        SELECT
+                            COUNT(*) AS manager_count,
+                            COALESCE(SUM(table_value_total), 0) AS disclosed_value,
+                            COALESCE(SUM(table_entry_total), 0) AS reported_entries,
+                            MAX(filed_at) AS latest_filed_at
+                        FROM latest_filings
+                        """
+                    ),
+                    {"period": period},
+                ).one()
+            )
+            managers = [
+                clean_record(row)
+                for row in conn.execute(
+                    text(
+                        latest_cte
+                        + """
+                        SELECT
+                            cik,
+                            company_name,
+                            form_type,
+                            report_type,
+                            filed_at,
+                            table_value_total,
+                            table_entry_total,
+                            accession_no
+                        FROM latest_filings
+                        ORDER BY table_value_total DESC, company_name
+                        """
+                    ),
+                    {"period": period},
+                )
+            ]
+        return Overview(period, metrics, managers, [])
+
+    def top_securities(self, period: dt.date) -> list[dict[str, Any]]:
+        query = text(
+            self._latest_filings_cte()
+            + """
+            SELECT
+                COALESCE(NULLIF(h.ticker, ''), h.cusip, h.name_of_issuer) AS security,
+                MAX(h.name_of_issuer) AS issuer,
+                MAX(h.cusip) AS cusip,
+                SUM(h.value) AS disclosed_value,
+                COUNT(DISTINCT lf.cik) AS manager_count
+            FROM latest_filings lf
+            JOIN holdings h ON h.accession_no = lf.accession_no
+            WHERE h.period_of_report = :period
+            GROUP BY COALESCE(NULLIF(h.ticker, ''), h.cusip, h.name_of_issuer)
+            ORDER BY disclosed_value DESC
+            LIMIT 100
+            """
+        )
+        with self.engine.connect() as conn:
+            return [
+                clean_record(row)
+                for row in conn.execute(query, {"period": period})
+            ]
+
+    def manager_holdings(
+        self,
+        manager_cik: str,
+        period: dt.date,
+        search: str = "",
+        limit: int = DEFAULT_LIMIT,
+    ) -> list[dict[str, Any]]:
+        filters = ""
+        params: dict[str, Any] = {
+            "period": period,
+            "manager_cik": manager_cik,
+            "limit": limit,
+        }
+        if search:
+            filters = """
+              AND (
+                    h.ticker LIKE :search
+                 OR h.cusip LIKE :search
+                 OR h.name_of_issuer LIKE :search
+              )
+            """
+            params["search"] = f"%{search}%"
+        query = text(
+            """
+            WITH ranked AS (
+                SELECT
+                    cp.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY cp.cik, cp.period_of_report
+                        ORDER BY cp.filed_at DESC, cp.accession_no DESC
+                    ) AS rn
+                FROM cover_pages cp
+                WHERE cp.period_of_report = :period
+                  AND cp.cik = :manager_cik
+            ),
+            selected AS (
+                SELECT * FROM ranked WHERE rn = 1
+            ),
+            positions AS (
+                SELECT
+                    h.ticker,
+                    h.cusip,
+                    MAX(h.name_of_issuer) AS name_of_issuer,
+                    MAX(h.title_of_class) AS title_of_class,
+                    MAX(h.put_call) AS put_call,
+                    MAX(h.ssh_prnamt_type) AS share_type,
+                    SUM(h.value) AS disclosed_value,
+                    SUM(h.ssh_prnamt) AS shares,
+                    SUM(h.voting_sole) AS voting_sole,
+                    SUM(h.voting_shared) AS voting_shared,
+                    SUM(h.voting_none) AS voting_none
+                FROM selected s
+                JOIN holdings h ON h.accession_no = s.accession_no
+                WHERE 1 = 1
+                """
+            + filters
+            + """
+                GROUP BY
+                    h.ticker,
+                    h.cusip,
+                    h.title_of_class,
+                    h.put_call,
+                    h.ssh_prnamt_type
+            )
+            SELECT
+                *,
+                disclosed_value
+                    / NULLIF((SELECT table_value_total FROM selected), 0)
+                    * 100 AS portfolio_weight
+            FROM positions
+            ORDER BY disclosed_value DESC
+            LIMIT :limit
+            """
+        )
+        with self.engine.connect() as conn:
+            return [clean_record(row) for row in conn.execute(query, params)]
+
+    def position_changes(
+        self,
+        current_period: dt.date,
+        prior_period: dt.date,
+        manager_cik: str | None,
+        action: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        manager_filter = ""
+        params: dict[str, Any] = {
+            "current_period": current_period,
+            "prior_period": prior_period,
+            "limit": limit,
+        }
+        if manager_cik:
+            manager_filter = "AND cp.cik = :manager_cik"
+            params["manager_cik"] = manager_cik
+        action_filter = ""
+        if action != "All":
+            action_filter = "WHERE action = :action"
+            params["action"] = action.lower()
+
+        query = text(
+            f"""
+            WITH ranked AS (
+                SELECT
+                    cp.accession_no,
+                    cp.cik,
+                    cp.period_of_report,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY cp.cik, cp.period_of_report
+                        ORDER BY cp.filed_at DESC, cp.accession_no DESC
+                    ) AS rn
+                FROM cover_pages cp
+                WHERE cp.period_of_report IN (:current_period, :prior_period)
+                {manager_filter}
+            ),
+            selected AS (
+                SELECT accession_no, period_of_report
+                FROM ranked
+                WHERE rn = 1
+            ),
+            positions AS (
+                SELECT
+                    s.period_of_report,
+                    CONCAT_WS(
+                        '|',
+                        COALESCE(NULLIF(h.ticker, ''), h.cusip, h.name_of_issuer),
+                        COALESCE(h.title_of_class, ''),
+                        COALESCE(h.put_call, '')
+                    ) AS security_key,
+                    MAX(h.ticker) AS ticker,
+                    MAX(h.cusip) AS cusip,
+                    MAX(h.name_of_issuer) AS name_of_issuer,
+                    MAX(h.put_call) AS put_call,
+                    SUM(h.value) AS disclosed_value,
+                    SUM(
+                        CASE
+                            WHEN h.ssh_prnamt_type = 'SH'
+                             AND (h.put_call IS NULL OR h.put_call = '')
+                            THEN h.ssh_prnamt
+                            ELSE 0
+                        END
+                    ) AS shares
+                FROM selected s
+                JOIN holdings h ON h.accession_no = s.accession_no
+                GROUP BY
+                    s.period_of_report,
+                    CONCAT_WS(
+                        '|',
+                        COALESCE(NULLIF(h.ticker, ''), h.cusip, h.name_of_issuer),
+                        COALESCE(h.title_of_class, ''),
+                        COALESCE(h.put_call, '')
+                    )
+            ),
+            security_keys AS (
+                SELECT DISTINCT security_key FROM positions
+            ),
+            compared AS (
+                SELECT
+                    k.security_key,
+                    COALESCE(MAX(c.ticker), MAX(p.ticker)) AS ticker,
+                    COALESCE(MAX(c.cusip), MAX(p.cusip)) AS cusip,
+                    COALESCE(MAX(c.name_of_issuer), MAX(p.name_of_issuer)) AS name_of_issuer,
+                    COALESCE(MAX(c.put_call), MAX(p.put_call)) AS put_call,
+                    COALESCE(MAX(c.disclosed_value), 0) AS current_value,
+                    COALESCE(MAX(p.disclosed_value), 0) AS prior_value,
+                    COALESCE(MAX(c.disclosed_value), 0)
+                        - COALESCE(MAX(p.disclosed_value), 0) AS value_change,
+                    COALESCE(MAX(c.shares), 0) AS current_shares,
+                    COALESCE(MAX(p.shares), 0) AS prior_shares,
+                    COALESCE(MAX(c.shares), 0)
+                        - COALESCE(MAX(p.shares), 0) AS shares_change
+                FROM security_keys k
+                LEFT JOIN positions c
+                  ON c.security_key = k.security_key
+                 AND c.period_of_report = :current_period
+                LEFT JOIN positions p
+                  ON p.security_key = k.security_key
+                 AND p.period_of_report = :prior_period
+                GROUP BY k.security_key
+            ),
+            classified AS (
+                SELECT
+                    *,
+                    CASE
+                        WHEN prior_value = 0 AND current_value > 0 THEN 'new'
+                        WHEN prior_value > 0 AND current_value = 0 THEN 'exited'
+                        WHEN value_change > 0 THEN 'bought'
+                        WHEN value_change < 0 THEN 'sold'
+                        ELSE 'unchanged'
+                    END AS action,
+                    ABS(value_change) AS absolute_change
+                FROM compared
+            )
+            SELECT *
+            FROM classified
+            {action_filter}
+            ORDER BY absolute_change DESC, security_key
+            LIMIT :limit
+            """
+        )
+        with self.engine.connect() as conn:
+            return [clean_record(row) for row in conn.execute(query, params)]
+
+    def security_owners(
+        self,
+        query_text: str,
+        period: dt.date,
+        limit: int = DEFAULT_LIMIT,
+    ) -> list[dict[str, Any]]:
+        def owner_query(match_clause: str, index_hint: str = "") -> Any:
+            return text(
+                f"""
+            SELECT
+                cp.cik,
+                cp.company_name,
+                MAX(h.ticker) AS ticker,
+                MAX(h.cusip) AS cusip,
+                MAX(h.name_of_issuer) AS name_of_issuer,
+                SUM(h.value) AS disclosed_value,
+                SUM(h.ssh_prnamt) AS shares,
+                h.put_call,
+                h.title_of_class,
+                cp.filed_at,
+                cp.accession_no
+            FROM holdings h {index_hint}
+            JOIN cover_pages cp ON cp.accession_no = h.accession_no
+            WHERE h.period_of_report = :period
+              AND ({match_clause})
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM cover_pages newer
+                    WHERE newer.cik = cp.cik
+                      AND newer.period_of_report = cp.period_of_report
+                      AND (
+                            newer.filed_at > cp.filed_at
+                         OR (
+                                newer.filed_at = cp.filed_at
+                            AND newer.accession_no > cp.accession_no
+                         )
+                      )
+              )
+            GROUP BY
+                cp.cik,
+                cp.company_name,
+                h.ticker,
+                h.cusip,
+                h.title_of_class,
+                h.put_call,
+                cp.filed_at,
+                cp.accession_no
+            ORDER BY disclosed_value DESC
+            LIMIT :limit
+            """
+            )
+
+        params = {
+            "period": period,
+            "exact": query_text.upper(),
+            "search": f"%{query_text}%",
+            "limit": limit,
+        }
+        with self.engine.connect() as conn:
+            rows = [
+                clean_record(row)
+                for row in conn.execute(
+                    owner_query(
+                        "h.ticker = :exact",
+                        "FORCE INDEX (idx_holdings_ticker)",
+                    ),
+                    params,
+                )
+            ]
+            if rows:
+                return rows
+            rows = [
+                clean_record(row)
+                for row in conn.execute(
+                    owner_query(
+                        "h.cusip = :exact",
+                        "FORCE INDEX (idx_holdings_cusip)",
+                    ),
+                    params,
+                )
+            ]
+            if rows:
+                return rows
+            return [
+                clean_record(row)
+                for row in conn.execute(
+                    owner_query("h.name_of_issuer LIKE :search"),
+                    params,
+                )
+            ]
+
+    def filings(
+        self,
+        period: dt.date | None,
+        manager_cik: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        clauses = ["1 = 1"]
+        params: dict[str, Any] = {"limit": limit}
+        if period:
+            clauses.append("period_of_report = :period")
+            params["period"] = period
+        if manager_cik:
+            clauses.append("cik = :manager_cik")
+            params["manager_cik"] = manager_cik
+        query = text(
+            f"""
+            SELECT
+                accession_no,
+                form_type,
+                period_of_report,
+                filed_at,
+                cik,
+                company_name,
+                report_type,
+                table_entry_total,
+                table_value_total,
+                other_included_managers_count
+            FROM cover_pages
+            WHERE {' AND '.join(clauses)}
+            ORDER BY filed_at DESC, company_name
+            LIMIT :limit
+            """
+        )
+        with self.engine.connect() as conn:
+            return [clean_record(row) for row in conn.execute(query, params)]
+
+    @staticmethod
+    def _latest_filings_cte() -> str:
+        return """
+        WITH ranked AS (
+            SELECT
+                cp.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY cp.cik, cp.period_of_report
+                    ORDER BY cp.filed_at DESC, cp.accession_no DESC
+                ) AS rn
+            FROM cover_pages cp
+            WHERE cp.period_of_report = :period
+        ),
+        latest_filings AS (
+            SELECT * FROM ranked WHERE rn = 1
+        )
+        """
+
+
+class DataTable(ttk.Frame):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        columns: Iterable[Column],
+        *,
+        selectmode: str = "browse",
+    ) -> None:
+        super().__init__(parent)
+        self.columns = tuple(columns)
+        self.rows: list[dict[str, Any]] = []
+        self.sort_column: str | None = None
+        self.sort_descending = False
+
+        self.tree = ttk.Treeview(
+            self,
+            columns=tuple(column.key for column in self.columns),
+            show="headings",
+            selectmode=selectmode,
+        )
+        y_scroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.tree.yview)
+        x_scroll = ttk.Scrollbar(self, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self._configure_columns()
+
+    def _configure_columns(self) -> None:
+        for column in self.columns:
+            self.tree.heading(
+                column.key,
+                text=column.label,
+                command=lambda key=column.key: self.sort_by(key),
+            )
+            self.tree.column(
+                column.key,
+                width=column.width,
+                minwidth=65,
+                anchor=column.anchor,
+                stretch=column.anchor == tk.W,
+            )
+
+    def set_rows(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+        self.sort_column = None
+        self.sort_descending = False
+        self._render()
+
+    def _render(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        for index, row in enumerate(self.rows):
+            values = []
+            for column in self.columns:
+                value = row.get(column.key)
+                values.append(column.formatter(value) if column.formatter else format_date(value))
+            self.tree.insert("", tk.END, iid=str(index), values=values)
+
+    def sort_by(self, key: str) -> None:
+        if self.sort_column == key:
+            self.sort_descending = not self.sort_descending
+        else:
+            self.sort_column = key
+            self.sort_descending = False
+        self.rows.sort(key=lambda row: raw_sort_key(row.get(key)), reverse=self.sort_descending)
+        self._render()
+        for column in self.columns:
+            arrow = ""
+            if column.key == key:
+                arrow = " ▼" if self.sort_descending else " ▲"
+            self.tree.heading(column.key, text=column.label + arrow)
+
+    def selected_row(self) -> dict[str, Any] | None:
+        selection = self.tree.selection()
+        if not selection:
+            return None
+        index = int(selection[0])
+        return self.rows[index] if index < len(self.rows) else None
+
+    def export_csv(self, path: str) -> None:
+        with open(path, "w", newline="", encoding="utf-8-sig") as output:
+            writer = csv.DictWriter(
+                output,
+                fieldnames=[column.key for column in self.columns],
+                extrasaction="ignore",
+            )
+            writer.writeheader()
+            writer.writerows(self.rows)
+
+
+class Form13FDashboard:
+    def __init__(self, root: tk.Tk, repository: Form13FRepository) -> None:
+        self.root = root
+        self.repository = repository
+        self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="form13f-gui")
+        self.pending: list[
+            tuple[Future[Any], Callable[[Any], None], str]
+        ] = []
+        self.poll_after_id: str | None = None
+        self.closing = False
+        self.catalog: Catalog | None = None
+        self.manager_by_label: dict[str, str | None] = {ALL_MANAGERS: None}
+        self.label_by_cik: dict[str, str] = {}
+
+        self.root.title("SEC Form 13F Analytics")
+        self.root.geometry("1380x860")
+        self.root.minsize(980, 650)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+        self.status_var = tk.StringVar(value="Connecting to the form13f database…")
+        self._build_widgets()
+        self._submit(self.repository.load_catalog, self._catalog_loaded, "Load database")
+
+    def _build_widgets(self) -> None:
+        container = ttk.Frame(self.root, padding=8)
+        container.pack(fill=tk.BOTH, expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        title_frame = ttk.Frame(container)
+        title_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(
+            title_frame,
+            text="SEC Form 13F Analytics",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(side=tk.LEFT)
+        ttk.Button(title_frame, text="Export Current Table…", command=self.export_current).pack(
+            side=tk.RIGHT
+        )
+
+        self.notebook = ttk.Notebook(container)
+        self.notebook.grid(row=1, column=0, sticky="nsew")
+        self._build_overview_tab()
+        self._build_holdings_tab()
+        self._build_changes_tab()
+        self._build_security_tab()
+        self._build_filings_tab()
+
+        footer = ttk.Frame(container)
+        footer.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(footer, textvariable=self.status_var).pack(side=tk.LEFT)
+        ttk.Label(
+            footer,
+            text=(
+                "13F data are delayed disclosures; value changes are not investment "
+                "returns or confirmed trades."
+            ),
+            foreground="#666666",
+        ).pack(side=tk.RIGHT)
+
+    def _build_overview_tab(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(tab, text="Overview")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(3, weight=1)
+
+        controls = ttk.Frame(tab)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.overview_period_var = tk.StringVar()
+        self.overview_period_box = self._combo(
+            controls, "Reporting period", self.overview_period_var, 0, 16
+        )
+        ttk.Button(controls, text="Refresh", command=self.refresh_overview).grid(
+            row=1, column=1, padx=(8, 0)
+        )
+        ttk.Button(
+            controls,
+            text="Load Top Securities",
+            command=self.refresh_top_securities,
+        ).grid(row=1, column=2, padx=(8, 0))
+
+        metrics = ttk.Frame(tab)
+        metrics.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        for index in range(4):
+            metrics.columnconfigure(index, weight=1)
+        self.metric_vars = {
+            "manager_count": tk.StringVar(value="—"),
+            "disclosed_value": tk.StringVar(value="—"),
+            "reported_entries": tk.StringVar(value="—"),
+            "latest_filed_at": tk.StringVar(value="—"),
+        }
+        labels = (
+            ("Managers", "manager_count"),
+            ("Total disclosed value", "disclosed_value"),
+            ("Reported line entries", "reported_entries"),
+            ("Latest filing received", "latest_filed_at"),
+        )
+        for index, (label, key) in enumerate(labels):
+            frame = ttk.LabelFrame(metrics, text=label, padding=8)
+            frame.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 5, 0))
+            ttk.Label(
+                frame, textvariable=self.metric_vars[key], font=("Segoe UI", 13, "bold")
+            ).pack()
+
+        ttk.Label(
+            tab,
+            text=(
+                "Latest stored filing per manager for the selected quarter. "
+                "Amendments are represented by the most recently filed accession."
+            ),
+            foreground="#666666",
+        ).grid(row=2, column=0, sticky="w", pady=(0, 6))
+
+        panes = ttk.Panedwindow(tab, orient=tk.HORIZONTAL)
+        panes.grid(row=3, column=0, sticky="nsew")
+        managers_frame = ttk.LabelFrame(panes, text="Managers", padding=4)
+        securities_frame = ttk.LabelFrame(panes, text="Top disclosed securities", padding=4)
+        panes.add(managers_frame, weight=3)
+        panes.add(securities_frame, weight=2)
+        for frame in (managers_frame, securities_frame):
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(0, weight=1)
+
+        self.overview_managers_table = DataTable(
+            managers_frame,
+            (
+                Column("company_name", "Manager", 260),
+                Column("cik", "CIK", 100),
+                Column("table_value_total", "Portfolio value", 135, tk.E, format_money),
+                Column("table_entry_total", "Entries", 80, tk.E, format_integer),
+                Column("form_type", "Form", 80),
+                Column("filed_at", "Filed", 130, tk.W, format_datetime),
+            ),
+        )
+        self.overview_managers_table.grid(row=0, column=0, sticky="nsew")
+        self.overview_managers_table.tree.bind(
+            "<Double-1>", self._open_selected_manager
+        )
+        self.overview_securities_table = DataTable(
+            securities_frame,
+            (
+                Column("security", "Ticker / CUSIP", 110),
+                Column("issuer", "Issuer", 230),
+                Column("disclosed_value", "Disclosed value", 135, tk.E, format_money),
+                Column("manager_count", "Managers", 85, tk.E, format_integer),
+            ),
+        )
+        self.overview_securities_table.grid(row=0, column=0, sticky="nsew")
+        self.overview_securities_table.tree.bind(
+            "<Double-1>", self._open_selected_security
+        )
+
+    def _build_holdings_tab(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(tab, text="Manager Holdings")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+
+        controls = ttk.Frame(tab)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.holdings_manager_var = tk.StringVar()
+        self.holdings_manager_box = self._combo(
+            controls, "Manager", self.holdings_manager_var, 0, 42
+        )
+        self.holdings_period_var = tk.StringVar()
+        self.holdings_period_box = self._combo(
+            controls, "Reporting period", self.holdings_period_var, 1, 16
+        )
+        self.holdings_search_var = tk.StringVar()
+        ttk.Label(controls, text="Ticker, CUSIP, or issuer").grid(
+            row=0, column=2, sticky="w", padx=(8, 0)
+        )
+        search_entry = ttk.Entry(controls, textvariable=self.holdings_search_var, width=24)
+        search_entry.grid(row=1, column=2, sticky="ew", padx=(8, 0))
+        search_entry.bind("<Return>", lambda _event: self.refresh_holdings())
+        self.holdings_limit_var = tk.StringVar(value=str(DEFAULT_LIMIT))
+        self._entry(controls, "Max rows", self.holdings_limit_var, 3, 9)
+        ttk.Button(controls, text="Load holdings", command=self.refresh_holdings).grid(
+            row=1, column=4, padx=(8, 0)
+        )
+        controls.columnconfigure(0, weight=1)
+
+        self.holdings_note_var = tk.StringVar(
+            value="Choose a manager and reporting period."
+        )
+        ttk.Label(tab, textvariable=self.holdings_note_var, foreground="#666666").grid(
+            row=1, column=0, sticky="w", pady=(0, 6)
+        )
+        self.holdings_table = DataTable(
+            tab,
+            (
+                Column("ticker", "Ticker", 80),
+                Column("name_of_issuer", "Issuer", 250),
+                Column("title_of_class", "Class", 100),
+                Column("cusip", "CUSIP", 95),
+                Column("put_call", "Put/Call", 70),
+                Column("disclosed_value", "Value", 125, tk.E, format_money),
+                Column("portfolio_weight", "Weight", 90, tk.E, format_percent),
+                Column("shares", "Shares / principal", 125, tk.E, format_integer),
+                Column("share_type", "Amount type", 90),
+                Column("voting_sole", "Vote sole", 105, tk.E, format_integer),
+                Column("voting_shared", "Vote shared", 105, tk.E, format_integer),
+                Column("voting_none", "Vote none", 105, tk.E, format_integer),
+            ),
+        )
+        self.holdings_table.grid(row=2, column=0, sticky="nsew")
+
+    def _build_changes_tab(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(tab, text="Quarterly Changes")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+
+        controls = ttk.Frame(tab)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.changes_manager_var = tk.StringVar(value=ALL_MANAGERS)
+        self.changes_manager_box = self._combo(
+            controls, "Manager scope", self.changes_manager_var, 0, 38
+        )
+        self.current_period_var = tk.StringVar()
+        self.current_period_box = self._combo(
+            controls, "Current period", self.current_period_var, 1, 15
+        )
+        self.prior_period_var = tk.StringVar()
+        self.prior_period_box = self._combo(
+            controls, "Prior period", self.prior_period_var, 2, 15
+        )
+        self.action_var = tk.StringVar(value="All")
+        self.action_box = self._combo(
+            controls, "Action", self.action_var, 3, 12
+        )
+        self.action_box.configure(values=("All", "New", "Bought", "Sold", "Exited"))
+        self.changes_limit_var = tk.StringVar(value=str(DEFAULT_LIMIT))
+        self._entry(controls, "Max rows", self.changes_limit_var, 4, 9)
+        ttk.Button(controls, text="Compare", command=self.refresh_changes).grid(
+            row=1, column=5, padx=(8, 0)
+        )
+        controls.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            tab,
+            text=(
+                "Compares reported position values between quarter-end snapshots. "
+                "Price movement, manager coverage changes, options, and amendments "
+                "can affect the result; labels do not prove a trade occurred."
+            ),
+            foreground="#666666",
+            wraplength=1200,
+        ).grid(row=1, column=0, sticky="w", pady=(0, 6))
+        self.changes_table = DataTable(
+            tab,
+            (
+                Column("action", "Classification", 95),
+                Column("ticker", "Ticker", 80),
+                Column("name_of_issuer", "Issuer", 250),
+                Column("cusip", "CUSIP", 95),
+                Column("put_call", "Put/Call", 70),
+                Column("current_value", "Current value", 125, tk.E, format_money),
+                Column("prior_value", "Prior value", 125, tk.E, format_money),
+                Column("value_change", "Value change", 125, tk.E, format_money),
+                Column("current_shares", "Current shares", 120, tk.E, format_integer),
+                Column("prior_shares", "Prior shares", 120, tk.E, format_integer),
+                Column("shares_change", "Share change", 120, tk.E, format_integer),
+            ),
+        )
+        self.changes_table.grid(row=2, column=0, sticky="nsew")
+
+    def _build_security_tab(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(tab, text="Security Ownership")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+
+        controls = ttk.Frame(tab)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.security_query_var = tk.StringVar()
+        ttk.Label(controls, text="Ticker, CUSIP, or issuer").grid(row=0, column=0, sticky="w")
+        security_entry = ttk.Entry(
+            controls, textvariable=self.security_query_var, width=30
+        )
+        security_entry.grid(row=1, column=0, sticky="ew")
+        security_entry.bind("<Return>", lambda _event: self.refresh_security())
+        self.security_period_var = tk.StringVar()
+        self.security_period_box = self._combo(
+            controls, "Reporting period", self.security_period_var, 1, 16
+        )
+        self.security_limit_var = tk.StringVar(value=str(DEFAULT_LIMIT))
+        self._entry(controls, "Max rows", self.security_limit_var, 2, 9)
+        ttk.Button(controls, text="Find owners", command=self.refresh_security).grid(
+            row=1, column=3, padx=(8, 0)
+        )
+        controls.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            tab,
+            text=(
+                "Shows reporting managers in the imported universe, not total "
+                "institutional ownership. Put/call positions are displayed separately."
+            ),
+            foreground="#666666",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 6))
+        self.security_table = DataTable(
+            tab,
+            (
+                Column("company_name", "Manager", 260),
+                Column("cik", "CIK", 95),
+                Column("ticker", "Ticker", 75),
+                Column("name_of_issuer", "Issuer", 220),
+                Column("cusip", "CUSIP", 95),
+                Column("title_of_class", "Class", 95),
+                Column("put_call", "Put/Call", 70),
+                Column("disclosed_value", "Value", 125, tk.E, format_money),
+                Column("shares", "Shares / principal", 125, tk.E, format_integer),
+                Column("filed_at", "Filed", 130, tk.W, format_datetime),
+            ),
+        )
+        self.security_table.grid(row=2, column=0, sticky="nsew")
+
+    def _build_filings_tab(self) -> None:
+        tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(tab, text="Filing Browser")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(2, weight=1)
+
+        controls = ttk.Frame(tab)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.filings_period_var = tk.StringVar(value="All periods")
+        self.filings_period_box = self._combo(
+            controls, "Reporting period", self.filings_period_var, 0, 16
+        )
+        self.filings_manager_var = tk.StringVar(value=ALL_MANAGERS)
+        self.filings_manager_box = self._combo(
+            controls, "Manager", self.filings_manager_var, 1, 42
+        )
+        self.filings_limit_var = tk.StringVar(value=str(DEFAULT_LIMIT))
+        self._entry(controls, "Max rows", self.filings_limit_var, 2, 9)
+        ttk.Button(controls, text="Load filings", command=self.refresh_filings).grid(
+            row=1, column=3, padx=(8, 0)
+        )
+        controls.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            tab,
+            text="Double-click a filing to open its SEC EDGAR filing page.",
+            foreground="#666666",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 6))
+        self.filings_table = DataTable(
+            tab,
+            (
+                Column("filed_at", "Filed", 140, tk.W, format_datetime),
+                Column("period_of_report", "Period", 100, tk.W, format_date),
+                Column("company_name", "Manager", 260),
+                Column("cik", "CIK", 95),
+                Column("form_type", "Form", 85),
+                Column("report_type", "Report type", 130),
+                Column("table_value_total", "Portfolio value", 130, tk.E, format_money),
+                Column("table_entry_total", "Entries", 80, tk.E, format_integer),
+                Column("other_included_managers_count", "Other managers", 100, tk.E, format_integer),
+                Column("accession_no", "Accession", 165),
+            ),
+        )
+        self.filings_table.grid(row=2, column=0, sticky="nsew")
+        self.filings_table.tree.bind("<Double-1>", self.open_selected_filing)
+
+    @staticmethod
+    def _combo(
+        parent: tk.Misc,
+        label: str,
+        variable: tk.StringVar,
+        column: int,
+        width: int,
+    ) -> ttk.Combobox:
+        ttk.Label(parent, text=label).grid(
+            row=0, column=column, sticky="w", padx=(8 if column else 0, 0)
+        )
+        combo = ttk.Combobox(
+            parent, textvariable=variable, state="readonly", width=width
+        )
+        combo.grid(
+            row=1, column=column, sticky="ew", padx=(8 if column else 0, 0)
+        )
+        return combo
+
+    @staticmethod
+    def _entry(
+        parent: tk.Misc,
+        label: str,
+        variable: tk.StringVar,
+        column: int,
+        width: int,
+    ) -> ttk.Entry:
+        ttk.Label(parent, text=label).grid(
+            row=0, column=column, sticky="w", padx=(8 if column else 0, 0)
+        )
+        entry = ttk.Entry(parent, textvariable=variable, width=width)
+        entry.grid(
+            row=1, column=column, sticky="ew", padx=(8 if column else 0, 0)
+        )
+        return entry
+
+    def _submit(
+        self,
+        function: Callable[[], Any],
+        callback: Callable[[Any], None],
+        description: str,
+    ) -> None:
+        if self.closing:
+            return
+        self.status_var.set(f"{description}…")
+        self.pending.append((self.executor.submit(function), callback, description))
+        if self.poll_after_id is None:
+            self.poll_after_id = self.root.after(POLL_INTERVAL_MS, self._poll_tasks)
+
+    def _poll_tasks(self) -> None:
+        self.poll_after_id = None
+        if self.closing:
+            return
+        remaining: list[tuple[Future[Any], Callable[[Any], None], str]] = []
+        for future, callback, description in self.pending:
+            if not future.done():
+                remaining.append((future, callback, description))
+                continue
+            try:
+                result = future.result()
+                callback(result)
+            except Exception as exc:
+                self.status_var.set(f"{description} failed")
+                messagebox.showerror(f"{description} Failed", str(exc))
+        self.pending = remaining
+        if self.pending:
+            self.poll_after_id = self.root.after(POLL_INTERVAL_MS, self._poll_tasks)
+
+    def _catalog_loaded(self, catalog: Catalog) -> None:
+        self.catalog = catalog
+        period_values = tuple(format_date(period) for period in catalog.periods)
+        if not period_values:
+            raise RuntimeError(
+                "No reporting periods were found. Run form13f_recent_import.py first."
+            )
+        latest = period_values[0]
+        prior = period_values[1] if len(period_values) > 1 else latest
+        for combo in (
+            self.overview_period_box,
+            self.holdings_period_box,
+            self.current_period_box,
+            self.prior_period_box,
+            self.security_period_box,
+        ):
+            combo.configure(values=period_values)
+        self.filings_period_box.configure(values=("All periods", *period_values))
+        self.overview_period_var.set(latest)
+        self.holdings_period_var.set(latest)
+        self.current_period_var.set(latest)
+        self.prior_period_var.set(prior)
+        self.security_period_var.set(latest)
+
+        labels = [ALL_MANAGERS]
+        for cik, name in catalog.managers:
+            label = f"{name}  [CIK {cik}]"
+            labels.append(label)
+            self.manager_by_label[label] = cik
+            self.label_by_cik[cik] = label
+        manager_values = tuple(labels)
+        self.holdings_manager_box.configure(values=tuple(labels[1:]))
+        self.changes_manager_box.configure(values=manager_values)
+        self.filings_manager_box.configure(values=manager_values)
+        if len(labels) > 1:
+            self.holdings_manager_var.set(labels[1])
+            self.changes_manager_var.set(labels[1])
+        self.status_var.set(
+            f"Connected | {catalog.cover_count:,} filings | "
+            f"approximately {catalog.holding_count:,} holding rows"
+        )
+        self.refresh_overview()
+
+    @staticmethod
+    def _period(value: str) -> dt.date:
+        return dt.date.fromisoformat(value)
+
+    def refresh_overview(self) -> None:
+        try:
+            period = self._period(self.overview_period_var.get())
+        except ValueError:
+            return
+        self._submit(
+            lambda: self.repository.overview(period),
+            self._overview_loaded,
+            "Load quarter overview",
+        )
+
+    def _overview_loaded(self, overview: Overview) -> None:
+        metrics = overview.metrics
+        self.metric_vars["manager_count"].set(format_integer(metrics["manager_count"]))
+        self.metric_vars["disclosed_value"].set(format_money(metrics["disclosed_value"]))
+        self.metric_vars["reported_entries"].set(format_integer(metrics["reported_entries"]))
+        self.metric_vars["latest_filed_at"].set(format_datetime(metrics["latest_filed_at"]))
+        self.overview_managers_table.set_rows(overview.managers)
+        self.overview_securities_table.set_rows(overview.securities)
+        self.status_var.set(
+            f"Overview {overview.period:%Y-%m-%d}: "
+            f"{len(overview.managers):,} managers | "
+            "click Load Top Securities for the universe aggregation"
+        )
+
+    def refresh_top_securities(self) -> None:
+        try:
+            period = self._period(self.overview_period_var.get())
+        except ValueError:
+            return
+        self._submit(
+            lambda: self.repository.top_securities(period),
+            self._top_securities_loaded,
+            "Aggregate top disclosed securities",
+        )
+
+    def _top_securities_loaded(self, rows: list[dict[str, Any]]) -> None:
+        self.overview_securities_table.set_rows(rows)
+        self.status_var.set(f"Loaded {len(rows):,} top disclosed securities")
+
+    def refresh_holdings(self) -> None:
+        manager_cik = self.manager_by_label.get(self.holdings_manager_var.get())
+        if not manager_cik:
+            messagebox.showwarning("Manager Required", "Choose a filing manager.")
+            return
+        try:
+            period = self._period(self.holdings_period_var.get())
+        except ValueError:
+            return
+        search = self.holdings_search_var.get().strip()
+        limit = parse_positive_int(self.holdings_limit_var.get())
+        self._submit(
+            lambda: self.repository.manager_holdings(
+                manager_cik, period, search, limit
+            ),
+            self._holdings_loaded,
+            "Load manager holdings",
+        )
+
+    def _holdings_loaded(self, rows: list[dict[str, Any]]) -> None:
+        self.holdings_table.set_rows(rows)
+        total = sum(float(row.get("disclosed_value") or 0) for row in rows)
+        self.holdings_note_var.set(
+            f"{len(rows):,} positions shown | displayed value {format_money(total)}"
+        )
+        self.status_var.set(f"Loaded {len(rows):,} manager positions")
+
+    def refresh_changes(self) -> None:
+        try:
+            current = self._period(self.current_period_var.get())
+            prior = self._period(self.prior_period_var.get())
+        except ValueError:
+            return
+        if current == prior:
+            messagebox.showwarning(
+                "Choose Two Periods", "Current and prior periods must differ."
+            )
+            return
+        manager_cik = self.manager_by_label.get(self.changes_manager_var.get())
+        action = self.action_var.get()
+        limit = parse_positive_int(self.changes_limit_var.get())
+        self._submit(
+            lambda: self.repository.position_changes(
+                current, prior, manager_cik, action, limit
+            ),
+            self._changes_loaded,
+            "Compare quarterly positions",
+        )
+
+    def _changes_loaded(self, rows: list[dict[str, Any]]) -> None:
+        self.changes_table.set_rows(rows)
+        self.status_var.set(f"Loaded {len(rows):,} disclosed position changes")
+
+    def refresh_security(self) -> None:
+        query_text = self.security_query_var.get().strip()
+        if not query_text:
+            messagebox.showwarning(
+                "Security Required", "Enter a ticker, CUSIP, or issuer name."
+            )
+            return
+        try:
+            period = self._period(self.security_period_var.get())
+        except ValueError:
+            return
+        limit = parse_positive_int(self.security_limit_var.get())
+        self._submit(
+            lambda: self.repository.security_owners(query_text, period, limit),
+            self._security_loaded,
+            "Find security owners",
+        )
+
+    def _security_loaded(self, rows: list[dict[str, Any]]) -> None:
+        self.security_table.set_rows(rows)
+        self.status_var.set(f"Found {len(rows):,} reporting managers")
+
+    def refresh_filings(self) -> None:
+        period_text = self.filings_period_var.get()
+        period = None if period_text == "All periods" else self._period(period_text)
+        manager_cik = self.manager_by_label.get(self.filings_manager_var.get())
+        limit = parse_positive_int(self.filings_limit_var.get())
+        self._submit(
+            lambda: self.repository.filings(period, manager_cik, limit),
+            self._filings_loaded,
+            "Load filing browser",
+        )
+
+    def _filings_loaded(self, rows: list[dict[str, Any]]) -> None:
+        self.filings_table.set_rows(rows)
+        self.status_var.set(f"Loaded {len(rows):,} filings")
+
+    def _open_selected_manager(self, _event: tk.Event[Any]) -> None:
+        row = self.overview_managers_table.selected_row()
+        if not row:
+            return
+        label = self.label_by_cik.get(str(row["cik"]))
+        if label:
+            self.holdings_manager_var.set(label)
+        self.holdings_period_var.set(self.overview_period_var.get())
+        self.notebook.select(1)
+        self.refresh_holdings()
+
+    def _open_selected_security(self, _event: tk.Event[Any]) -> None:
+        row = self.overview_securities_table.selected_row()
+        if not row:
+            return
+        self.security_query_var.set(str(row.get("security") or row.get("cusip") or ""))
+        self.security_period_var.set(self.overview_period_var.get())
+        self.notebook.select(3)
+        self.refresh_security()
+
+    def open_selected_filing(self, _event: tk.Event[Any]) -> None:
+        row = self.filings_table.selected_row()
+        if not row:
+            return
+        accession = str(row.get("accession_no") or "")
+        cik = str(row.get("cik") or "").lstrip("0")
+        if not accession or not cik:
+            return
+        accession_path = accession.replace("-", "")
+        url = (
+            f"https://www.sec.gov/Archives/edgar/data/{cik}/"
+            f"{accession_path}/{accession}-index.html"
+        )
+        webbrowser.open(url)
+
+    def current_table(self) -> DataTable | None:
+        index = self.notebook.index(self.notebook.select())
+        return {
+            0: self.overview_managers_table,
+            1: self.holdings_table,
+            2: self.changes_table,
+            3: self.security_table,
+            4: self.filings_table,
+        }.get(index)
+
+    def export_current(self) -> None:
+        table = self.current_table()
+        if table is None or not table.rows:
+            messagebox.showinfo("Nothing to Export", "Load a table before exporting.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export 13F analytics",
+            defaultextension=".csv",
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        try:
+            table.export_csv(path)
+        except OSError as exc:
+            messagebox.showerror("Export Failed", str(exc))
+            return
+        self.status_var.set(f"Exported {len(table.rows):,} rows to {path}")
+
+    def close(self) -> None:
+        self.closing = True
+        if self.poll_after_id is not None:
+            self.root.after_cancel(self.poll_after_id)
+            self.poll_after_id = None
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        self.repository.engine.dispose()
+        self.root.destroy()
+
+
+def main() -> None:
+    root = tk.Tk()
+    database = Form13FDatabase()
+    app = Form13FDashboard(root, Form13FRepository(database.engine))
+    _ = app
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
