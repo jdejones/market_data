@@ -154,7 +154,7 @@ class Episodic_Pivots:
             self.duration_dict[sym] = {}
             for date in self.ep_dict[sym]:
                 try:
-                    self.duration_dict[sym].update({date: (datetime.datetime.strptime(str(self.ep_dict[sym][date].index[-1]).split(' ')[0], '%Y-%m-%d') - datetime.datetime.strptime(str(self.ep_dict[sym][date].index[0]).split(' ')[0], '%Y-%m-%d')).days})
+                    self.duration_dict[sym].update({date: ((datetime.datetime.strptime(str(self.ep_dict[sym][date].index[-1]).split(' ')[0], '%Y-%m-%d') - datetime.datetime.strptime(str(self.ep_dict[sym][date].index[0]).split(' ')[0], '%Y-%m-%d')).days + 1)})
                 except Exception as e:
                     #TODO print(sym, e) update error handling
                     continue
