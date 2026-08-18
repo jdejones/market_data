@@ -101,8 +101,8 @@ SCRIPT_SPECS = (
     ),
     ScriptSpec(
         key="etf_trader",
-        label="ETF Relative Strength",
-        filename="etf_trader.py",
+        label="Relative Strength",
+        filename="relative_strength_trader.py",
         arguments=no_arguments,
         window_title="ETF Relative Strength",
     ),
