@@ -87,7 +87,7 @@ SCRIPT_SPECS = (
         filename="current_rvol_gui.py",
         arguments=current_rvol_arguments,
         autostart=True,
-        selectable=False,
+        selectable=True,
         window_title="Current RVol",
         window_slot=WindowSlot(0.00, 0.00, 0.43, 0.28),
     ),
