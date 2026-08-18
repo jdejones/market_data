@@ -500,10 +500,16 @@ class ThemePerformanceDashboard:
         )
         self.status_var = tk.StringVar(value="Ready")
         self.category_means_var = tk.StringVar(value="Column means: —")
+        self.category_standard_deviations_var = tk.StringVar(
+            value="Column standard deviations: —"
+        )
         self.intraday_status_var = tk.StringVar(
             value="Real-time capture is stopped."
         )
         self.symbol_means_var = tk.StringVar(value="Column means: —")
+        self.symbol_standard_deviations_var = tk.StringVar(
+            value="Column standard deviations: —"
+        )
         self.symbol_status_var = tk.StringVar(
             value="Select a row in either category table."
         )
@@ -575,8 +581,12 @@ class ThemePerformanceDashboard:
         ttk.Label(category_footer, textvariable=self.category_means_var).grid(
             row=0, column=0, sticky="w"
         )
+        ttk.Label(
+            category_footer,
+            textvariable=self.category_standard_deviations_var,
+        ).grid(row=1, column=0, sticky="w")
         ttk.Label(category_footer, textvariable=self.status_var).grid(
-            row=1, column=0, sticky="w"
+            row=2, column=0, sticky="w"
         )
 
         intraday_controls = ttk.LabelFrame(
@@ -661,8 +671,12 @@ class ThemePerformanceDashboard:
         ttk.Label(symbol_footer, textvariable=self.symbol_means_var).grid(
             row=0, column=0, sticky="w"
         )
+        ttk.Label(
+            symbol_footer,
+            textvariable=self.symbol_standard_deviations_var,
+        ).grid(row=1, column=0, sticky="w")
         ttk.Label(symbol_footer, textvariable=self.symbol_status_var).grid(
-            row=1, column=0, sticky="w"
+            row=2, column=0, sticky="w"
         )
 
     @staticmethod
@@ -927,6 +941,12 @@ class ThemePerformanceDashboard:
         self.category_means_var.set(
             self.mean_summary(self.category_rows, self.active_intervals)
         )
+        self.category_standard_deviations_var.set(
+            self.standard_deviation_summary(
+                self.category_rows,
+                self.active_intervals,
+            )
+        )
 
     def _populate_intraday_category_table(self) -> None:
         self.intraday_category_tree.delete(
@@ -1017,6 +1037,9 @@ class ThemePerformanceDashboard:
         self.symbol_tree.delete(*self.symbol_tree.get_children())
         self.symbol_frame.configure(text="Constituent Performance")
         self.symbol_means_var.set("Column means: —")
+        self.symbol_standard_deviations_var.set(
+            "Column standard deviations: —"
+        )
         self.symbol_status_var.set("Select a row in either category table.")
 
     def _populate_symbol_table(self) -> None:
@@ -1029,6 +1052,12 @@ class ThemePerformanceDashboard:
             self.symbol_tree.insert("", tk.END, values=values)
         self.symbol_means_var.set(
             self.mean_summary(self.current_symbol_rows, self.symbol_intervals)
+        )
+        self.symbol_standard_deviations_var.set(
+            self.standard_deviation_summary(
+                self.current_symbol_rows,
+                self.symbol_intervals,
+            )
         )
 
     def sort_table(
@@ -1121,6 +1150,34 @@ class ThemePerformanceDashboard:
             if values:
                 means.append(f"{column}: {sum(values) / len(values):.2f}%")
         return "Column means: " + (" | ".join(means) if means else "—")
+
+    @staticmethod
+    def standard_deviation_summary(
+        rows: list[dict[str, Any]],
+        columns: tuple[str, ...],
+    ) -> str:
+        standard_deviations: list[str] = []
+        for column in columns:
+            values: list[float] = []
+            for row in rows:
+                value = row.get(column)
+                if value is None:
+                    continue
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(numeric_value):
+                    values.append(numeric_value)
+            if values:
+                mean = sum(values) / len(values)
+                variance = sum((value - mean) ** 2 for value in values) / len(values)
+                standard_deviations.append(
+                    f"{column}: {math.sqrt(variance):.2f}%"
+                )
+        return "Column standard deviations: " + (
+            " | ".join(standard_deviations) if standard_deviations else "—"
+        )
 
     def close(self) -> None:
         self.closing = True
