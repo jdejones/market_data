@@ -224,7 +224,7 @@ def read_symbol_file(path: str) -> list[str]:
 class ETFTraderApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("ETF Relative Strength")
+        self.root.title("Relative Strength")
         self.root.geometry("1250x760")
         self.root.minsize(1000, 650)
 
@@ -232,15 +232,21 @@ class ETFTraderApp:
         self.etfs: dict[str, pd.Series] = {}
         self.quant_ratings: dict[str, object] = {}
         self.relative_df = pd.DataFrame()
+        self.relative_df_2 = pd.DataFrame()
         self.current_row = pd.Series(dtype=float)
+        self.current_row_1 = pd.Series(dtype=float)
+        self.current_row_2 = pd.Series(dtype=float)
         self.calculation_running = False
         self.range_refresh_job: str | None = None
-        self.active_sort_column = "relative"
+        self.active_sort_column = "relative_1"
         self.relative_sort_ascending = False
+        self.relative_2_sort_ascending = False
         self.quant_sort_ascending = False
+        self.start_dates: tuple[str, str | None] = ("Date 1", None)
 
         self.benchmark_var = tk.StringVar()
         self.start_date_var = tk.StringVar()
+        self.start_date_2_var = tk.StringVar()
         self.source_var = tk.StringVar(value="file")
         self.file_path_var = tk.StringVar()
         self.membership_etf_var = tk.StringVar()
@@ -248,6 +254,8 @@ class ETFTraderApp:
         self.member_name_var = tk.StringVar()
         self.describe_row_var = tk.StringVar(value="-1")
         self.filter_mode_var = tk.StringVar(value="Outside range")
+        self.filter_date_var = tk.StringVar(value="Date 1")
+        self.filter_date_labels: tuple[str, str | None] = ("Date 1", None)
         self.low_var = tk.DoubleVar(value=0)
         self.high_var = tk.DoubleVar(value=100)
         self.low_label_var = tk.StringVar(value="0.000")
@@ -279,13 +287,21 @@ class ETFTraderApp:
         )
         self.benchmark_box.grid(row=0, column=1, sticky="w")
 
-        ttk.Label(settings, text="Start date (YYYY-MM-DD)").grid(
+        ttk.Label(settings, text="Start date 1 (YYYY-MM-DD)").grid(
             row=0, column=2, sticky="w", padx=(24, 6)
         )
         self.start_date_entry = ttk.Entry(
             settings, textvariable=self.start_date_var, width=16
         )
         self.start_date_entry.grid(row=0, column=3, sticky="w")
+
+        ttk.Label(settings, text="Start date 2 (optional)").grid(
+            row=0, column=4, sticky="w", padx=(24, 6)
+        )
+        self.start_date_2_entry = ttk.Entry(
+            settings, textvariable=self.start_date_2_var, width=16
+        )
+        self.start_date_2_entry.grid(row=0, column=5, sticky="w")
 
         sources = ttk.LabelFrame(container, text="Symbol list source", padding=8)
         sources.grid(row=1, column=0, sticky="ew", pady=(8, 0))
@@ -373,10 +389,18 @@ class ETFTraderApp:
 
         results_frame = ttk.LabelFrame(tables_frame, text="Relative values", padding=6)
         results_frame.grid(row=0, column=0, sticky="nsew")
-        describe_frame = ttk.LabelFrame(
-            tables_frame, text="DataFrame describe()", padding=6
+        statistics_frame = ttk.Frame(tables_frame)
+        statistics_frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        statistics_frame.columnconfigure(0, weight=1)
+        statistics_frame.columnconfigure(1, weight=1)
+        describe_frame_1 = ttk.LabelFrame(
+            statistics_frame, text="Start Date 1 Statistics", padding=6
         )
-        describe_frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        describe_frame_1.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+        describe_frame_2 = ttk.LabelFrame(
+            statistics_frame, text="Start Date 2 Statistics", padding=6
+        )
+        describe_frame_2.grid(row=0, column=1, sticky="nsew", padx=(3, 0))
 
         plot_frame = ttk.LabelFrame(output, text="Relative strength history", padding=6)
         output.add(tables_frame, weight=2)
@@ -386,15 +410,20 @@ class ETFTraderApp:
         results_frame.rowconfigure(0, weight=1)
         self.results_tree = ttk.Treeview(
             results_frame,
-            columns=("symbol", "relative", "quant_rating"),
+            columns=("symbol", "relative_1", "relative_2", "quant_rating"),
             show="headings",
             selectmode="browse",
         )
         self.results_tree.heading("symbol", text="Symbol")
         self.results_tree.heading(
-            "relative",
-            text="Relative Close ▼",
-            command=self._toggle_relative_sort,
+            "relative_1",
+            text="Relative Close (Date 1) ▼",
+            command=self._toggle_relative_1_sort,
+        )
+        self.results_tree.heading(
+            "relative_2",
+            text="Relative Close (Date 2)",
+            command=self._toggle_relative_2_sort,
         )
         self.results_tree.heading(
             "quant_rating",
@@ -402,7 +431,8 @@ class ETFTraderApp:
             command=self._toggle_quant_sort,
         )
         self.results_tree.column("symbol", width=130, anchor="center")
-        self.results_tree.column("relative", width=150, anchor="e")
+        self.results_tree.column("relative_1", width=175, anchor="e")
+        self.results_tree.column("relative_2", width=175, anchor="e")
         self.results_tree.column("quant_rating", width=120, anchor="center")
         results_scroll = ttk.Scrollbar(
             results_frame, orient="vertical", command=self.results_tree.yview
@@ -420,20 +450,35 @@ class ETFTraderApp:
         self.plot_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
         self._show_plot_prompt()
 
-        describe_frame.columnconfigure(0, weight=1)
-        describe_frame.rowconfigure(0, weight=1)
-        self.describe_tree = ttk.Treeview(
-            describe_frame,
+        describe_frame_1.columnconfigure(0, weight=1)
+        describe_frame_1.rowconfigure(0, weight=1)
+        self.describe_tree_1 = ttk.Treeview(
+            describe_frame_1,
             columns=("statistic", "value"),
             show="headings",
             selectmode="none",
             height=8,
         )
-        self.describe_tree.heading("statistic", text="Statistic")
-        self.describe_tree.heading("value", text="Value")
-        self.describe_tree.column("statistic", width=110)
-        self.describe_tree.column("value", width=120, anchor="e")
-        self.describe_tree.grid(row=0, column=0, sticky="nsew")
+        self.describe_tree_1.heading("statistic", text="Statistic")
+        self.describe_tree_1.heading("value", text="Value")
+        self.describe_tree_1.column("statistic", width=90)
+        self.describe_tree_1.column("value", width=105, anchor="e")
+        self.describe_tree_1.grid(row=0, column=0, sticky="nsew")
+
+        describe_frame_2.columnconfigure(0, weight=1)
+        describe_frame_2.rowconfigure(0, weight=1)
+        self.describe_tree_2 = ttk.Treeview(
+            describe_frame_2,
+            columns=("statistic", "value"),
+            show="headings",
+            selectmode="none",
+            height=8,
+        )
+        self.describe_tree_2.heading("statistic", text="Statistic")
+        self.describe_tree_2.heading("value", text="Value")
+        self.describe_tree_2.column("statistic", width=90)
+        self.describe_tree_2.column("value", width=105, anchor="e")
+        self.describe_tree_2.grid(row=0, column=0, sticky="nsew")
 
         range_frame = ttk.LabelFrame(container, text="Relative strength range", padding=8)
         range_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
@@ -476,9 +521,25 @@ class ETFTraderApp:
             "<<ComboboxSelected>>", lambda _event: self._refresh_results()
         )
 
+        ttk.Label(range_frame, text="Filter date").grid(
+            row=1, column=3, padx=(18, 6)
+        )
+        self.filter_date_box = ttk.Combobox(
+            range_frame,
+            textvariable=self.filter_date_var,
+            values=("Date 1",),
+            state="readonly",
+            width=15,
+        )
+        self.filter_date_box.grid(row=1, column=4)
+        self.filter_date_box.bind(
+            "<<ComboboxSelected>>", lambda _event: self._filter_date_changed()
+        )
+
         self.controls = (
             self.benchmark_box,
             self.start_date_entry,
+            self.start_date_2_entry,
             self.file_entry,
             self.browse_button,
             self.membership_entry,
@@ -490,6 +551,7 @@ class ETFTraderApp:
             self.low_scale,
             self.high_scale,
             self.filter_box,
+            self.filter_date_box,
         )
 
     def _set_controls_enabled(self, enabled: bool) -> None:
@@ -500,6 +562,7 @@ class ETFTraderApp:
             self.benchmark_box.state(["readonly"])
             self.level_box.state(["readonly"])
             self.filter_box.state(["readonly"])
+            self.filter_date_box.state(["readonly"])
 
     def _load_data(self) -> None:
         try:
@@ -547,6 +610,7 @@ class ETFTraderApp:
             return
         benchmark = self.benchmark_var.get().strip().upper()
         start = self.start_date_var.get().strip()
+        start_2 = self.start_date_2_var.get().strip()
         if benchmark not in self.etfs:
             messagebox.showerror("Invalid benchmark", "Select a benchmark ETF.")
             return
@@ -560,6 +624,14 @@ class ETFTraderApp:
                 "Invalid start date", "Use a date such as 2026-06-22."
             )
             return
+        if start_2:
+            try:
+                pd.Timestamp(start_2)
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid second start date", "Use a date such as 2026-06-22."
+                )
+                return
 
         source = self.source_var.get()
         source_options = {
@@ -573,7 +645,7 @@ class ETFTraderApp:
         self.status_var.set("Building symbol list and calculating...")
         threading.Thread(
             target=self._calculate,
-            args=(benchmark, start, source, source_options),
+            args=(benchmark, start, start_2 or None, source, source_options),
             daemon=True,
         ).start()
 
@@ -610,7 +682,12 @@ class ETFTraderApp:
         )
 
     def _calculate(
-        self, benchmark: str, start: str, source: str, options: dict
+        self,
+        benchmark: str,
+        start: str,
+        start_2: str | None,
+        source: str,
+        options: dict,
     ) -> None:
         try:
             members = self._get_source_symbols(source, options)
@@ -621,33 +698,50 @@ class ETFTraderApp:
                 )
 
             benchmark_close = self.etfs[benchmark]
-            close_prices = load_symbol_close_prices(members, start)
+            earliest_start = min(
+                pd.Timestamp(value) for value in (start, start_2) if value
+            )
+            close_prices = load_symbol_close_prices(members, str(earliest_start.date()))
             if close_prices.empty:
                 raise ValueError(
                     "No Close data was found for the selected symbols and start date."
                 )
 
-            series = {}
-            failures = {
-                symbol: "No Close data was found in the requested date range."
-                for symbol in members
-            }
+            series_1 = {}
+            series_2 = {}
+            failures_1 = set(members)
+            failures_2 = set(members) if start_2 else set()
+            start_timestamp = pd.Timestamp(start)
+            start_2_timestamp = pd.Timestamp(start_2) if start_2 else None
             for symbol, frame in close_prices.groupby("symbol", sort=False):
-                try:
-                    stock_close = frame.set_index("date")["close"].sort_index()
-                    values = relative_close(stock_close, benchmark_close)
-                    if not values.empty:
-                        series[symbol] = values.astype("float32").rename(symbol)
-                        failures.pop(symbol, None)
-                except Exception as exc:
-                    failures[symbol] = str(exc)
+                stock_close = frame.set_index("date")["close"].sort_index()
+                calculations = (
+                    (start_timestamp, series_1, failures_1),
+                    (start_2_timestamp, series_2, failures_2),
+                )
+                for calculation_start, series, failures in calculations:
+                    if calculation_start is None:
+                        continue
+                    try:
+                        date_close = stock_close.loc[stock_close.index >= calculation_start]
+                        values = relative_close(date_close, benchmark_close)
+                        if not values.empty:
+                            series[symbol] = values.astype("float32").rename(symbol)
+                            failures.discard(symbol)
+                    except Exception:
+                        continue
 
-            if not series:
+            if not series_1:
                 raise ValueError(
                     "No relative series could be calculated. Check the start "
                     "date and price-data overlap."
                 )
-            result = pd.concat(series.values(), axis=1, copy=False)
+            result = pd.concat(series_1.values(), axis=1, copy=False)
+            result_2 = (
+                pd.concat(series_2.values(), axis=1, copy=False)
+                if series_2
+                else pd.DataFrame()
+            )
         except Exception as exc:
             self.root.after(0, self._calculation_failed, str(exc))
             return
@@ -655,19 +749,59 @@ class ETFTraderApp:
             0,
             self._calculation_complete,
             result,
+            result_2,
             len(members),
-            len(failures),
+            len(failures_1),
+            len(failures_2),
+            start,
+            start_2,
         )
 
     def _calculation_complete(
-        self, result: pd.DataFrame, member_count: int, failure_count: int
+        self,
+        result: pd.DataFrame,
+        result_2: pd.DataFrame,
+        member_count: int,
+        failure_count: int,
+        failure_count_2: int,
+        start: str,
+        start_2: str | None,
     ) -> None:
         self.relative_df = result
+        self.relative_df_2 = result_2
+        self.start_dates = (start, start_2)
+        self.active_sort_column = "relative_1"
+        self.relative_sort_ascending = False
+        self.results_tree.configure(
+            displaycolumns=(
+                ("symbol", "relative_1", "relative_2", "quant_rating")
+                if start_2
+                else ("symbol", "relative_1", "quant_rating")
+            )
+        )
+        self.filter_date_box.configure(
+            values=(
+                (f"Date 1 — {start}", f"Date 2 — {start_2}")
+                if start_2 and not result_2.empty
+                else (f"Date 1 — {start}",)
+            )
+        )
+        self.filter_date_labels = (
+            f"Date 1 — {start}",
+            f"Date 2 — {start_2}" if start_2 and not result_2.empty else None,
+        )
+        self.filter_date_var.set(self.filter_date_labels[0])
+        self._update_sort_headings()
         self.calculation_running = False
         self.calculate_button.state(["!disabled"])
         self.status_var.set(
             f"Calculated {result.shape[1]:,} of {member_count:,} symbols"
             + (f" ({failure_count:,} skipped)" if failure_count else "")
+            + (
+                f"; Date 2 has {failure_count_2:,} unavailable"
+                if start_2 and failure_count_2
+                else ""
+            )
         )
         self._show_plot_prompt()
         self._describe_selected_row()
@@ -678,8 +812,9 @@ class ETFTraderApp:
         self.status_var.set("Calculation failed")
         messagebox.showerror("Unable to calculate relative strength", error)
 
-    def _selected_row(self) -> pd.Series:
-        if self.relative_df.empty:
+    def _selected_row(self, frame: pd.DataFrame | None = None) -> pd.Series:
+        selected_frame = self.relative_df if frame is None else frame
+        if selected_frame.empty:
             raise ValueError("Calculate relative strength first.")
         selector = self.describe_row_var.get().strip()
         if not selector:
@@ -689,17 +824,17 @@ class ETFTraderApp:
             position = int(selector)
         except ValueError:
             try:
-                selected = self.relative_df.loc[selector]
+                selected = selected_frame.loc[selector]
             except KeyError:
                 try:
-                    selected = self.relative_df.loc[pd.Timestamp(selector)]
+                    selected = selected_frame.loc[pd.Timestamp(selector)]
                 except (KeyError, ValueError) as exc:
                     raise ValueError(
                         f"Row {selector!r} is not in the result index."
                     ) from exc
         else:
             try:
-                selected = self.relative_df.iloc[position]
+                selected = selected_frame.iloc[position]
             except IndexError as exc:
                 raise ValueError(
                     f"Row position {position} is outside the result."
@@ -711,7 +846,28 @@ class ETFTraderApp:
 
     def _describe_selected_row(self) -> None:
         try:
-            row = self._selected_row()
+            filtering_date_2 = (
+                self.filter_date_labels[1] is not None
+                and self.filter_date_var.get() == self.filter_date_labels[1]
+            )
+            if filtering_date_2:
+                self.current_row_2 = self._selected_row(self.relative_df_2)
+                try:
+                    self.current_row_1 = self._selected_row(self.relative_df)
+                except ValueError:
+                    self.current_row_1 = pd.Series(dtype=float)
+                row = self.current_row_2
+            else:
+                self.current_row_1 = self._selected_row(self.relative_df)
+                try:
+                    self.current_row_2 = (
+                        self._selected_row(self.relative_df_2)
+                        if not self.relative_df_2.empty
+                        else pd.Series(dtype=float)
+                    )
+                except ValueError:
+                    self.current_row_2 = pd.Series(dtype=float)
+                row = self.current_row_1
             if row.empty:
                 raise ValueError("The selected row contains no relative values.")
         except ValueError as exc:
@@ -720,12 +876,8 @@ class ETFTraderApp:
 
         self.current_row = row
         description = row.describe()
-        for item in self.describe_tree.get_children():
-            self.describe_tree.delete(item)
-        for statistic, value in description.items():
-            self.describe_tree.insert(
-                "", "end", values=(statistic, f"{float(value):,.3f}")
-            )
+        self._populate_statistics(self.describe_tree_1, self.current_row_1)
+        self._populate_statistics(self.describe_tree_2, self.current_row_2)
 
         minimum = float(row.min())
         maximum = float(row.max())
@@ -740,6 +892,18 @@ class ETFTraderApp:
         self.high_var.set(float(description["75%"]))
         self._update_range_labels()
         self._refresh_results()
+
+    @staticmethod
+    def _populate_statistics(tree: ttk.Treeview, row: pd.Series) -> None:
+        for item in tree.get_children():
+            tree.delete(item)
+        if row.empty:
+            return
+        for statistic, value in row.describe().items():
+            tree.insert("", "end", values=(statistic, f"{float(value):,.3f}"))
+
+    def _filter_date_changed(self) -> None:
+        self._describe_selected_row()
 
     def _range_changed(self, changed: str) -> None:
         low = self.low_var.get()
@@ -758,10 +922,17 @@ class ETFTraderApp:
         self.low_label_var.set(f"{self.low_var.get():.3f}")
         self.high_label_var.set(f"{self.high_var.get():.3f}")
 
-    def _toggle_relative_sort(self) -> None:
-        if self.active_sort_column == "relative":
+    def _toggle_relative_1_sort(self) -> None:
+        if self.active_sort_column == "relative_1":
             self.relative_sort_ascending = not self.relative_sort_ascending
-        self.active_sort_column = "relative"
+        self.active_sort_column = "relative_1"
+        self._update_sort_headings()
+        self._refresh_results()
+
+    def _toggle_relative_2_sort(self) -> None:
+        if self.active_sort_column == "relative_2":
+            self.relative_2_sort_ascending = not self.relative_2_sort_ascending
+        self.active_sort_column = "relative_2"
         self._update_sort_headings()
         self._refresh_results()
 
@@ -773,14 +944,24 @@ class ETFTraderApp:
         self._refresh_results()
 
     def _update_sort_headings(self) -> None:
-        relative_direction = "▲" if self.relative_sort_ascending else "▼"
+        relative_1_direction = "▲" if self.relative_sort_ascending else "▼"
+        relative_2_direction = "▲" if self.relative_2_sort_ascending else "▼"
         quant_direction = "▲" if self.quant_sort_ascending else "▼"
+        date_1, date_2 = self.start_dates
         self.results_tree.heading(
-            "relative",
+            "relative_1",
             text=(
-                f"Relative Close {relative_direction}"
-                if self.active_sort_column == "relative"
-                else "Relative Close"
+                f"Relative Close ({date_1}) {relative_1_direction}"
+                if self.active_sort_column == "relative_1"
+                else f"Relative Close ({date_1})"
+            ),
+        )
+        self.results_tree.heading(
+            "relative_2",
+            text=(
+                f"Relative Close ({date_2 or 'Date 2'}) {relative_2_direction}"
+                if self.active_sort_column == "relative_2"
+                else f"Relative Close ({date_2 or 'Date 2'})"
             ),
         )
         self.results_tree.heading(
@@ -826,7 +1007,17 @@ class ETFTraderApp:
             ax=self.plot_axes,
             color="#1f77b4",
             linewidth=1.5,
+            label=self.start_dates[0],
         )
+        if symbol in self.relative_df_2:
+            relative_values_2 = self.relative_df_2[symbol].dropna()
+            if not relative_values_2.empty:
+                relative_values_2.plot(
+                    ax=self.plot_axes,
+                    color="#ff7f0e",
+                    linewidth=1.5,
+                    label=self.start_dates[1],
+                )
         self.plot_axes.axhline(100, color="gray", linewidth=0.8, alpha=0.6)
         self.plot_axes.set_title(
             f"{symbol} relative to {self.benchmark_var.get()}"
@@ -834,6 +1025,8 @@ class ETFTraderApp:
         self.plot_axes.set_xlabel("")
         self.plot_axes.set_ylabel("Relative Close")
         self.plot_axes.grid(True, alpha=0.25)
+        if self.start_dates[1]:
+            self.plot_axes.legend(title="Start date")
         self.plot_figure.tight_layout()
         self.plot_canvas.draw_idle()
 
@@ -868,9 +1061,21 @@ class ETFTraderApp:
             ).index
             filtered = filtered.reindex(ordered_symbols)
         else:
-            filtered = filtered.sort_values(
-                ascending=self.relative_sort_ascending
+            sort_row = (
+                self.current_row_2
+                if self.active_sort_column == "relative_2"
+                else self.current_row_1
             )
+            sort_ascending = (
+                self.relative_2_sort_ascending
+                if self.active_sort_column == "relative_2"
+                else self.relative_sort_ascending
+            )
+            ordered_symbols = sort_row.reindex(filtered.index).sort_values(
+                ascending=sort_ascending,
+                na_position="last",
+            ).index
+            filtered = filtered.reindex(ordered_symbols)
 
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
@@ -878,10 +1083,18 @@ class ETFTraderApp:
             quant_rating = self.quant_ratings.get(str(symbol).upper(), "N/A")
             if quant_rating != "N/A":
                 quant_rating = f"{float(quant_rating):.2f}"
+            value_1 = self.current_row_1.get(symbol)
+            value_2 = self.current_row_2.get(symbol)
+            formatted_1 = (
+                f"{float(value_1):,.3f}" if pd.notna(value_1) else "N/A"
+            )
+            formatted_2 = (
+                f"{float(value_2):,.3f}" if pd.notna(value_2) else "N/A"
+            )
             self.results_tree.insert(
                 "",
                 "end",
-                values=(symbol, f"{float(value):,.3f}", quant_rating),
+                values=(symbol, formatted_1, formatted_2, quant_rating),
             )
 
 
