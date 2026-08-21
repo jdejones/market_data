@@ -239,6 +239,7 @@ class ETFTraderApp:
         self.calculation_running = False
         self.range_refresh_job: str | None = None
         self.active_sort_column = "relative_1"
+        self.symbol_sort_ascending = True
         self.relative_sort_ascending = False
         self.relative_2_sort_ascending = False
         self.quant_sort_ascending = False
@@ -414,7 +415,11 @@ class ETFTraderApp:
             show="headings",
             selectmode="browse",
         )
-        self.results_tree.heading("symbol", text="Symbol")
+        self.results_tree.heading(
+            "symbol",
+            text="Symbol",
+            command=self._toggle_symbol_sort,
+        )
         self.results_tree.heading(
             "relative_1",
             text="Relative Close (Date 1) ▼",
@@ -922,6 +927,13 @@ class ETFTraderApp:
         self.low_label_var.set(f"{self.low_var.get():.3f}")
         self.high_label_var.set(f"{self.high_var.get():.3f}")
 
+    def _toggle_symbol_sort(self) -> None:
+        if self.active_sort_column == "symbol":
+            self.symbol_sort_ascending = not self.symbol_sort_ascending
+        self.active_sort_column = "symbol"
+        self._update_sort_headings()
+        self._refresh_results()
+
     def _toggle_relative_1_sort(self) -> None:
         if self.active_sort_column == "relative_1":
             self.relative_sort_ascending = not self.relative_sort_ascending
@@ -944,10 +956,19 @@ class ETFTraderApp:
         self._refresh_results()
 
     def _update_sort_headings(self) -> None:
+        symbol_direction = "▲" if self.symbol_sort_ascending else "▼"
         relative_1_direction = "▲" if self.relative_sort_ascending else "▼"
         relative_2_direction = "▲" if self.relative_2_sort_ascending else "▼"
         quant_direction = "▲" if self.quant_sort_ascending else "▼"
         date_1, date_2 = self.start_dates
+        self.results_tree.heading(
+            "symbol",
+            text=(
+                f"Symbol {symbol_direction}"
+                if self.active_sort_column == "symbol"
+                else "Symbol"
+            ),
+        )
         self.results_tree.heading(
             "relative_1",
             text=(
@@ -1044,7 +1065,14 @@ class ETFTraderApp:
             filtered = self.current_row[
                 (self.current_row >= low) & (self.current_row <= high)
             ]
-        if self.active_sort_column == "quant_rating":
+        if self.active_sort_column == "symbol":
+            ordered_symbols = sorted(
+                filtered.index,
+                key=lambda symbol: str(symbol).upper(),
+                reverse=not self.symbol_sort_ascending,
+            )
+            filtered = filtered.reindex(ordered_symbols)
+        elif self.active_sort_column == "quant_rating":
             quant_values = pd.Series(
                 {
                     symbol: pd.to_numeric(
