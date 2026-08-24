@@ -102,6 +102,10 @@ DILUTION_QUANTITY_CATEGORIES = (
     "newly_issued",
     "sold",
     "issuable",
+    "atm_capacity",
+    "atm_remaining",
+    "atm_sold",
+    "atm_amendment",
     "registered",
     "reserved",
     "authorized",
@@ -141,6 +145,30 @@ DILUTION_EVENT_COLUMNS = (
     "confidence",
     "snippet",
     "raw_match",
+)
+ATM_EVENT_CATEGORIES = (
+    "atm_capacity",
+    "atm_remaining",
+    "atm_sold",
+    "atm_amendment",
+    "atm_terminated",
+)
+ATM_CAPACITY_COLUMNS = (
+    "symbol",
+    "event_date",
+    "accession_no",
+    "form_type",
+    "event_type",
+    "reported_quantity",
+    "reported_amount",
+    "close",
+    "available_share_capacity",
+    "available_dollar_capacity",
+    "available_shares_estimate",
+    "confidence",
+    "calculation_note",
+    "snippet",
+    "source_url",
 )
 DILUTION_CANDIDATE_COLUMNS = (
     "symbol",
@@ -3894,6 +3922,32 @@ class DilutionTextParser:
         r"(?P<unit>shares?|common shares?|ordinary shares?|units?|dollars?|principal amount)",
         re.IGNORECASE,
     )
+    ATM_SHARE_PATTERN = re.compile(
+        r"(?P<number>\d[\d,]*(?:\.\d+)?)\s*"
+        r"(?P<scale>thousand|million|billion)?\s*"
+        r"(?P<unit>shares?|common shares?|ordinary shares?)",
+        re.IGNORECASE,
+    )
+    ATM_AMOUNT_PATTERNS = (
+        re.compile(
+            r"\$\s*(?P<number>\d[\d,]*(?:\.\d+)?)\s*"
+            r"(?P<scale>thousand|million|billion)?",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?P<number>\d[\d,]*(?:\.\d+)?)\s*"
+            r"(?P<scale>thousand|million|billion)?\s+dollars?",
+            re.IGNORECASE,
+        ),
+    )
+    ATM_CONTEXT_MARKERS = (
+        "at-the-market",
+        "at the market",
+        "atm offering",
+        "atm program",
+        "atm facility",
+        "equity distribution agreement",
+    )
 
     def parse(
         self,
@@ -3908,6 +3962,17 @@ class DilutionTextParser:
             return rows
         text_value = self._clean_text(text_value)
         for sentence in self._sentences(text_value):
+            if self._is_atm_context(sentence):
+                rows.extend(
+                    self._parse_atm_sentence(
+                        sentence,
+                        metadata,
+                        source_endpoint,
+                        source_section,
+                        source_url,
+                    )
+                )
+                continue
             for match in self.SHARE_PATTERN.finditer(sentence):
                 raw_match = " ".join(match.group(0).split())
                 context = self._clean_text(sentence)
@@ -3941,6 +4006,174 @@ class DilutionTextParser:
                     }
                 )
         return rows
+
+    def _parse_atm_sentence(
+        self,
+        sentence: str,
+        metadata: Mapping[str, Any],
+        source_endpoint: str,
+        source_section: str | None,
+        source_url: str | None,
+    ) -> list[dict[str, Any]]:
+        context = self._clean_text(sentence)
+        event_type = self._atm_event_type(context)
+        matches: list[tuple[int, int, Decimal | None, Decimal | None, str]] = []
+
+        for match in self.ATM_SHARE_PATTERN.finditer(context):
+            value = self._scaled_number(match.group("number"), match.group("scale"))
+            matches.append((match.start(), match.end(), value, None, match.group(0)))
+        for pattern in self.ATM_AMOUNT_PATTERNS:
+            for match in pattern.finditer(context):
+                nearby = context[max(0, match.start() - 25) : match.end() + 25].lower()
+                if "per share" in nearby or "commission" in nearby or "sales price" in nearby:
+                    continue
+                value = self._scaled_number(match.group("number"), match.group("scale"))
+                matches.append((match.start(), match.end(), None, value, match.group(0)))
+
+        deduplicated: list[tuple[int, int, Decimal | None, Decimal | None, str]] = []
+        occupied: list[tuple[int, int]] = []
+        for parsed in sorted(matches, key=lambda item: (item[0], -(item[1] - item[0]))):
+            span = (parsed[0], parsed[1])
+            if any(span[0] < prior[1] and prior[0] < span[1] for prior in occupied):
+                continue
+            occupied.append(span)
+            deduplicated.append(parsed)
+
+        if not deduplicated and event_type == "atm_terminated":
+            deduplicated.append((0, 0, None, None, "ATM terminated"))
+
+        rows = []
+        for _, _, quantity, amount, raw_match in deduplicated:
+            confidence = self._atm_confidence(context, event_type, quantity, amount)
+            rows.append(
+                self._event_row(
+                    metadata=metadata,
+                    source_endpoint=source_endpoint,
+                    source_section=source_section,
+                    source_url=source_url,
+                    category=event_type,
+                    quantity=quantity,
+                    amount=amount,
+                    security_type="common_stock",
+                    confidence=confidence,
+                    context=context,
+                    raw_match=" ".join(raw_match.split()),
+                )
+            )
+        return rows
+
+    def _event_row(
+        self,
+        metadata: Mapping[str, Any],
+        source_endpoint: str,
+        source_section: str | None,
+        source_url: str | None,
+        category: str,
+        quantity: Decimal | None,
+        amount: Decimal | None,
+        security_type: str,
+        confidence: str,
+        context: str,
+        raw_match: str,
+    ) -> dict[str, Any]:
+        return {
+            "symbol": metadata.get("symbol"),
+            "cik": metadata.get("cik"),
+            "accession_no": metadata.get("accession_no"),
+            "form_type": metadata.get("form_type"),
+            "filed_at": metadata.get("filed_at"),
+            "period_of_report": metadata.get("period_of_report"),
+            "company_name": metadata.get("company_name"),
+            "source_endpoint": source_endpoint,
+            "source_url": source_url or metadata.get("source_url"),
+            "source_section": source_section,
+            "category": category,
+            "quantity": quantity,
+            "amount": amount,
+            "security_type": security_type,
+            "confidence": confidence,
+            "snippet": self._snippet(context),
+            "raw_match": raw_match,
+        }
+
+    def _is_atm_context(self, context: str) -> bool:
+        lowered = context.lower()
+        direct_match = bool(re.search(r"\batm\b", lowered)) or any(
+            marker in lowered for marker in self.ATM_CONTEXT_MARKERS
+        )
+        sales_agreement_match = "sales agreement" in lowered and any(
+            marker in lowered
+            for marker in ("common stock", "ordinary shares", "equity", "shares")
+        )
+        return direct_match or sales_agreement_match
+
+    def _atm_event_type(self, context: str) -> str:
+        lowered = context.lower()
+        if any(
+            marker in lowered
+            for marker in ("terminated", "termination", "expired", "expiration", "cancelled")
+        ):
+            return "atm_terminated"
+        if any(
+            marker in lowered
+            for marker in (
+                "remaining capacity",
+                "remained available",
+                "remaining available",
+                "available for future sale",
+                "available to be sold",
+                "available under",
+            )
+        ):
+            return "atm_remaining"
+        if any(marker in lowered for marker in ("amendment", "amended", "increased by", "additional capacity")):
+            return "atm_amendment"
+        if any(
+            marker in lowered
+            for marker in (
+                "entered into",
+                "may offer",
+                "may sell",
+                "offer and sell up to",
+                "aggregate offering price",
+                "maximum aggregate",
+                "established an",
+            )
+        ):
+            return "atm_capacity"
+        if any(
+            marker in lowered
+            for marker in ("sold", "issued", "sales during", "net proceeds", "gross proceeds")
+        ):
+            return "atm_sold"
+        return "atm_capacity"
+
+    def _atm_confidence(
+        self,
+        context: str,
+        event_type: str,
+        quantity: Decimal | None,
+        amount: Decimal | None,
+    ) -> str:
+        if event_type == "atm_terminated":
+            return "high"
+        if quantity is None and amount is None:
+            return "low"
+        if any(marker in context.lower() for marker in ("approximately", "up to", "may offer", "may sell")):
+            return "medium"
+        return "high"
+
+    @staticmethod
+    def _scaled_number(number: str, scale: str | None) -> Decimal | None:
+        value = parse_decimal(str(number).replace(",", ""))
+        if value is None:
+            return None
+        multiplier = {
+            "thousand": Decimal("1000"),
+            "million": Decimal("1000000"),
+            "billion": Decimal("1000000000"),
+        }.get(str(scale or "").lower(), Decimal("1"))
+        return value * multiplier
 
     def candidate_row(
         self,
@@ -4503,6 +4736,328 @@ class PrivateOffering(DilutionFilingSource):
         }
 
 
+class AtmCapacityTracker:
+    """Build an estimated ATM-capacity history from filing-derived events.
+
+    SEC disclosures often express ATM capacity in dollars rather than a fixed
+    number of shares. In that case ``available_shares_estimate`` divides the
+    remaining dollar capacity by the latest available Close. When both a hard
+    share cap and a dollar cap are known, the lower share value is used.
+
+    The tracker models one aggregate ATM state per symbol. Explicit remaining
+    capacity disclosures replace prior estimates and therefore provide the
+    strongest reset points in the series.
+    """
+
+    DAILY_COLUMNS = (
+        "date",
+        "close",
+        "available_share_capacity",
+        "available_dollar_capacity",
+        "available_shares_estimate",
+    )
+
+    def build_history(
+        self,
+        events: pd.DataFrame | None,
+        prices: pd.Series | pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        atm_events = self._atm_events(events)
+        if atm_events.empty:
+            return pd.DataFrame(columns=ATM_CAPACITY_COLUMNS)
+
+        price_series = self._price_series(prices)
+        share_capacity: float | None = None
+        dollar_capacity: float | None = None
+        initial_share_capacity: float | None = None
+        initial_dollar_capacity: float | None = None
+        rows: list[dict[str, Any]] = []
+
+        for _, event in atm_events.iterrows():
+            event_type = str(event["event_type"])
+            quantity = self._number_or_none(event.get("reported_quantity"))
+            amount = self._number_or_none(event.get("reported_amount"))
+            snippet = str(event.get("snippet") or "")
+            note_parts: list[str] = []
+
+            if event_type == "atm_terminated":
+                share_capacity = 0.0
+                dollar_capacity = 0.0
+                note_parts.append("ATM program reported terminated or expired")
+            elif event_type == "atm_remaining":
+                if quantity is not None:
+                    share_capacity = max(quantity, 0.0)
+                    note_parts.append("explicit remaining share capacity")
+                if amount is not None:
+                    dollar_capacity = max(amount, 0.0)
+                    note_parts.append("explicit remaining dollar capacity")
+            elif event_type == "atm_sold":
+                cumulative = any(
+                    marker in snippet.lower()
+                    for marker in ("through ", "as of ", "to date", "in the aggregate")
+                )
+                if quantity is not None:
+                    if cumulative and initial_share_capacity is not None:
+                        share_capacity = max(initial_share_capacity - quantity, 0.0)
+                        note_parts.append("cumulative shares sold applied to initial capacity")
+                    elif share_capacity is not None:
+                        share_capacity = max(share_capacity - quantity, 0.0)
+                        note_parts.append("reported shares sold subtracted")
+                    else:
+                        note_parts.append("shares sold reported before a share cap")
+                if amount is not None:
+                    if cumulative and initial_dollar_capacity is not None:
+                        dollar_capacity = max(initial_dollar_capacity - amount, 0.0)
+                        note_parts.append("cumulative proceeds applied to initial capacity")
+                    elif dollar_capacity is not None:
+                        dollar_capacity = max(dollar_capacity - amount, 0.0)
+                        note_parts.append("reported proceeds subtracted")
+                    else:
+                        note_parts.append("proceeds reported before a dollar cap")
+            elif event_type == "atm_amendment":
+                additive = any(
+                    marker in snippet.lower()
+                    for marker in ("increased by", "additional capacity", "added")
+                )
+                if quantity is not None:
+                    share_capacity = (
+                        max((share_capacity or 0.0) + quantity, 0.0)
+                        if additive
+                        else max(quantity, 0.0)
+                    )
+                    note_parts.append(
+                        "share capacity increased" if additive else "amended share capacity reset"
+                    )
+                    initial_share_capacity = share_capacity
+                if amount is not None:
+                    dollar_capacity = (
+                        max((dollar_capacity or 0.0) + amount, 0.0)
+                        if additive
+                        else max(amount, 0.0)
+                    )
+                    note_parts.append(
+                        "dollar capacity increased" if additive else "amended dollar capacity reset"
+                    )
+                    initial_dollar_capacity = dollar_capacity
+            else:
+                if quantity is not None:
+                    share_capacity = max(quantity, 0.0)
+                    initial_share_capacity = share_capacity
+                    note_parts.append("initial or restated share capacity")
+                if amount is not None:
+                    dollar_capacity = max(amount, 0.0)
+                    initial_dollar_capacity = dollar_capacity
+                    note_parts.append("initial or restated dollar capacity")
+
+            event_date = pd.Timestamp(event["event_date"]).normalize()
+            close = self._price_at(price_series, event_date)
+            estimate = self._share_estimate(share_capacity, dollar_capacity, close)
+            if dollar_capacity is not None and close in (None, 0.0):
+                note_parts.append("dollar capacity cannot be converted without a positive Close")
+
+            rows.append(
+                {
+                    "symbol": event.get("symbol"),
+                    "event_date": event_date,
+                    "accession_no": event.get("accession_no"),
+                    "form_type": event.get("form_type"),
+                    "event_type": event_type,
+                    "reported_quantity": quantity,
+                    "reported_amount": amount,
+                    "close": close,
+                    "available_share_capacity": share_capacity,
+                    "available_dollar_capacity": dollar_capacity,
+                    "available_shares_estimate": estimate,
+                    "confidence": event.get("confidence"),
+                    "calculation_note": "; ".join(note_parts) or "no capacity value parsed",
+                    "snippet": snippet,
+                    "source_url": event.get("source_url"),
+                }
+            )
+
+        return pd.DataFrame(rows, columns=ATM_CAPACITY_COLUMNS)
+
+    def build_daily_history(
+        self,
+        history: pd.DataFrame | None,
+        prices: pd.Series | pd.DataFrame | None,
+    ) -> pd.DataFrame:
+        """Expand event-level ATM state across daily prices."""
+
+        price_series = self._price_series(prices)
+        if history is None or history.empty or price_series.empty:
+            return pd.DataFrame(columns=self.DAILY_COLUMNS)
+
+        state = history.copy()
+        state["event_date"] = pd.to_datetime(state["event_date"], errors="coerce").dt.normalize()
+        state = state.dropna(subset=["event_date"]).sort_values("event_date")
+        if state.empty:
+            return pd.DataFrame(columns=self.DAILY_COLUMNS)
+        state = state.drop_duplicates("event_date", keep="last").set_index("event_date")
+
+        daily = pd.DataFrame({"close": price_series})
+        for column in ("available_share_capacity", "available_dollar_capacity"):
+            values = pd.to_numeric(state[column], errors="coerce")
+            combined_index = daily.index.union(values.index).sort_values()
+            daily[column] = values.reindex(combined_index).ffill().reindex(daily.index)
+
+        dollar_equivalent = daily["available_dollar_capacity"].div(
+            daily["close"].where(daily["close"] > 0)
+        )
+        share_capacity = daily["available_share_capacity"]
+        daily["available_shares_estimate"] = share_capacity.combine(
+            dollar_equivalent,
+            lambda shares, dollars: self._minimum_available(shares, dollars),
+        )
+        daily = daily.loc[daily.index >= state.index.min()]
+        daily.index.name = "date"
+        return daily.reset_index()[list(self.DAILY_COLUMNS)]
+
+    def get(
+        self,
+        symbol: str,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        prices: pd.Series | pd.DataFrame | None = None,
+        tracker: DilutionTracker | None = None,
+    ) -> pd.DataFrame:
+        """Retrieve live dilution events and return event-level ATM history."""
+
+        source = tracker or DilutionTracker()
+        events = source.get_potential_dilution_events(symbol, start_date, end_date)
+        return self.build_history(events, prices=prices)
+
+    def _atm_events(self, events: pd.DataFrame | None) -> pd.DataFrame:
+        if events is None or events.empty:
+            return pd.DataFrame()
+        required = {"filed_at", "category"}
+        if not required.issubset(events.columns):
+            return pd.DataFrame()
+
+        working = events.copy()
+        snippets = working.get("snippet", pd.Series("", index=working.index)).fillna("").astype(str)
+        categories = working["category"].fillna("").astype(str)
+        direct_atm = snippets.str.contains(
+            r"\batm\b|at-the-market|at the market|equity distribution agreement",
+            case=False,
+            regex=True,
+        )
+        sales_agreement = snippets.str.contains(
+            "sales agreement", case=False, regex=False
+        ) & snippets.str.contains(
+            r"common stock|ordinary shares|equity|shares", case=False, regex=True
+        )
+        atm_mask = categories.isin(ATM_EVENT_CATEGORIES) | direct_atm | sales_agreement
+        working = working.loc[atm_mask].copy()
+        if working.empty:
+            return working
+
+        working["event_date"] = pd.to_datetime(working["filed_at"], errors="coerce").dt.normalize()
+        working = working.dropna(subset=["event_date"])
+        working["event_type"] = working.apply(self._event_type, axis=1)
+        working["quantity"] = pd.to_numeric(working.get("quantity"), errors="coerce")
+        working["amount"] = pd.to_numeric(working.get("amount"), errors="coerce")
+
+        group_columns = [
+            "symbol",
+            "event_date",
+            "accession_no",
+            "form_type",
+            "event_type",
+            "confidence",
+            "snippet",
+            "source_url",
+        ]
+        for column in group_columns:
+            if column not in working:
+                working[column] = None
+        grouped = (
+            working.groupby(group_columns, dropna=False, as_index=False)
+            .agg(
+                reported_quantity=("quantity", "max"),
+                reported_amount=("amount", "max"),
+            )
+        )
+        priority = {
+            "atm_capacity": 0,
+            "atm_amendment": 1,
+            "atm_sold": 2,
+            "atm_remaining": 3,
+            "atm_terminated": 4,
+        }
+        grouped["_priority"] = grouped["event_type"].map(priority).fillna(0)
+        return grouped.sort_values(
+            ["event_date", "accession_no", "_priority"], na_position="last"
+        ).drop(columns="_priority").reset_index(drop=True)
+
+    @staticmethod
+    def _event_type(row: pd.Series) -> str:
+        category = str(row.get("category") or "")
+        if category in ATM_EVENT_CATEGORIES:
+            return category
+        return DilutionTextParser()._atm_event_type(str(row.get("snippet") or ""))
+
+    @staticmethod
+    def _price_series(prices: pd.Series | pd.DataFrame | None) -> pd.Series:
+        if prices is None:
+            return pd.Series(dtype=float, name="close")
+        if isinstance(prices, pd.DataFrame):
+            close_column = next(
+                (column for column in prices.columns if str(column).casefold() == "close"),
+                None,
+            )
+            if close_column is None:
+                return pd.Series(dtype=float, name="close")
+            series = prices[close_column].copy()
+        else:
+            series = prices.copy()
+        series = pd.to_numeric(series, errors="coerce")
+        series.index = pd.to_datetime(series.index, errors="coerce").normalize()
+        series = series[~series.index.isna()]
+        series = series[~series.index.duplicated(keep="last")].sort_index().ffill()
+        series.name = "close"
+        return series
+
+    @staticmethod
+    def _price_at(prices: pd.Series, event_date: pd.Timestamp) -> float | None:
+        if prices.empty:
+            return None
+        eligible = prices.loc[prices.index <= event_date].dropna()
+        if eligible.empty:
+            return None
+        return float(eligible.iloc[-1])
+
+    @staticmethod
+    def _share_estimate(
+        share_capacity: float | None,
+        dollar_capacity: float | None,
+        close: float | None,
+    ) -> float | None:
+        dollar_equivalent = (
+            dollar_capacity / close
+            if dollar_capacity is not None and close is not None and close > 0
+            else None
+        )
+        return AtmCapacityTracker._minimum_available(share_capacity, dollar_equivalent)
+
+    @staticmethod
+    def _minimum_available(shares: Any, dollars: Any) -> float | None:
+        values = [
+            float(value)
+            for value in (shares, dollars)
+            if value is not None and not pd.isna(value)
+        ]
+        return min(values) if values else None
+
+    @staticmethod
+    def _number_or_none(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if pd.notna(number) else None
+
+
 class DilutionTracker:
     """Facade for on-demand historical and potential dilution DataFrames."""
 
@@ -4517,6 +5072,7 @@ class DilutionTracker:
         self.parser = parser or DilutionTextParser()
         self.default_lookback_days = default_lookback_days
         self.share_count_history = ShareCountHistory(self.client)
+        self.atm_capacity_tracker = AtmCapacityTracker()
         self.sources = [
             PeriodicDilutionFiling(self.client, self.parser),
             CurrentDilutionEvent(self.client, self.parser),
@@ -4547,6 +5103,18 @@ class DilutionTracker:
         _, candidates = self._collect(symbol, start_date, end_date)
         return self._candidate_df(candidates)
 
+    def get_atm_capacity_history(
+        self,
+        symbol: str,
+        start_date: str | dt.date | dt.datetime | None = None,
+        end_date: str | dt.date | dt.datetime | None = None,
+        prices: pd.Series | pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """Return estimated event-level ATM capacity for a symbol."""
+
+        events = self.get_potential_dilution_events(symbol, start_date, end_date)
+        return self.atm_capacity_tracker.build_history(events, prices=prices)
+
     def get_dilution_summary(
         self,
         symbol: str,
@@ -4557,6 +5125,7 @@ class DilutionTracker:
         events, candidates = self._collect(symbol, start_date, end_date, share_history=share_history)
         event_df = self._event_df(events)
         candidate_df = self._candidate_df(candidates)
+        atm_capacity_history = self.atm_capacity_tracker.build_history(event_df)
         return {
             "share_count_history": share_history,
             "historical_dilution": self._historical_dilution(share_history),
@@ -4566,6 +5135,7 @@ class DilutionTracker:
             "low_confidence_review": self._low_confidence_review(event_df, candidate_df),
             "candidate_filings": candidate_df,
             "latest_shares_outstanding": self._latest_shares_outstanding(share_history),
+            "atm_capacity_history": atm_capacity_history,
         }
 
     def _collect(
@@ -5794,6 +6364,65 @@ class DilutionTrackerAnalytics:
             if column in df.columns:
                 df[column] = pd.to_datetime(df[column])
         return df
+
+
+def validate_atm_capacity_tracker_sample() -> dict[str, Any]:
+    """Exercise ATM parsing, state transitions, and dollar-to-share conversion."""
+
+    parser = DilutionTextParser()
+    disclosures = (
+        (
+            dt.datetime(2026, 1, 2, 12, 0),
+            "atm-001",
+            "We entered into an at-the-market sales agreement under which we may "
+            "offer and sell up to $100 million of common stock.",
+        ),
+        (
+            dt.datetime(2026, 2, 2, 12, 0),
+            "atm-002",
+            "During the quarter, we sold 2 million shares under the ATM offering "
+            "for gross proceeds of $20 million.",
+        ),
+        (
+            dt.datetime(2026, 3, 2, 12, 0),
+            "atm-003",
+            "After these sales, $55 million remained available under the ATM program.",
+        ),
+    )
+    rows: list[dict[str, Any]] = []
+    for filed_at, accession_no, disclosure in disclosures:
+        metadata = {
+            "symbol": "SAMP",
+            "cik": "1234567",
+            "accession_no": accession_no,
+            "form_type": "10-Q",
+            "filed_at": filed_at,
+            "period_of_report": filed_at.date(),
+            "company_name": "Sample Corp",
+            "source_url": f"https://www.sec.gov/{accession_no}",
+        }
+        rows.extend(parser.parse(disclosure, metadata, "sample", "item"))
+
+    events = pd.DataFrame(rows, columns=DILUTION_EVENT_COLUMNS)
+    prices = pd.Series(
+        [10.0, 10.0, 10.0],
+        index=pd.to_datetime(["2026-01-02", "2026-02-02", "2026-03-02"]),
+        name="Close",
+    )
+    tracker = AtmCapacityTracker()
+    history = tracker.build_history(events, prices)
+    daily = tracker.build_daily_history(history, prices)
+
+    assert set(history["event_type"]) == {"atm_capacity", "atm_sold", "atm_remaining"}
+    assert history.iloc[0]["available_dollar_capacity"] == 100_000_000
+    assert history.iloc[-1]["available_dollar_capacity"] == 55_000_000
+    assert history.iloc[-1]["available_shares_estimate"] == 5_500_000
+    assert daily.iloc[-1]["available_shares_estimate"] == 5_500_000
+    return {
+        "events": events.to_dict(orient="records"),
+        "history": history.to_dict(orient="records"),
+        "daily": daily.to_dict(orient="records"),
+    }
 
 
 def validate_dilution_text_parser_sample() -> dict[str, Any]:
