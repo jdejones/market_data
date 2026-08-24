@@ -3,8 +3,10 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import math
+import re
 import sys
 import tkinter as tk
+import unicodedata
 import webbrowser
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -27,6 +29,22 @@ from market_data.filings import Form13FDatabase  # type: ignore[import-not-found
 ALL_MANAGERS = "All imported managers"
 DEFAULT_LIMIT = 500
 POLL_INTERVAL_MS = 100
+CORPORATE_SUFFIXES = frozenset(
+    {
+        "co",
+        "company",
+        "corp",
+        "corporation",
+        "inc",
+        "incorporated",
+        "llc",
+        "llp",
+        "lp",
+        "ltd",
+        "limited",
+        "plc",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +142,48 @@ def parse_positive_int(value: str, default: int = DEFAULT_LIMIT) -> int:
         return default
 
 
+def normalize_manager_name(value: str) -> str:
+    """Normalize a filer name for punctuation-insensitive, suffix-optional search."""
+    decomposed = unicodedata.normalize("NFKD", value.casefold().replace("&", " and "))
+    ascii_text = "".join(char for char in decomposed if not unicodedata.combining(char))
+    words = re.findall(r"[a-z0-9]+", ascii_text)
+    while words and words[-1] in CORPORATE_SUFFIXES:
+        words.pop()
+    return " ".join(words)
+
+
+def manager_search_score(name: str, cik: str, query: str) -> tuple[int, int, str] | None:
+    """Rank normalized partial-name and CIK matches; lower scores are better."""
+    normalized_query = normalize_manager_name(query)
+    if not normalized_query:
+        return (0, len(name), name.casefold())
+
+    normalized_name = normalize_manager_name(name)
+    query_compact = normalized_query.replace(" ", "")
+    name_compact = normalized_name.replace(" ", "")
+    query_tokens = normalized_query.split()
+    name_tokens = normalized_name.split()
+    digits = re.sub(r"\D", "", query)
+
+    if digits and digits == cik:
+        rank = 0
+    elif digits and cik.startswith(digits):
+        rank = 1
+    elif normalized_name == normalized_query:
+        rank = 0
+    elif normalized_name.startswith(normalized_query):
+        rank = 1
+    elif query_compact and query_compact in name_compact:
+        rank = 2
+    elif all(any(token.startswith(part) for token in name_tokens) for part in query_tokens):
+        rank = 3
+    elif all(part in normalized_name for part in query_tokens):
+        rank = 4
+    else:
+        return None
+    return (rank, len(normalized_name), normalized_name)
+
+
 class Form13FRepository:
     """Read-only queries over the tables populated by Form13FImporter."""
 
@@ -150,7 +210,13 @@ class Form13FRepository:
                 for row in conn.execute(
                     text(
                         """
-                        SELECT cik, MAX(company_name) AS company_name
+                        SELECT
+                            cik,
+                            COALESCE(
+                                MAX(NULLIF(filing_manager_name, '')),
+                                MAX(NULLIF(company_name, '')),
+                                cik
+                            ) AS company_name
                         FROM cover_pages
                         WHERE cik IS NOT NULL AND cik <> ''
                         GROUP BY cik
@@ -204,7 +270,11 @@ class Form13FRepository:
                         + """
                         SELECT
                             cik,
-                            company_name,
+                            COALESCE(
+                                NULLIF(filing_manager_name, ''),
+                                NULLIF(company_name, ''),
+                                cik
+                            ) AS company_name,
                             form_type,
                             report_type,
                             filed_at,
@@ -457,7 +527,11 @@ class Form13FRepository:
                 f"""
             SELECT
                 cp.cik,
-                cp.company_name,
+                COALESCE(
+                    NULLIF(cp.filing_manager_name, ''),
+                    NULLIF(cp.company_name, ''),
+                    cp.cik
+                ) AS company_name,
                 MAX(h.ticker) AS ticker,
                 MAX(h.cusip) AS cusip,
                 MAX(h.name_of_issuer) AS name_of_issuer,
@@ -486,7 +560,11 @@ class Form13FRepository:
               )
             GROUP BY
                 cp.cik,
-                cp.company_name,
+                COALESCE(
+                    NULLIF(cp.filing_manager_name, ''),
+                    NULLIF(cp.company_name, ''),
+                    cp.cik
+                ),
                 h.ticker,
                 h.cusip,
                 h.title_of_class,
@@ -559,7 +637,11 @@ class Form13FRepository:
                 period_of_report,
                 filed_at,
                 cik,
-                company_name,
+                COALESCE(
+                    NULLIF(filing_manager_name, ''),
+                    NULLIF(company_name, ''),
+                    cik
+                ) AS company_name,
                 report_type,
                 table_entry_total,
                 table_value_total,
@@ -697,6 +779,7 @@ class Form13FDashboard:
         self.catalog: Catalog | None = None
         self.manager_by_label: dict[str, str | None] = {ALL_MANAGERS: None}
         self.label_by_cik: dict[str, str] = {}
+        self.manager_options: list[tuple[str, str, str]] = []
 
         self.root.title("SEC Form 13F Analytics")
         self.root.geometry("1380x860")
@@ -846,7 +929,10 @@ class Form13FDashboard:
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         self.holdings_manager_var = tk.StringVar()
         self.holdings_manager_box = self._combo(
-            controls, "Manager", self.holdings_manager_var, 0, 42
+            controls, "Manager (type partial name or CIK)", self.holdings_manager_var, 0, 42
+        )
+        self._make_manager_combo_searchable(
+            self.holdings_manager_box, self.holdings_manager_var, include_all=False
         )
         self.holdings_period_var = tk.StringVar()
         self.holdings_period_box = self._combo(
@@ -901,7 +987,14 @@ class Form13FDashboard:
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         self.changes_manager_var = tk.StringVar(value=ALL_MANAGERS)
         self.changes_manager_box = self._combo(
-            controls, "Manager scope", self.changes_manager_var, 0, 38
+            controls,
+            "Manager scope (type partial name or CIK)",
+            self.changes_manager_var,
+            0,
+            38,
+        )
+        self._make_manager_combo_searchable(
+            self.changes_manager_box, self.changes_manager_var, include_all=True
         )
         self.current_period_var = tk.StringVar()
         self.current_period_box = self._combo(
@@ -1016,7 +1109,14 @@ class Form13FDashboard:
         )
         self.filings_manager_var = tk.StringVar(value=ALL_MANAGERS)
         self.filings_manager_box = self._combo(
-            controls, "Manager", self.filings_manager_var, 1, 42
+            controls,
+            "Manager (type partial name or CIK)",
+            self.filings_manager_var,
+            1,
+            42,
+        )
+        self._make_manager_combo_searchable(
+            self.filings_manager_box, self.filings_manager_var, include_all=True
         )
         self.filings_limit_var = tk.StringVar(value=str(DEFAULT_LIMIT))
         self._entry(controls, "Max rows", self.filings_limit_var, 2, 9)
@@ -1066,6 +1166,88 @@ class Form13FDashboard:
             row=1, column=column, sticky="ew", padx=(8 if column else 0, 0)
         )
         return combo
+
+    def _make_manager_combo_searchable(
+        self,
+        combo: ttk.Combobox,
+        variable: tk.StringVar,
+        *,
+        include_all: bool,
+    ) -> None:
+        combo.configure(state="normal")
+        combo.bind(
+            "<FocusIn>",
+            lambda _event: combo.after_idle(lambda: combo.selection_range(0, tk.END)),
+        )
+        combo.bind(
+            "<KeyRelease>",
+            lambda event: self._filter_manager_combo(
+                event, combo, variable, include_all=include_all
+            ),
+        )
+        combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: combo.configure(
+                values=self._manager_labels(include_all=include_all)
+            ),
+        )
+
+    def _manager_labels(self, *, include_all: bool) -> tuple[str, ...]:
+        labels = tuple(option[0] for option in self.manager_options)
+        return (ALL_MANAGERS, *labels) if include_all else labels
+
+    def _filter_manager_combo(
+        self,
+        event: tk.Event[Any],
+        combo: ttk.Combobox,
+        variable: tk.StringVar,
+        *,
+        include_all: bool,
+    ) -> None:
+        if event.keysym in {
+            "Down",
+            "Up",
+            "Left",
+            "Right",
+            "Home",
+            "End",
+            "Prior",
+            "Next",
+            "Tab",
+            "Shift_L",
+            "Shift_R",
+        }:
+            return
+
+        query = variable.get().strip()
+        if query in self.manager_by_label:
+            matches = self._manager_labels(include_all=include_all)
+        elif not query:
+            matches = self._manager_labels(include_all=include_all)
+        else:
+            ranked = sorted(
+                (
+                    (score, label)
+                    for label, cik, name in self.manager_options
+                    if (score := manager_search_score(name, cik, query)) is not None
+                ),
+                key=lambda item: item[0],
+            )
+            matches = tuple(label for _score, label in ranked)
+
+        combo.configure(values=matches)
+        variable.set(query)
+        combo.icursor(tk.END)
+        if event.keysym == "Return":
+            if len(matches) == 1:
+                variable.set(matches[0])
+                combo.configure(values=self._manager_labels(include_all=include_all))
+            elif matches:
+                combo.event_generate("<Down>")
+        if query and query not in self.manager_by_label:
+            self.status_var.set(
+                f"Found {len(matches):,} manager name/CIK matches; select one from the list"
+            )
 
     @staticmethod
     def _entry(
@@ -1146,10 +1328,12 @@ class Form13FDashboard:
             labels.append(label)
             self.manager_by_label[label] = cik
             self.label_by_cik[cik] = label
-        manager_values = tuple(labels)
-        self.holdings_manager_box.configure(values=tuple(labels[1:]))
-        self.changes_manager_box.configure(values=manager_values)
-        self.filings_manager_box.configure(values=manager_values)
+            self.manager_options.append((label, cik, name))
+        self.holdings_manager_box.configure(
+            values=self._manager_labels(include_all=False)
+        )
+        self.changes_manager_box.configure(values=self._manager_labels(include_all=True))
+        self.filings_manager_box.configure(values=self._manager_labels(include_all=True))
         if len(labels) > 1:
             self.holdings_manager_var.set(labels[1])
             self.changes_manager_var.set(labels[1])
@@ -1206,7 +1390,10 @@ class Form13FDashboard:
     def refresh_holdings(self) -> None:
         manager_cik = self.manager_by_label.get(self.holdings_manager_var.get())
         if not manager_cik:
-            messagebox.showwarning("Manager Required", "Choose a filing manager.")
+            messagebox.showwarning(
+                "Manager Required",
+                "Type part of a filer name or CIK, then select a matching manager.",
+            )
             return
         try:
             period = self._period(self.holdings_period_var.get())
@@ -1241,7 +1428,14 @@ class Form13FDashboard:
                 "Choose Two Periods", "Current and prior periods must differ."
             )
             return
-        manager_cik = self.manager_by_label.get(self.changes_manager_var.get())
+        manager_text = self.changes_manager_var.get()
+        if manager_text not in self.manager_by_label:
+            messagebox.showwarning(
+                "Select a Manager",
+                "Select a matching manager from the list, or choose All imported managers.",
+            )
+            return
+        manager_cik = self.manager_by_label.get(manager_text)
         action = self.action_var.get()
         limit = parse_positive_int(self.changes_limit_var.get())
         self._submit(
@@ -1281,7 +1475,14 @@ class Form13FDashboard:
     def refresh_filings(self) -> None:
         period_text = self.filings_period_var.get()
         period = None if period_text == "All periods" else self._period(period_text)
-        manager_cik = self.manager_by_label.get(self.filings_manager_var.get())
+        manager_text = self.filings_manager_var.get()
+        if manager_text not in self.manager_by_label:
+            messagebox.showwarning(
+                "Select a Manager",
+                "Select a matching manager from the list, or choose All imported managers.",
+            )
+            return
+        manager_cik = self.manager_by_label.get(manager_text)
         limit = parse_positive_int(self.filings_limit_var.get())
         self._submit(
             lambda: self.repository.filings(period, manager_cik, limit),
