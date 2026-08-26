@@ -128,6 +128,13 @@ SCRIPT_SPECS = (
         window_title="Recent Events",
     ),
     ScriptSpec(
+        key="news_headline_poster_gui",
+        label="News Headline Poster",
+        filename=r"C:\Users\jdejo\News_Tracker\scripts\news_headline_poster_gui.py",
+        arguments=no_arguments,
+        window_title="News Tracker — Post a Headline",
+    ),
+    ScriptSpec(
         key="dilution_data_gui",
         label="Company Dilution Data",
         filename="dilution_data_gui.py",
