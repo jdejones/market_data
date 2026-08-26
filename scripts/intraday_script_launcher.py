@@ -128,6 +128,13 @@ SCRIPT_SPECS = (
         window_title="Recent Events",
     ),
     ScriptSpec(
+        key="dilution_data_gui",
+        label="Company Dilution Data",
+        filename="dilution_data_gui.py",
+        arguments=no_arguments,
+        window_title="Company Dilution Data",
+    ),
+    ScriptSpec(
         key="vwap_bands",
         label="VWAP Bands",
         filename="vwap_bands.py",
