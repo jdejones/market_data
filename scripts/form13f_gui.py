@@ -126,6 +126,16 @@ def format_money(value: Any) -> str:
     return f"{sign}${number:,.0f}"
 
 
+def format_price(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return "" if not math.isfinite(number) else f"${number:,.2f}"
+
+
 def format_percent(value: Any) -> str:
     if value is None:
         return ""
@@ -406,6 +416,22 @@ class Form13FRepository:
                     COALESCE(MAX(NULLIF(si.industry, '')), 'Unclassified') AS industry,
                     SUM(h.value) AS disclosed_value,
                     SUM(h.ssh_prnamt) AS shares,
+                    SUM(
+                        CASE
+                            WHEN h.ssh_prnamt_type = 'SH'
+                             AND (h.put_call IS NULL OR h.put_call = '')
+                            THEN h.value
+                        END
+                    ) / NULLIF(
+                        SUM(
+                            CASE
+                                WHEN h.ssh_prnamt_type = 'SH'
+                                 AND (h.put_call IS NULL OR h.put_call = '')
+                                THEN h.ssh_prnamt
+                            END
+                        ),
+                        0
+                    ) AS implied_quarter_end_price,
                     SUM(h.voting_sole) AS voting_sole,
                     SUM(h.voting_shared) AS voting_shared,
                     SUM(h.voting_none) AS voting_none
@@ -706,7 +732,23 @@ class Form13FRepository:
                             THEN h.ssh_prnamt
                             ELSE 0
                         END
-                    ) AS shares
+                    ) AS shares,
+                    SUM(
+                        CASE
+                            WHEN h.ssh_prnamt_type = 'SH'
+                             AND (h.put_call IS NULL OR h.put_call = '')
+                            THEN h.value
+                        END
+                    ) / NULLIF(
+                        SUM(
+                            CASE
+                                WHEN h.ssh_prnamt_type = 'SH'
+                                 AND (h.put_call IS NULL OR h.put_call = '')
+                                THEN h.ssh_prnamt
+                            END
+                        ),
+                        0
+                    ) AS implied_quarter_end_price
                 FROM selected s
                 JOIN holdings h ON h.accession_no = s.accession_no
                 GROUP BY
@@ -735,7 +777,11 @@ class Form13FRepository:
                     COALESCE(MAX(c.shares), 0) AS current_shares,
                     COALESCE(MAX(p.shares), 0) AS prior_shares,
                     COALESCE(MAX(c.shares), 0)
-                        - COALESCE(MAX(p.shares), 0) AS shares_change
+                        - COALESCE(MAX(p.shares), 0) AS shares_change,
+                    MAX(c.implied_quarter_end_price)
+                        AS current_implied_quarter_end_price,
+                    MAX(p.implied_quarter_end_price)
+                        AS prior_implied_quarter_end_price
                 FROM security_keys k
                 LEFT JOIN positions c
                   ON c.security_key = k.security_key
@@ -789,6 +835,22 @@ class Form13FRepository:
                 MAX(h.name_of_issuer) AS name_of_issuer,
                 SUM(h.value) AS disclosed_value,
                 SUM(h.ssh_prnamt) AS shares,
+                SUM(
+                    CASE
+                        WHEN h.ssh_prnamt_type = 'SH'
+                         AND (h.put_call IS NULL OR h.put_call = '')
+                        THEN h.value
+                    END
+                ) / NULLIF(
+                    SUM(
+                        CASE
+                            WHEN h.ssh_prnamt_type = 'SH'
+                             AND (h.put_call IS NULL OR h.put_call = '')
+                            THEN h.ssh_prnamt
+                        END
+                    ),
+                    0
+                ) AS implied_quarter_end_price,
                 h.put_call,
                 h.title_of_class,
                 cp.filed_at,
@@ -1231,6 +1293,13 @@ class Form13FDashboard:
                 Column("industry", "Industry", 190),
                 Column("disclosed_value", "Value", 125, tk.E, format_money),
                 Column("portfolio_weight", "Weight", 90, tk.E, format_percent),
+                Column(
+                    "implied_quarter_end_price",
+                    "Implied Q-end price",
+                    125,
+                    tk.E,
+                    format_price,
+                ),
                 Column("shares", "Shares / principal", 125, tk.E, format_integer),
                 Column("share_type", "Amount type", 90),
                 Column("voting_sole", "Vote sole", 105, tk.E, format_integer),
@@ -1303,6 +1372,20 @@ class Form13FDashboard:
                 Column("current_shares", "Current shares", 120, tk.E, format_integer),
                 Column("prior_shares", "Prior shares", 120, tk.E, format_integer),
                 Column("shares_change", "Share change", 120, tk.E, format_integer),
+                Column(
+                    "current_implied_quarter_end_price",
+                    "Current implied price",
+                    130,
+                    tk.E,
+                    format_price,
+                ),
+                Column(
+                    "prior_implied_quarter_end_price",
+                    "Prior implied price",
+                    125,
+                    tk.E,
+                    format_price,
+                ),
             ),
         )
         self.changes_table.grid(row=2, column=0, sticky="nsew")
@@ -1353,6 +1436,13 @@ class Form13FDashboard:
                 Column("put_call", "Put/Call", 70),
                 Column("disclosed_value", "Value", 125, tk.E, format_money),
                 Column("shares", "Shares / principal", 125, tk.E, format_integer),
+                Column(
+                    "implied_quarter_end_price",
+                    "Implied Q-end price",
+                    125,
+                    tk.E,
+                    format_price,
+                ),
                 Column("filed_at", "Filed", 130, tk.W, format_datetime),
             ),
         )
