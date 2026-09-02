@@ -31,12 +31,16 @@ PACKAGE_PARENT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_PARENT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_PARENT))
 
-from market_data.api_keys import intraday_stream_database  # type: ignore[import-not-found]
+from market_data.api_keys import (  # type: ignore[import-not-found]
+    gptdb,
+    intraday_stream_database,
+)
 
 
 MYSQL_HOST = "127.0.0.1"
 MYSQL_PORT = 3306
 MYSQL_USER = "price_data_streamer"
+STOCKS_MYSQL_USER = "gptdb"
 STREAM_DATABASE = "intraday_price_stream"
 STOCKS_DATABASE = "stocks"
 STREAM_TABLE = "ohlcv_1m"
@@ -173,6 +177,20 @@ def make_engine(database: str) -> Engine:
     )
 
 
+def make_stocks_engine() -> Engine:
+    password = quote_plus(gptdb)
+    url = (
+        f"mysql+pymysql://{STOCKS_MYSQL_USER}:{password}@"
+        f"{MYSQL_HOST}:{MYSQL_PORT}/{STOCKS_DATABASE}"
+    )
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        future=True,
+        connect_args={"connect_timeout": 5},
+    )
+
+
 def load_symbols(path: Path) -> list[str]:
     if not path.is_file():
         raise FileNotFoundError(
@@ -284,29 +302,38 @@ def load_rvol_profiles(
     ).bindparams(bindparam("symbols", expanding=True))
 
     frames: list[pd.DataFrame] = []
-    try:
-        for symbol_group in chunked(symbols, symbol_chunk_size):
-            frame = pd.read_sql(
-                statement,
-                con=engine,
-                params={"symbols": symbol_group},
-            )
-            if not frame.empty:
-                frames.append(frame)
-    except Exception:
-        return {}
+    for symbol_group in chunked(symbols, symbol_chunk_size):
+        frame = pd.read_sql(
+            statement,
+            con=engine,
+            params={"symbols": symbol_group},
+        )
+        if not frame.empty:
+            frames.append(frame)
 
     if not frames:
         return {}
 
     profiles = pd.concat(frames, ignore_index=True)
     profiles["symbol"] = profiles["symbol"].astype(str).str.upper()
-    profiles["timestamp"] = profiles["timestamp"].astype(str)
+    profile_times = pd.to_timedelta(profiles["timestamp"], errors="coerce")
+    profiles["timestamp"] = profile_times.map(
+        lambda value: (
+            None
+            if pd.isna(value)
+            else (
+                dt.datetime.min
+                + dt.timedelta(
+                    seconds=int(value.total_seconds()) % (24 * 60 * 60)
+                )
+            ).strftime("%H:%M:%S")
+        )
+    )
     profiles["avg_cum_volume"] = pd.to_numeric(
         profiles["avg_cum_volume"],
         errors="coerce",
     )
-    profiles = profiles.dropna(subset=["avg_cum_volume"])
+    profiles = profiles.dropna(subset=["timestamp", "avg_cum_volume"])
     return {
         symbol: group.set_index("timestamp")["avg_cum_volume"].sort_index()
         for symbol, group in profiles.groupby("symbol")
@@ -1193,10 +1220,11 @@ class RealtimeHighBetaClusteringGUI:
         symbols = load_symbols(self.config.symbols_path)
         self.output_queue.put(("universe", len(symbols)))
         stream_engine = make_engine(STREAM_DATABASE)
-        stocks_engine = make_engine(STOCKS_DATABASE)
+        stocks_engine = make_stocks_engine()
         stream_rows = empty_stream_frame()
         last_seen_timestamp: pd.Timestamp | None = None
         rvol_profiles: dict[str, pd.Series] = {}
+        rvol_profile_error: str | None = None
         last_rvol_profile_attempt = float("-inf")
         last_calculation_at: float | None = None
         current_date = dt.datetime.now(EASTERN).date()
@@ -1209,6 +1237,7 @@ class RealtimeHighBetaClusteringGUI:
                     stream_rows = empty_stream_frame()
                     last_seen_timestamp = None
                     rvol_profiles = {}
+                    rvol_profile_error = None
                     last_rvol_profile_attempt = float("-inf")
                     last_calculation_at = None
                     self.recalculate_event.clear()
@@ -1255,19 +1284,28 @@ class RealtimeHighBetaClusteringGUI:
                     continue
 
                 if time.monotonic() - last_rvol_profile_attempt >= 60:
-                    refreshed_profiles = load_rvol_profiles(
-                        stocks_engine,
-                        symbols,
-                        self.config.symbol_query_chunk_size,
-                    )
-                    if refreshed_profiles:
-                        rvol_profiles = refreshed_profiles
+                    try:
+                        refreshed_profiles = load_rvol_profiles(
+                            stocks_engine,
+                            symbols,
+                            self.config.symbol_query_chunk_size,
+                        )
+                    except Exception as error:
+                        rvol_profile_error = (
+                            f"{type(error).__name__}: "
+                            f"{str(error).splitlines()[0]}"
+                        )
+                    else:
+                        if refreshed_profiles:
+                            rvol_profiles = refreshed_profiles
+                            rvol_profile_error = None
                     last_rvol_profile_attempt = time.monotonic()
 
-                query_start = market_open
+                day_start = dt.datetime.combine(current_date, dt.time.min)
+                query_start = day_start
                 if last_seen_timestamp is not None:
                     query_start = max(
-                        market_open,
+                        day_start,
                         last_seen_timestamp.to_pydatetime()
                         - dt.timedelta(
                             minutes=self.config.query_overlap_minutes
@@ -1351,7 +1389,11 @@ class RealtimeHighBetaClusteringGUI:
                             rvol_status = (
                                 f"RVol profiles: {len(rvol_profiles)}"
                                 if rvol_profiles
-                                else "RVol unavailable"
+                                else (
+                                    f"RVol unavailable ({rvol_profile_error})"
+                                    if rvol_profile_error
+                                    else "RVol unavailable"
+                                )
                             )
                             self.output_queue.put(
                                 (
