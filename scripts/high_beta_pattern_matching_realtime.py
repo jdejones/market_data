@@ -83,6 +83,8 @@ TABLE_COLUMNS = (
     UPDATED_COLUMN,
 )
 SORTABLE_COLUMNS = set(TABLE_COLUMNS)
+SORT_ASCENDING_INDICATOR = "\u25b2"
+SORT_DESCENDING_INDICATOR = "\u25bc"
 
 
 @dataclass(frozen=True)
@@ -857,6 +859,7 @@ class RealtimeHighBetaClusteringGUI:
                 minwidth=50,
                 anchor=anchor,
             )
+        self.update_sort_indicators()
 
         y_scroll = ttk.Scrollbar(
             left_panel,
@@ -976,7 +979,22 @@ class RealtimeHighBetaClusteringGUI:
         else:
             self.sort_column = column
             self.sort_descending = column != SYMBOL_COLUMN
+        self.update_sort_indicators()
         self.render_matches()
+
+    def update_sort_indicators(self) -> None:
+        indicator = (
+            SORT_DESCENDING_INDICATOR
+            if self.sort_descending
+            else SORT_ASCENDING_INDICATOR
+        )
+        for column in TABLE_COLUMNS:
+            heading = (
+                f"{column} {indicator}"
+                if column == self.sort_column
+                else column
+            )
+            self.tree.heading(column, text=heading)
 
     def render_matches(self) -> None:
         all_matches = list(self.matches.values())
