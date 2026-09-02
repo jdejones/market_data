@@ -506,6 +506,7 @@ class HighBetaPatternMatchingGUI:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.status_var = tk.StringVar(value="Starting...")
         self.count_var = tk.StringVar(value="Matched: 0")
+        self.branch_filter_var = tk.StringVar(value="All branches")
 
         self._build_widgets()
         self.worker = threading.Thread(
@@ -520,7 +521,29 @@ class HighBetaPatternMatchingGUI:
         container = ttk.Frame(self.root, padding=10)
         container.pack(fill=tk.BOTH, expand=True)
         container.columnconfigure(0, weight=1)
-        container.rowconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        filter_frame = ttk.Frame(container)
+        filter_frame.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 8),
+        )
+        ttk.Label(filter_frame, text="Branch:").pack(side=tk.LEFT)
+        self.branch_filter = ttk.Combobox(
+            filter_frame,
+            textvariable=self.branch_filter_var,
+            values=("All branches",),
+            state="readonly",
+            width=16,
+        )
+        self.branch_filter.pack(side=tk.LEFT, padx=(6, 0))
+        self.branch_filter.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self.render_matches(),
+        )
 
         self.tree = ttk.Treeview(
             container,
@@ -561,12 +584,12 @@ class HighBetaPatternMatchingGUI:
             yscrollcommand=y_scroll.set,
             xscrollcommand=x_scroll.set,
         )
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
+        self.tree.grid(row=1, column=0, sticky="nsew")
+        y_scroll.grid(row=1, column=1, sticky="ns")
+        x_scroll.grid(row=2, column=0, sticky="ew")
 
         footer = ttk.Frame(container)
-        footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        footer.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         footer.columnconfigure(0, weight=1)
         ttk.Label(
             footer,
@@ -599,7 +622,23 @@ class HighBetaPatternMatchingGUI:
         self.render_matches()
 
     def render_matches(self) -> None:
-        matches = list(self.matches.values())
+        all_matches = list(self.matches.values())
+        branches = sorted({match.branch for match in all_matches})
+        filter_values = ("All branches", *(f"Branch {branch}" for branch in branches))
+        self.branch_filter.configure(values=filter_values)
+
+        selected_filter = self.branch_filter_var.get()
+        if selected_filter not in filter_values:
+            selected_filter = "All branches"
+            self.branch_filter_var.set(selected_filter)
+
+        if selected_filter == "All branches":
+            matches = all_matches
+        else:
+            selected_branch = int(selected_filter.removeprefix("Branch "))
+            matches = [
+                match for match in all_matches if match.branch == selected_branch
+            ]
 
         def sort_key(match: PatternMatch) -> Any:
             values = {
@@ -634,7 +673,17 @@ class HighBetaPatternMatchingGUI:
                     match.updated.strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
-        self.count_var.set(f"Matched: {len(matches)}")
+        branch_counts = {
+            branch: sum(match.branch == branch for match in all_matches)
+            for branch in branches
+        }
+        count_parts = [f"Matched: {len(all_matches)}"]
+        count_parts.extend(
+            f"Branch {branch}: {branch_counts[branch]}" for branch in branches
+        )
+        if selected_filter != "All branches":
+            count_parts.append(f"Shown: {len(matches)}")
+        self.count_var.set(" | ".join(count_parts))
 
     def process_queue(self) -> None:
         try:
