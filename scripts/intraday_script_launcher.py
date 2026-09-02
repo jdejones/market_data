@@ -99,6 +99,13 @@ SCRIPT_SPECS = (
         window_title="High Beta Pattern Matching",
     ),
     ScriptSpec(
+        key="high_beta_pattern_matching_realtime",
+        label="Real-Time High-Beta Clustering",
+        filename="high_beta_pattern_matching_realtime.py",
+        arguments=no_arguments,
+        window_title="Real-Time High-Beta Clustering",
+    ),
+    ScriptSpec(
         key="high_short_interest_in_play",
         label="High Short Interest In Play",
         filename="high_short_interest_in_play.py",
