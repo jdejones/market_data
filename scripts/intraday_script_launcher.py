@@ -92,6 +92,13 @@ SCRIPT_SPECS = (
         window_slot=WindowSlot(0.00, 0.00, 0.43, 0.28),
     ),
     ScriptSpec(
+        key="high_beta_pattern_matching",
+        label="High Beta Pattern Matching",
+        filename="high_beta_pattern_matching.py",
+        arguments=no_arguments,
+        window_title="High Beta Pattern Matching",
+    ),
+    ScriptSpec(
         key="high_short_interest_in_play",
         label="High Short Interest In Play",
         filename="high_short_interest_in_play.py",
