@@ -142,6 +142,13 @@ SCRIPT_SPECS = (
         window_title="Recent Events",
     ),
     ScriptSpec(
+        key="alerts",
+        label="Alerts",
+        filename="alerts.py",
+        arguments=no_arguments,
+        window_title="Alerts",
+    ),
+    ScriptSpec(
         key="news_headline_poster_gui",
         label="News Headline Poster",
         filename=r"C:\Users\jdejo\News_Tracker\scripts\news_headline_poster_gui.py",
