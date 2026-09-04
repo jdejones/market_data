@@ -121,4 +121,6 @@ if __name__ == "__main__":
     daily_quant_rating_df.set_index('index', inplace=True)
     daily_quant_rating_df.index.name = 'Symbol'
     daily_quant_rating_df['diff'] = daily_quant_rating_df[daily_quant_rating_df.columns[-1]] - daily_quant_rating_df[daily_quant_rating_df.columns[-2]]
+    hist_short_int = pd.read_csv(r"E:\Market Research\Dataset\Fundamental Data\historic_short_interest.txt")
+    hist_short_int.set_index('Ticker', inplace=True)
     
