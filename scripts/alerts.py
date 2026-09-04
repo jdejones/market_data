@@ -1,6 +1,21 @@
+"""
+AGENTS PLEASE READ:
+
+This is a centralized, extensible alert system. Alert types may use entirely
+different data sources, inputs, and trigger conditions.
+
+Do not assume alerts contain symbols, numeric thresholds, or market data.
+Alert-specific fields belong in the JSON data and detail card—not in shared
+tables or generic application logic.
+
+Implement each new alert type through the alert-type interface while preserving
+the shared persistence, lifecycle, scanner, and GUI infrastructure.
+"""
+
 from __future__ import annotations
 
 import argparse
+import calendar
 import copy
 import datetime as dt
 import json
@@ -166,6 +181,67 @@ def format_datetime(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def reminder_next_occurrence(
+    schedule: dict[str, Any],
+    after: dt.datetime,
+) -> dt.datetime | None:
+    """Return the first scheduled occurrence strictly after ``after``."""
+    after = after.astimezone(EASTERN)
+    kind = str(schedule["kind"])
+    hour = int(schedule.get("hour", 0))
+    minute = int(schedule.get("minute", 0))
+
+    def at_time(date_value: dt.date) -> dt.datetime:
+        return dt.datetime.combine(
+            date_value,
+            dt.time(hour, minute),
+            tzinfo=EASTERN,
+        )
+
+    if kind == "custom":
+        occurrence = parse_iso_datetime(schedule.get("date_time"))
+        return occurrence if occurrence is not None and occurrence > after else None
+
+    if kind == "daily":
+        occurrence = at_time(after.date())
+        if occurrence <= after:
+            occurrence = at_time(after.date() + dt.timedelta(days=1))
+        return occurrence
+
+    if kind == "weekly":
+        anchor = at_time(dt.date.fromisoformat(str(schedule["start_date"])))
+        if anchor > after:
+            return anchor
+        elapsed = (after - anchor).total_seconds()
+        weeks = int(elapsed // dt.timedelta(days=7).total_seconds()) + 1
+        return anchor + dt.timedelta(weeks=weeks)
+
+    if kind == "weekday":
+        weekday = int(schedule["weekday"])
+        days_ahead = (weekday - after.weekday()) % 7
+        occurrence = at_time(after.date() + dt.timedelta(days=days_ahead))
+        if occurrence <= after:
+            occurrence = at_time(occurrence.date() + dt.timedelta(days=7))
+        return occurrence
+
+    if kind == "monthly":
+        requested_day = int(schedule["day"])
+        year, month = after.year, after.month
+        for month_offset in range(0, 24):
+            absolute_month = (month - 1) + month_offset
+            candidate_year = year + absolute_month // 12
+            candidate_month = absolute_month % 12 + 1
+            last_day = calendar.monthrange(candidate_year, candidate_month)[1]
+            occurrence = at_time(
+                dt.date(candidate_year, candidate_month, min(requested_day, last_day))
+            )
+            if occurrence > after:
+                return occurrence
+        raise RuntimeError("Could not calculate the next monthly reminder.")
+
+    raise ValueError(f"Unsupported reminder schedule: {kind}")
+
+
 @dataclass(frozen=True)
 class AlertDefinition:
     name: str
@@ -195,6 +271,7 @@ class AlertSpecificEditor(Protocol):
 class AlertType(Protocol):
     type_id: str
     display_name: str
+    uses_cooldown: bool
 
     def build_editor(self, parent: ttk.Frame) -> AlertSpecificEditor:
         ...
@@ -208,6 +285,7 @@ class AlertType(Protocol):
         cooldown_mode: str,
         cooldown_value_seconds: float,
         expiration: dt.datetime | None,
+        created_at: dt.datetime,
     ) -> dict[str, Any]:
         ...
 
@@ -255,6 +333,7 @@ class RelativeVolumeEditor:
 class RelativeVolumeAlertType:
     type_id = "relative_volume"
     display_name = "Relative Volume"
+    uses_cooldown = True
 
     def build_editor(self, parent: ttk.Frame) -> AlertSpecificEditor:
         return RelativeVolumeEditor(parent)
@@ -268,7 +347,9 @@ class RelativeVolumeAlertType:
         cooldown_mode: str,
         cooldown_value_seconds: float,
         expiration: dt.datetime | None,
+        created_at: dt.datetime,
     ) -> dict[str, Any]:
+        _ = created_at
         symbols = [str(symbol) for symbol in specific_values["symbols"]]
         return {
             "schema_version": SCHEMA_VERSION,
@@ -357,6 +438,267 @@ class RelativeVolumeAlertType:
         if not state:
             return EvaluationResult(passed, None, delete_definition=True)
         return EvaluationResult(passed, data if changed else None)
+
+
+class ReminderEditor:
+    SCHEDULES = (
+        "Custom date and time",
+        "Daily",
+        "Weekly",
+        "Monthly",
+        "Day of the Week",
+    )
+    WEEKDAYS = (
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    )
+
+    def __init__(self, parent: ttk.Frame) -> None:
+        self.schedule_var = tk.StringVar(value="Custom date and time")
+        self.date_var = tk.StringVar(
+            value=(dt.date.today() + dt.timedelta(days=1)).isoformat()
+        )
+        self.day_var = tk.StringVar(value=str(dt.date.today().day))
+        self.weekday_var = tk.StringVar(value=self.WEEKDAYS[dt.date.today().weekday()])
+        self.hour_var = tk.StringVar(value="09")
+        self.minute_var = tk.StringVar(value="00")
+
+        ttk.Label(parent, text="Schedule").grid(row=0, column=0, sticky="w")
+        schedule_box = ttk.Combobox(
+            parent,
+            textvariable=self.schedule_var,
+            values=self.SCHEDULES,
+            state="readonly",
+            width=24,
+        )
+        schedule_box.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(2, 8))
+        schedule_box.bind("<<ComboboxSelected>>", lambda _event: self._sync_fields())
+
+        self.date_label = ttk.Label(parent, text="Date (YYYY-MM-DD)")
+        self.date_entry = ttk.Entry(parent, textvariable=self.date_var, width=16)
+        self.day_label = ttk.Label(parent, text="Day of month (1-31)")
+        self.day_box = ttk.Spinbox(
+            parent,
+            from_=1,
+            to=31,
+            textvariable=self.day_var,
+            width=8,
+        )
+        self.weekday_label = ttk.Label(parent, text="Day of week")
+        self.weekday_box = ttk.Combobox(
+            parent,
+            textvariable=self.weekday_var,
+            values=self.WEEKDAYS,
+            state="readonly",
+            width=14,
+        )
+
+        self.date_label.grid(row=2, column=0, sticky="w")
+        self.date_entry.grid(row=3, column=0, sticky="w", pady=(2, 8))
+        self.day_label.grid(row=2, column=0, sticky="w")
+        self.day_box.grid(row=3, column=0, sticky="w", pady=(2, 8))
+        self.weekday_label.grid(row=2, column=0, sticky="w")
+        self.weekday_box.grid(row=3, column=0, sticky="w", pady=(2, 8))
+
+        ttk.Label(parent, text="Hour (Eastern)").grid(row=4, column=0, sticky="w")
+        ttk.Label(parent, text="Minute").grid(row=4, column=1, sticky="w", padx=(8, 0))
+        ttk.Combobox(
+            parent,
+            textvariable=self.hour_var,
+            values=tuple(f"{hour:02d}" for hour in range(24)),
+            state="readonly",
+            width=8,
+        ).grid(row=5, column=0, sticky="w", pady=(2, 0))
+        ttk.Spinbox(
+            parent,
+            from_=0,
+            to=59,
+            format="%02.0f",
+            textvariable=self.minute_var,
+            width=8,
+        ).grid(row=5, column=1, sticky="w", padx=(8, 0), pady=(2, 0))
+        ttk.Label(parent, text="Time zone: US/Eastern").grid(
+            row=6, column=0, columnspan=3, sticky="w", pady=(8, 0)
+        )
+        parent.columnconfigure(2, weight=1)
+        self._sync_fields()
+
+    def _sync_fields(self) -> None:
+        for widget in (
+            self.date_label,
+            self.date_entry,
+            self.day_label,
+            self.day_box,
+            self.weekday_label,
+            self.weekday_box,
+        ):
+            widget.grid_remove()
+
+        schedule = self.schedule_var.get()
+        if schedule in {"Custom date and time", "Weekly"}:
+            self.date_label.configure(
+                text=(
+                    "Date (YYYY-MM-DD)"
+                    if schedule == "Custom date and time"
+                    else "Starting date (YYYY-MM-DD)"
+                )
+            )
+            self.date_label.grid()
+            self.date_entry.grid()
+        elif schedule == "Monthly":
+            self.day_label.grid()
+            self.day_box.grid()
+        elif schedule == "Day of the Week":
+            self.weekday_label.grid()
+            self.weekday_box.grid()
+
+    def values(self) -> dict[str, Any]:
+        display_schedule = self.schedule_var.get()
+        kinds = {
+            "Custom date and time": "custom",
+            "Daily": "daily",
+            "Weekly": "weekly",
+            "Monthly": "monthly",
+            "Day of the Week": "weekday",
+        }
+        try:
+            hour = int(self.hour_var.get())
+            minute = int(self.minute_var.get())
+        except ValueError as exc:
+            raise ValueError("Hour and minute must be numbers.") from exc
+        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            raise ValueError("Enter an hour from 0-23 and a minute from 0-59.")
+
+        schedule: dict[str, Any] = {
+            "kind": kinds[display_schedule],
+            "label": display_schedule,
+            "hour": hour,
+            "minute": minute,
+            "timezone": "US/Eastern",
+        }
+        if display_schedule in {"Custom date and time", "Weekly"}:
+            try:
+                selected_date = dt.date.fromisoformat(self.date_var.get().strip())
+            except ValueError as exc:
+                raise ValueError("Reminder date must use YYYY-MM-DD.") from exc
+            if display_schedule == "Custom date and time":
+                schedule["date_time"] = dt.datetime.combine(
+                    selected_date,
+                    dt.time(hour, minute),
+                    tzinfo=EASTERN,
+                ).isoformat()
+            else:
+                schedule["start_date"] = selected_date.isoformat()
+        elif display_schedule == "Monthly":
+            try:
+                day = int(self.day_var.get())
+            except ValueError as exc:
+                raise ValueError("Day of month must be a number.") from exc
+            if not 1 <= day <= 31:
+                raise ValueError("Day of month must be between 1 and 31.")
+            schedule["day"] = day
+        elif display_schedule == "Day of the Week":
+            schedule["weekday"] = self.WEEKDAYS.index(self.weekday_var.get())
+            schedule["weekday_name"] = self.weekday_var.get()
+        return {"schedule": schedule}
+
+
+class ReminderAlertType:
+    type_id = "reminder"
+    display_name = "Reminder"
+    uses_cooldown = False
+
+    def build_editor(self, parent: ttk.Frame) -> AlertSpecificEditor:
+        return ReminderEditor(parent)
+
+    def build_definition_data(
+        self,
+        specific_values: dict[str, Any],
+        *,
+        comment: str,
+        repeat: bool,
+        cooldown_mode: str,
+        cooldown_value_seconds: float,
+        expiration: dt.datetime | None,
+        created_at: dt.datetime,
+    ) -> dict[str, Any]:
+        _ = (cooldown_mode, cooldown_value_seconds)
+        schedule = copy.deepcopy(specific_values["schedule"])
+        if repeat and schedule["kind"] == "custom":
+            raise ValueError(
+                "A custom date/time reminder is one-time. "
+                "Turn off Repeat or choose a recurring schedule."
+            )
+        next_trigger = reminder_next_occurrence(schedule, created_at)
+        if next_trigger is None:
+            raise ValueError("The custom reminder date and time must be in the future.")
+        if expiration is not None and next_trigger >= expiration:
+            raise ValueError("The first reminder must occur before its expiration.")
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "alert_type": self.type_id,
+            "comment": comment,
+            "config": {
+                "repeat": repeat,
+                "schedule": schedule,
+                "expiration": expiration.isoformat() if expiration else None,
+            },
+            "state": {"next_trigger_at": next_trigger.isoformat()},
+        }
+
+    def symbols(self, definition: AlertDefinition) -> set[str]:
+        _ = definition
+        return set()
+
+    def evaluate(
+        self,
+        definition: AlertDefinition,
+        observations: dict[str, float],
+        now: dt.datetime,
+    ) -> EvaluationResult:
+        _ = observations
+        data = copy.deepcopy(definition.data)
+        config = data.get("config", {})
+        expiration = parse_iso_datetime(config.get("expiration"))
+        if expiration is not None and now >= expiration:
+            return EvaluationResult([], None, delete_definition=True)
+
+        scheduled_for = parse_iso_datetime(
+            data.get("state", {}).get("next_trigger_at")
+        )
+        if scheduled_for is None:
+            return EvaluationResult([], None, delete_definition=True)
+        if now < scheduled_for:
+            return EvaluationResult([], None)
+
+        passed = PassedAlert(
+            name=definition.name,
+            passed_at=now,
+            data={
+                "schema_version": SCHEMA_VERSION,
+                "alert_type": self.type_id,
+                "alert_name": definition.name,
+                "scheduled_for": scheduled_for.isoformat(),
+                "schedule": config.get("schedule", {}),
+                "comment": data.get("comment", ""),
+                "definition_created_at": definition.created_at.isoformat(),
+            },
+        )
+        if not bool(config.get("repeat", False)):
+            return EvaluationResult([passed], None, delete_definition=True)
+
+        next_trigger = reminder_next_occurrence(config["schedule"], now)
+        if next_trigger is None:
+            return EvaluationResult([passed], None, delete_definition=True)
+        if expiration is not None and next_trigger >= expiration:
+            return EvaluationResult([passed], None, delete_definition=True)
+        data.setdefault("state", {})["next_trigger_at"] = next_trigger.isoformat()
+        return EvaluationResult([passed], data)
 
 
 class AlertRegistry:
@@ -674,7 +1016,8 @@ class CreateAlertDialog:
             variable=self.repeat_var,
             command=self._sync_repeat_controls,
         ).grid(row=0, column=0, sticky="w")
-        ttk.Label(lifecycle, text="Cooldown").grid(row=1, column=0, sticky="w")
+        self.cooldown_label = ttk.Label(lifecycle, text="Cooldown")
+        self.cooldown_label.grid(row=1, column=0, sticky="w")
         self.cooldown_box = ttk.Combobox(
             lifecycle,
             textvariable=self.cooldown_var,
@@ -742,8 +1085,20 @@ class CreateAlertDialog:
             child.destroy()
         handler = self.registry.by_display_name(self.type_var.get())
         self.editor = handler.build_editor(self.type_frame)
+        self._sync_repeat_controls()
 
     def _sync_repeat_controls(self) -> None:
+        handler = self.registry.by_display_name(self.type_var.get())
+        if not handler.uses_cooldown:
+            self.cooldown_label.grid_remove()
+            self.cooldown_box.grid_remove()
+            self.cooldown_amount_entry.grid_remove()
+            self.cooldown_unit_box.grid_remove()
+            return
+        self.cooldown_label.grid()
+        self.cooldown_box.grid()
+        self.cooldown_amount_entry.grid()
+        self.cooldown_unit_box.grid()
         repeat_state = "readonly" if self.repeat_var.get() else "disabled"
         self.cooldown_box.configure(state=repeat_state)
         custom_enabled = self.repeat_var.get() and self.cooldown_var.get() == "Custom"
@@ -778,13 +1133,14 @@ class CreateAlertDialog:
         try:
             specific_values = self.editor.values()
             repeat = self.repeat_var.get()
+            handler = self.registry.by_display_name(self.type_var.get())
             cooldown_value = (
                 cooldown_seconds(
                     self.cooldown_var.get(),
                     self.cooldown_amount_var.get(),
                     self.cooldown_unit_var.get(),
                 )
-                if repeat
+                if repeat and handler.uses_cooldown
                 else 0.0
             )
             created_at = eastern_now()
@@ -793,14 +1149,20 @@ class CreateAlertDialog:
                 self.custom_expiration_var.get(),
                 created_at,
             )
-            handler = self.registry.by_display_name(self.type_var.get())
             data = handler.build_definition_data(
                 specific_values,
                 comment=self.comment_text.get("1.0", tk.END).strip(),
                 repeat=repeat,
-                cooldown_mode=self.cooldown_var.get() if repeat else "None",
+                cooldown_mode=(
+                    self.cooldown_var.get()
+                    if repeat and handler.uses_cooldown
+                    else "Schedule"
+                    if repeat
+                    else "None"
+                ),
                 cooldown_value_seconds=cooldown_value,
                 expiration=expiration,
+                created_at=created_at,
             )
             self.on_create(AlertDefinition(name, created_at, data))
         except Exception as exc:
@@ -1187,7 +1549,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    registry = AlertRegistry([RelativeVolumeAlertType()])
+    registry = AlertRegistry([RelativeVolumeAlertType(), ReminderAlertType()])
     repository = AlertRepository(
         alerts_engine=make_engine(ALERTS_DB, ALERTS_MYSQL_USER, database_password),
         stocks_engine=make_engine(STOCKS_DB, STOCKS_MYSQL_USER, gptdb),
