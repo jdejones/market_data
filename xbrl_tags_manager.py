@@ -434,8 +434,8 @@ class Xbrl_Tags_Manager:
         Return the XBRL tags available for each symbol.
 
         Symbols without any saved tags are included with an empty list. By
-        default, duplicate strings are removed because repeated calls to
-        `append_tags()` can save the same tag more than once.
+        default, duplicate strings are removed to make reports robust to legacy
+        data that may have been saved before duplicate prevention was added.
 
         Parameters
         ----------
@@ -761,14 +761,22 @@ class Xbrl_Tags_Manager:
         current_container = self.find_statements_tags_current(symbol, filing_type)
         self.xbrl_tags_saved[symbol] = current_container
         self.sym_statements_items_tags_current_container = {}
+
+    @staticmethod
+    def _append_unique(tags: list, tag) -> bool:
+        """Append `tag` only when absent, returning whether it was added."""
+        if tag in tags:
+            return False
+        tags.append(tag)
+        return True
     
     def append_tags(self, symbol, filing_type):
         """
         Append newly discovered filing tags to an existing symbol payload.
 
-        This preserves the original append behavior: if a statement or line item
-        already exists for the symbol, the current tag is appended to that list.
-        If a statement or item is missing, it is created.
+        If a statement or line item already exists for the symbol, a different
+        current tag is appended to its list. Tags already present are not added
+        again. If a statement or item is missing, it is created.
 
         Use this when a symbol already exists in `xbrl_symbol_tags` and you want
         to add tags discovered from a newer filing:
@@ -792,9 +800,12 @@ class Xbrl_Tags_Manager:
                     warnings.warn(f'{symbol} has more than 1 statement tag. Verify correct tag and manually add.')
                 else:
                     if 'statement tags' in self.xbrl_tags_saved[symbol][statement]:#Check for list of statement tags.
-                        self.xbrl_tags_saved[symbol][statement]['statement tags'].append(current_container[statement]['statement tags'][0])#Append first current statement tag to symbol tag structure.
+                        self._append_unique(
+                            self.xbrl_tags_saved[symbol][statement]['statement tags'],
+                            current_container[statement]['statement tags'][0],
+                        )
                     else:
-                        self.xbrl_tags_saved[symbol][statement] = {'statement tags': [current_container[statement]['statement tags'][0]]}#If no statement tags key is found, the key:value pair is created and the current tag is contained in a list.
+                        self.xbrl_tags_saved[symbol][statement]['statement tags'] = [current_container[statement]['statement tags'][0]]
                 for item in self.statement_item_links.get(statement, []):#Iterate over statement items.
                     current_item_tags = current_container[statement].get(item)
                     if not current_item_tags:
@@ -803,16 +814,30 @@ class Xbrl_Tags_Manager:
                         warnings.warn(f'{symbol}:{statement}-{item} has more than 1 tag. Verify correct tag and manually add.')
                     else:
                         if item in self.xbrl_tags_saved[symbol][statement]:#statement_item_links
-                            self.xbrl_tags_saved[symbol][statement][item].append(current_item_tags[0])
+                            self._append_unique(
+                                self.xbrl_tags_saved[symbol][statement][item],
+                                current_item_tags[0],
+                            )
                         else:
                             self.xbrl_tags_saved[symbol][statement][item] = [current_item_tags[0]]
         else:
             warnings.warn(f'{symbol} did not have current tags saved to access in {self.append_tags.__name__}')
         self.sym_statements_items_tags_current_container = {}
 
+    def deduplicate_tags(self):
+        """Remove duplicate saved tags in place while preserving their order."""
+        for symbol_tags in self.xbrl_tags_saved.values():
+            for statement_payload in symbol_tags.values():
+                for item, tags in statement_payload.items():
+                    if isinstance(tags, list):
+                        statement_payload[item] = list(dict.fromkeys(tags))
+
     def save_tags(self, file=None):
         """
         Save the current `xbrl_tags_saved` state.
+
+        Duplicate tags are removed while preserving their stored order before
+        writing to either MySQL or a JSON file.
 
         By default, this writes to the `xbrl_symbol_tags` database:
 
@@ -831,6 +856,7 @@ class Xbrl_Tags_Manager:
         manager.save_tags(r"C:\\temp\\xbrl_tags_backup.json")
         ```
         """
+        self.deduplicate_tags()
         if file == None:
             self._save_xbrl_symbol_tags()
         else:
