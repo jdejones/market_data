@@ -1,6 +1,3 @@
-# TODO Create functiosn that generate statistics of missing tags.
-# TODO CREATE function that accepts a list of symbols and returns a list of the symbols not in database.
-
 import json
 import time
 import warnings
@@ -383,6 +380,294 @@ class Xbrl_Tags_Manager:
             self.sym_statements_items_tags_saved_container = self.xbrl_tags_saved[symbol]#Adds the symbols saved tags to a temporary container.
         else:
             self.sym_statements_items_tags_saved_container = None#If no tags are saved the temporary container gets assigned a value of None.
+
+    def _symbols_for_tag_report(self, symbols=None) -> list:
+        """
+        Return normalized symbols included in a tag coverage report.
+
+        By default, reports include both the symbols requested when the manager
+        was created and every symbol loaded from `xbrl_symbol_tags`. This makes
+        requested symbols with no database table visible as zero-tag symbols.
+        """
+        if symbols is None:
+            symbols = set(self.symbols) | set(self.xbrl_tags_saved)
+        return sorted({self._normalize_symbol(symbol) for symbol in symbols})
+
+    def _flatten_symbol_tags(
+        self,
+        symbol: str,
+        include_statement_tags: bool = True,
+    ) -> list:
+        """Return all stored XBRL tag strings for one symbol."""
+        symbol = self._normalize_symbol(symbol)
+        symbol_tags = self.xbrl_tags_saved.get(symbol, {})
+
+        if not isinstance(symbol_tags, dict):
+            raise TypeError(f"Expected saved tags for {symbol} to be a dictionary.")
+
+        tags = []
+        for statement, statement_payload in symbol_tags.items():
+            if not isinstance(statement_payload, dict):
+                raise TypeError(
+                    f"Expected saved tags for {symbol}.{statement} to be a dictionary."
+                )
+
+            for item, item_tags in statement_payload.items():
+                if item == "statement tags" and not include_statement_tags:
+                    continue
+                if not isinstance(item_tags, list):
+                    raise TypeError(
+                        f"Expected saved tags for {symbol}.{statement}.{item} "
+                        "to be a list."
+                    )
+                tags.extend(tag for tag in item_tags if isinstance(tag, str) and tag)
+
+        return tags
+
+    def get_tags_by_symbol(
+        self,
+        symbols=None,
+        include_statement_tags: bool = True,
+        unique: bool = True,
+    ) -> dict:
+        """
+        Return the XBRL tags available for each symbol.
+
+        Symbols without any saved tags are included with an empty list. By
+        default, duplicate strings are removed because repeated calls to
+        `append_tags()` can save the same tag more than once.
+
+        Parameters
+        ----------
+        symbols:
+            Optional iterable of symbols to report. If omitted, include all
+            loaded database symbols and all symbols supplied at initialization.
+        include_statement_tags:
+            Include statement-level tags as well as line-item tags.
+        unique:
+            Remove duplicate tag strings while preserving their stored order.
+        """
+        tags_by_symbol = {}
+        for symbol in self._symbols_for_tag_report(symbols):
+            tags = self._flatten_symbol_tags(symbol, include_statement_tags)
+            if unique:
+                tags = list(dict.fromkeys(tags))
+            tags_by_symbol[symbol] = tags
+        return tags_by_symbol
+
+    def get_tag_counts_by_symbol(
+        self,
+        symbols=None,
+        include_statement_tags: bool = True,
+        unique: bool = True,
+    ) -> dict:
+        """Return each symbol's tag count, including zero-tag symbols."""
+        return {
+            symbol: len(tags)
+            for symbol, tags in self.get_tags_by_symbol(
+                symbols=symbols,
+                include_statement_tags=include_statement_tags,
+                unique=unique,
+            ).items()
+        }
+
+    def get_symbols_with_tags(
+        self,
+        symbols=None,
+        include_statement_tags: bool = True,
+    ) -> list:
+        """Return symbols that have at least one stored XBRL tag."""
+        counts = self.get_tag_counts_by_symbol(
+            symbols=symbols,
+            include_statement_tags=include_statement_tags,
+        )
+        return [symbol for symbol, count in counts.items() if count > 0]
+
+    def get_tag_coverage(
+        self,
+        symbols=None,
+        include_statement_tags: bool = True,
+    ) -> dict:
+        """
+        Return symbol-level counts, membership lists, and tag inventories.
+
+        This reports whether symbols have any tags; it does not calculate a
+        percentage against every possible XBRL concept.
+        """
+        tags_by_symbol = self.get_tags_by_symbol(
+            symbols=symbols,
+            include_statement_tags=include_statement_tags,
+        )
+        tag_counts_by_symbol = {
+            symbol: len(tags) for symbol, tags in tags_by_symbol.items()
+        }
+        symbols_with_tags = [
+            symbol for symbol, count in tag_counts_by_symbol.items() if count > 0
+        ]
+        symbols_without_tags = [
+            symbol for symbol, count in tag_counts_by_symbol.items() if count == 0
+        ]
+
+        return {
+            "symbol_count": len(tags_by_symbol),
+            "symbols_with_tags_count": len(symbols_with_tags),
+            "symbols_without_tags_count": len(symbols_without_tags),
+            "symbols_with_tags": symbols_with_tags,
+            "symbols_without_tags": symbols_without_tags,
+            "tag_counts_by_symbol": tag_counts_by_symbol,
+            "tags_by_symbol": tags_by_symbol,
+        }
+
+    def _item_tags_for_symbol(self, symbol: str) -> dict:
+        """
+        Return saved line-item tags keyed by normalized `item_tags` column name.
+
+        If the same normalized item appears under more than one statement, its
+        XBRL tags are combined and deduplicated.
+        """
+        symbol = self._normalize_symbol(symbol)
+        symbol_tags = self.xbrl_tags_saved.get(symbol, {})
+
+        if not isinstance(symbol_tags, dict):
+            raise TypeError(f"Expected saved tags for {symbol} to be a dictionary.")
+
+        tags_by_item = {}
+        for statement, statement_payload in symbol_tags.items():
+            if not isinstance(statement_payload, dict):
+                raise TypeError(
+                    f"Expected saved tags for {symbol}.{statement} to be a dictionary."
+                )
+
+            for item, saved_tags in statement_payload.items():
+                if item == "statement tags":
+                    continue
+                if not isinstance(saved_tags, list):
+                    raise TypeError(
+                        f"Expected saved tags for {symbol}.{statement}.{item} "
+                        "to be a list."
+                    )
+
+                valid_tags = [
+                    tag for tag in saved_tags if isinstance(tag, str) and tag
+                ]
+                if valid_tags:
+                    tags_by_item.setdefault(item, []).extend(valid_tags)
+
+        return {
+            item: list(dict.fromkeys(tags))
+            for item, tags in tags_by_item.items()
+        }
+
+    def get_item_tag_coverage(self, symbols=None) -> dict:
+        """
+        Measure coverage for every normalized item in `xbrl_tags.item_tags`.
+
+        The columns loaded into `self.item_tags` define the expected item-tag
+        universe. A symbol covers an item when its saved payload contains at
+        least one nonempty XBRL tag string for that normalized item.
+
+        Returns
+        -------
+        dict
+            `dataset` contains aggregate populated/missing counts.
+            `by_symbol` shows each symbol's coverage, missing items, and actual
+            XBRL tags.
+            `by_item_tag` shows how many and which symbols cover each normalized
+            item.
+        """
+        report_symbols = self._symbols_for_tag_report(symbols)
+        expected_items = sorted(self.item_tags)
+        expected_item_set = set(expected_items)
+        expected_item_count = len(expected_items)
+
+        saved_items_by_symbol = {
+            symbol: self._item_tags_for_symbol(symbol)
+            for symbol in report_symbols
+        }
+
+        by_symbol = {}
+        for symbol, saved_items in saved_items_by_symbol.items():
+            covered_items = [
+                item for item in expected_items if saved_items.get(item)
+            ]
+            missing_items = [
+                item for item in expected_items if not saved_items.get(item)
+            ]
+            unrecognized_items = sorted(set(saved_items) - expected_item_set)
+            covered_count = len(covered_items)
+
+            by_symbol[symbol] = {
+                "expected_item_count": expected_item_count,
+                "covered_item_count": covered_count,
+                "missing_item_count": len(missing_items),
+                "coverage_percent": (
+                    round(covered_count / expected_item_count * 100, 2)
+                    if expected_item_count
+                    else 0.0
+                ),
+                "covered_items": covered_items,
+                "missing_items": missing_items,
+                "tags_by_item": {
+                    item: saved_items[item] for item in covered_items
+                },
+                "unrecognized_saved_items": unrecognized_items,
+            }
+
+        by_item_tag = {}
+        for item in expected_items:
+            symbols_with_tag = [
+                symbol
+                for symbol in report_symbols
+                if saved_items_by_symbol[symbol].get(item)
+            ]
+            symbols_without_tag = [
+                symbol
+                for symbol in report_symbols
+                if not saved_items_by_symbol[symbol].get(item)
+            ]
+            by_item_tag[item] = {
+                "symbols_with_tag_count": len(symbols_with_tag),
+                "symbols_without_tag_count": len(symbols_without_tag),
+                "coverage_percent": (
+                    round(len(symbols_with_tag) / len(report_symbols) * 100, 2)
+                    if report_symbols
+                    else 0.0
+                ),
+                "symbols_with_tag": symbols_with_tag,
+                "symbols_without_tag": symbols_without_tag,
+                "tags_by_symbol": {
+                    symbol: saved_items_by_symbol[symbol][item]
+                    for symbol in symbols_with_tag
+                },
+            }
+
+        possible_symbol_items = len(report_symbols) * expected_item_count
+        populated_symbol_items = sum(
+            symbol_report["covered_item_count"]
+            for symbol_report in by_symbol.values()
+        )
+
+        return {
+            "dataset": {
+                "symbol_count": len(report_symbols),
+                "expected_item_tag_count": expected_item_count,
+                "possible_symbol_item_count": possible_symbol_items,
+                "populated_symbol_item_count": populated_symbol_items,
+                "missing_symbol_item_count": (
+                    possible_symbol_items - populated_symbol_items
+                ),
+                "coverage_percent": (
+                    round(
+                        populated_symbol_items / possible_symbol_items * 100,
+                        2,
+                    )
+                    if possible_symbol_items
+                    else 0.0
+                ),
+            },
+            "by_symbol": by_symbol,
+            "by_item_tag": by_item_tag,
+        }
     
     #Function for identifying current SEC filed tags for a symbol.
     def find_statements_tags_current(self, symbol, filing_type):
