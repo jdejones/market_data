@@ -682,7 +682,9 @@ def net_profit_margin( symbol, form_type='10-K'):
     except:
         return np.nan
 
-def price_sales( symbol, form_type='10-K'):
+def price_sales( symbol, form_type='10-K', from_polygon=False):
+    if from_polygon:
+        return sales(symbol, limit=10, timeframe='annual', plot=False)
     try:
         market_cap = sa_fundamental_data.marketCap.loc[sa_fundamental_data.Symbol == symbol].values[0]
         revenue = float(single_fundamental(symbol, form_type=form_type, fundamental='Revenue').iloc[0].value)
