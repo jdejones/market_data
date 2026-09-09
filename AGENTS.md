@@ -1,4 +1,5 @@
 # AGENTS.md
+- Maintain conventions established in the repo.
 
 ## Review guidelines
 
@@ -14,3 +15,6 @@
 ### Credentials
 - hostname and port: 127.0.0.1:3306
 - password in api_keys.py
+
+## Backtests
+- This repo contains objects for calculating stock technicals. Use them before using outside calculations or libraries.
