@@ -7,14 +7,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from sec_api import RenderApi
+from sec_api import MappingApi, QueryApi, RenderApi
 from sqlalchemy import URL, bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -33,9 +34,20 @@ DEFAULT_MAX_WORKERS = 8
 READ_BATCH_SIZE = 500
 
 FORM_COLUMNS = {
-    "10-K": {"filing": "form10k", "link": "form10k_link"},
-    "10-Q": {"filing": "form10q", "link": "form10q_link"},
+    "10-K": {
+        "filing": "form10k",
+        "link": "form10k_link",
+        "period": "period_of_10k",
+    },
+    "10-Q": {
+        "filing": "form10q",
+        "link": "form10q_link",
+        "period": "period_of_10q",
+    },
 }
+
+ACCESSION_WITH_DASHES_RE = re.compile(r"(\d{10}-\d{2}-\d{6})")
+ACCESSION_DIRECTORY_RE = re.compile(r"/(\d{18})(?:/|$)")
 
 
 @dataclass(frozen=True)
@@ -44,6 +56,8 @@ class FilingEvent:
     form_type: str
     filed_at: datetime
     link: str
+    period_of_report: date | None = None
+    cik: str | None = None
 
 
 def parse_mysql_datetime(value: Any) -> datetime:
@@ -55,6 +69,150 @@ def parse_mysql_datetime(value: Any) -> datetime:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
+
+
+def parse_report_period(value: Any) -> date:
+    """Convert SEC periodOfReport metadata to a date."""
+    if not value:
+        raise ValueError("periodOfReport is missing")
+    return date.fromisoformat(str(value).strip()[:10])
+
+
+def extract_accession_number(link: str) -> str:
+    """Extract a dashed SEC accession number from an archive URL."""
+    dashed_match = ACCESSION_WITH_DASHES_RE.search(link)
+    if dashed_match:
+        return dashed_match.group(1)
+
+    directory_match = ACCESSION_DIRECTORY_RE.search(link)
+    if directory_match:
+        compact = directory_match.group(1)
+        return f"{compact[:10]}-{compact[10:12]}-{compact[12:]}"
+
+    raise ValueError(f"Could not determine SEC accession number from {link}")
+
+
+def normalize_cik(value: Any) -> str:
+    normalized = str(value or "").strip().lstrip("0")
+    if not normalized.isdigit():
+        raise ValueError("SEC metadata did not include a valid issuer CIK")
+    return normalized
+
+
+def resolve_filing_event(
+    event: FilingEvent,
+    query_api: QueryApi,
+    mapping_api: MappingApi,
+    issuer_cik_cache: dict[str, set[str]],
+) -> FilingEvent:
+    """Resolve canonical filing metadata and verify the symbol's current issuer."""
+    accession_number = extract_accession_number(event.link)
+    response = query_api.get_filings(
+        {
+            "query": {
+                "query_string": {
+                    "query": f'accessionNo:"{accession_number}"',
+                }
+            },
+            "from": "0",
+            "size": "10",
+        }
+    )
+    filings = response.get("filings", [])
+    metadata = next(
+        (
+            filing
+            for filing in filings
+            if filing.get("accessionNo") == accession_number
+            and str(filing.get("formType") or "").upper() == event.form_type
+        ),
+        None,
+    )
+    if metadata is None:
+        raise LookupError(
+            f"SEC-API returned no {event.form_type} metadata for {accession_number}"
+        )
+
+    filing_cik = normalize_cik(metadata.get("cik"))
+    allowed_ciks = issuer_cik_cache.get(event.symbol)
+    if allowed_ciks is None:
+        mappings = mapping_api.resolve("ticker", event.symbol) or []
+        exact_mappings = [
+            mapping
+            for mapping in mappings
+            if str(mapping.get("ticker") or "").strip().upper() == event.symbol
+        ]
+        active_mappings = [
+            mapping for mapping in exact_mappings if not mapping.get("isDelisted")
+        ]
+        issuer_mappings = active_mappings or exact_mappings
+        allowed_ciks = {
+            normalize_cik(mapping.get("cik")) for mapping in issuer_mappings
+        }
+        issuer_cik_cache[event.symbol] = allowed_ciks
+
+    if not allowed_ciks:
+        raise LookupError(f"SEC-API returned no issuer mapping for {event.symbol}")
+    if filing_cik not in allowed_ciks:
+        raise ValueError(
+            f"issuer CIK {filing_cik} does not match {event.symbol} "
+            f"CIK(s) {sorted(allowed_ciks)}"
+        )
+
+    primary_link = str(metadata.get("linkToFilingDetails") or "").strip()
+    if not primary_link:
+        primary_link = next(
+            (
+                str(document.get("documentUrl") or "").strip()
+                for document in metadata.get("documentFormatFiles", []) or []
+                if str(document.get("type") or "").strip().upper()
+                == event.form_type
+                and document.get("documentUrl")
+            ),
+            "",
+        )
+    if not primary_link:
+        raise LookupError("SEC-API metadata did not include a primary filing document")
+
+    return replace(
+        event,
+        filed_at=parse_mysql_datetime(metadata.get("filedAt")),
+        link=primary_link,
+        period_of_report=parse_report_period(metadata.get("periodOfReport")),
+        cik=filing_cik,
+    )
+
+
+def resolve_filing_events(
+    events: Iterable[FilingEvent],
+) -> tuple[list[FilingEvent], list[dict[str, str]]]:
+    """Resolve and validate candidate events, retaining per-event failures."""
+    resolved: list[FilingEvent] = []
+    errors: list[dict[str, str]] = []
+    query_api = QueryApi(api_key=sec_api_key)
+    mapping_api = MappingApi(api_key=sec_api_key)
+    issuer_cik_cache: dict[str, set[str]] = {}
+
+    for event in events:
+        try:
+            resolved.append(
+                resolve_filing_event(
+                    event,
+                    query_api=query_api,
+                    mapping_api=mapping_api,
+                    issuer_cik_cache=issuer_cik_cache,
+                )
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "symbol": event.symbol,
+                    "form_type": event.form_type,
+                    "error": str(exc).replace(sec_api_key, "[REDACTED]"),
+                }
+            )
+
+    return resolved, errors
 
 
 def load_latest_filing_events(jsonl_path: Path) -> tuple[list[FilingEvent], int]:
@@ -152,7 +310,8 @@ def load_existing_rows(
 
     statement = text(
         """
-        SELECT symbol, filed_at, form10k_link, form10q_link
+        SELECT symbol, filed_at, form10k_link, form10q_link,
+               period_of_10k, period_of_10q
         FROM latest_earnings_filings
         WHERE symbol IN :symbols
         """
@@ -179,11 +338,28 @@ def load_existing_rows(
     return existing
 
 
+def exclude_unchanged_events(
+    events: Iterable[FilingEvent],
+    existing: dict[str, dict[str, Any]],
+) -> tuple[list[FilingEvent], int]:
+    """Avoid SEC-API requests for links that are already stored."""
+    candidates: list[FilingEvent] = []
+    skipped = 0
+    for event in events:
+        current = existing.get(event.symbol)
+        link_column = FORM_COLUMNS[event.form_type]["link"]
+        if current is not None and current.get(link_column) == event.link:
+            skipped += 1
+        else:
+            candidates.append(event)
+    return candidates, skipped
+
+
 def select_new_events(
     events: Iterable[FilingEvent],
     existing: dict[str, dict[str, Any]],
 ) -> tuple[list[FilingEvent], int]:
-    """Exclude events whose link is stored already or whose filing is stale."""
+    """Exclude filings that do not cover a newer period for their form."""
     selected: list[FilingEvent] = []
     skipped = 0
 
@@ -195,18 +371,20 @@ def select_new_events(
 
         link_column = FORM_COLUMNS[event.form_type]["link"]
         current_link = current.get(link_column)
-        current_filed_at = current.get("filed_at")
+        period_column = FORM_COLUMNS[event.form_type]["period"]
+        current_period = current.get(period_column)
 
         if current_link == event.link:
             skipped += 1
             continue
 
-        # filed_at represents the newest filing stored on the symbol row. If
-        # this form already has content, do not replace it with an older event.
+        # Annual and quarterly freshness are independent. periodOfReport also
+        # prevents a recently accepted filing for an old period from winning.
         if (
             current_link
-            and current_filed_at is not None
-            and event.filed_at <= current_filed_at
+            and current_period is not None
+            and event.period_of_report is not None
+            and event.period_of_report <= current_period
         ):
             skipped += 1
             continue
@@ -226,6 +404,7 @@ def download_filing(event: FilingEvent) -> dict[str, Any]:
         "symbol": event.symbol,
         "form_type": event.form_type,
         "filed_at": event.filed_at,
+        "period_of_report": event.period_of_report,
         "link": event.link,
         "filing": filing_html,
     }
@@ -274,8 +453,10 @@ def combine_symbol_downloads(
                 "filed_at": download["filed_at"],
                 "form10k": None,
                 "form10k_link": None,
+                "period_of_10k": None,
                 "form10q": None,
                 "form10q_link": None,
+                "period_of_10q": None,
             },
         )
         row["filed_at"] = max(row["filed_at"], download["filed_at"])
@@ -283,6 +464,7 @@ def combine_symbol_downloads(
         columns = FORM_COLUMNS[download["form_type"]]
         row[columns["filing"]] = download["filing"]
         row[columns["link"]] = download["link"]
+        row[columns["period"]] = download["period_of_report"]
 
     return list(combined.values())
 
@@ -301,13 +483,49 @@ def store_downloads(
         """
         UPDATE latest_earnings_filings
         SET filed_at = CASE
-                WHEN filed_at IS NULL OR filed_at < :filed_at THEN :filed_at
+                WHEN (
+                    :form10k IS NOT NULL
+                    AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                ) OR (
+                    :form10q IS NOT NULL
+                    AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                )
+                THEN CASE
+                    WHEN filed_at IS NULL OR filed_at < :filed_at THEN :filed_at
+                    ELSE filed_at
+                END
                 ELSE filed_at
             END,
-            form10k = COALESCE(:form10k, form10k),
-            form10k_link = COALESCE(:form10k_link, form10k_link),
-            form10q = COALESCE(:form10q, form10q),
-            form10q_link = COALESCE(:form10q_link, form10q_link)
+            form10k = CASE
+                WHEN :form10k IS NOT NULL
+                     AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                THEN :form10k ELSE form10k
+            END,
+            form10k_link = CASE
+                WHEN :form10k IS NOT NULL
+                     AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                THEN :form10k_link ELSE form10k_link
+            END,
+            period_of_10k = CASE
+                WHEN :form10k IS NOT NULL
+                     AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                THEN :period_of_10k ELSE period_of_10k
+            END,
+            form10q = CASE
+                WHEN :form10q IS NOT NULL
+                     AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                THEN :form10q ELSE form10q
+            END,
+            form10q_link = CASE
+                WHEN :form10q IS NOT NULL
+                     AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                THEN :form10q_link ELSE form10q_link
+            END,
+            period_of_10q = CASE
+                WHEN :form10q IS NOT NULL
+                     AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                THEN :period_of_10q ELSE period_of_10q
+            END
         WHERE symbol = :symbol
         """
     )
@@ -318,17 +536,66 @@ def store_downloads(
             filed_at,
             form10k,
             form10k_link,
+            period_of_10k,
             form10q,
-            form10q_link
+            form10q_link,
+            period_of_10q
         )
         VALUES (
             :symbol,
             :filed_at,
             :form10k,
             :form10k_link,
+            :period_of_10k,
             :form10q,
-            :form10q_link
+            :form10q_link,
+            :period_of_10q
         )
+        ON DUPLICATE KEY UPDATE
+            filed_at = CASE
+                WHEN (
+                    :form10k IS NOT NULL
+                    AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                ) OR (
+                    :form10q IS NOT NULL
+                    AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                )
+                THEN CASE
+                    WHEN filed_at IS NULL OR filed_at < :filed_at THEN :filed_at
+                    ELSE filed_at
+                END
+                ELSE filed_at
+            END,
+            form10k = CASE
+                WHEN :form10k IS NOT NULL
+                     AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                THEN :form10k ELSE form10k
+            END,
+            form10k_link = CASE
+                WHEN :form10k IS NOT NULL
+                     AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                THEN :form10k_link ELSE form10k_link
+            END,
+            period_of_10k = CASE
+                WHEN :form10k IS NOT NULL
+                     AND (period_of_10k IS NULL OR :period_of_10k > period_of_10k)
+                THEN :period_of_10k ELSE period_of_10k
+            END,
+            form10q = CASE
+                WHEN :form10q IS NOT NULL
+                     AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                THEN :form10q ELSE form10q
+            END,
+            form10q_link = CASE
+                WHEN :form10q IS NOT NULL
+                     AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                THEN :form10q_link ELSE form10q_link
+            END,
+            period_of_10q = CASE
+                WHEN :form10q IS NOT NULL
+                     AND (period_of_10q IS NULL OR :period_of_10q > period_of_10q)
+                THEN :period_of_10q ELSE period_of_10q
+            END
         """
     )
 
@@ -354,8 +621,13 @@ def update_latest_earnings_filings(
     engine = make_stocks_engine()
     try:
         existing = load_existing_rows(engine, (event.symbol for event in events))
-        selected, skipped = select_new_events(events, existing)
-        downloads, errors = download_filings(selected, max_workers=max_workers)
+        candidates, unchanged = exclude_unchanged_events(events, existing)
+        resolved, metadata_errors = resolve_filing_events(candidates)
+        selected, stale = select_new_events(resolved, existing)
+        downloads, download_errors = download_filings(
+            selected,
+            max_workers=max_workers,
+        )
         updated, inserted = store_downloads(
             engine,
             downloads,
@@ -366,12 +638,12 @@ def update_latest_earnings_filings(
 
     return {
         "eligible_events": len(events),
-        "skipped_events": skipped,
+        "skipped_events": unchanged + stale,
         "downloaded_filings": len(downloads),
         "updated_symbols": updated,
         "inserted_symbols": inserted,
         "malformed_lines": malformed_lines,
-        "errors": errors,
+        "errors": metadata_errors + download_errors,
     }
 
 
@@ -421,7 +693,7 @@ def main() -> int:
     )
     for error in summary["errors"]:
         LOGGER.error(
-            "%s %s download failed: %s",
+            "%s %s processing failed: %s",
             error["symbol"],
             error["form_type"],
             error["error"],
