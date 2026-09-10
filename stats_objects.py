@@ -2831,6 +2831,7 @@ def extension_algo(
     -------
     dict
         Mapping of ``{start_date: peak_extension_percent}`` for valid extensions.
+        Keys are ``'YYYY-MM-DD'`` date strings.
     """
     required_cols = {"Open", "High", "Low"}
     missing_cols = required_cols.difference(df.columns)
@@ -2867,7 +2868,7 @@ def extension_algo(
             continue
 
         start_idx = i - 1
-        start_date = df.index[start_idx]
+        start_date = pd.Timestamp(df.index[start_idx]).strftime("%Y-%m-%d")
         start_price = prev_row["Open"]
         valid_extension = False
         retracement_periods = 0
