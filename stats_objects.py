@@ -2830,8 +2830,9 @@ def extension_algo(
     Returns
     -------
     dict
-        Mapping of ``{start_date: peak_extension_percent}`` for valid extensions.
-        Keys are ``'YYYY-MM-DD'`` date strings.
+        Mapping of
+        ``{start_date: (peak_extension_percent, peak_date, end_date)}`` for
+        valid extensions. All dates are ``'YYYY-MM-DD'`` strings.
     """
     required_cols = {"Open", "High", "Low"}
     missing_cols = required_cols.difference(df.columns)
@@ -2873,6 +2874,7 @@ def extension_algo(
         valid_extension = False
         retracement_periods = 0
         j = i
+        peak_date = pd.Timestamp(df.index[j]).strftime("%Y-%m-%d")
 
         if direction == "long":
             extreme_price = current_row["High"]
@@ -2901,6 +2903,7 @@ def extension_algo(
                     extreme_price = row["High"]
                     retracement_periods = 0
                     peak_extension_pct = ((extreme_price - start_price) / start_price) * 100
+                    peak_date = pd.Timestamp(df.index[j]).strftime("%Y-%m-%d")
                 else:
                     retracement_periods += 1
 
@@ -2913,6 +2916,7 @@ def extension_algo(
                     extreme_price = row["Low"]
                     retracement_periods = 0
                     peak_extension_pct = ((start_price - extreme_price) / start_price) * 100
+                    peak_date = pd.Timestamp(df.index[j]).strftime("%Y-%m-%d")
                 else:
                     retracement_periods += 1
 
@@ -2931,7 +2935,8 @@ def extension_algo(
                 break
 
         if valid_extension:
-            results[start_date] = peak_extension_pct
+            end_date = pd.Timestamp(df.index[j]).strftime("%Y-%m-%d")
+            results[start_date] = (peak_extension_pct, peak_date, end_date)
 
         i = j + 1
 
