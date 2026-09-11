@@ -31,6 +31,7 @@ MYSQL_USER = "price_data_streamer"
 NEWS_MYSQL_USER = "gptdb"
 STOCKS_DB = "stocks"
 NEWS_DB = "news"
+NEWS_TABLE = "stock_news"
 RECENT_EVENTS_TABLE = "recent_events"
 DATE_COLUMN = "date"
 SYMBOL_COLUMN = "symbol"
@@ -38,6 +39,8 @@ RVOL_COLUMN = "RVol"
 ATRS_TRADED_COLUMN = "ATRs_Traded"
 PERCENT_CHANGE_SOURCE_COLUMN = "Percent_Change"
 PERCENT_CHANGE_DB_COLUMN = "percent_change"
+NEWS_SYMBOL_COLUMN = "Ticker"
+NEWS_DATE_COLUMN = "Date"
 HEADLINES_COLUMN = "Title"
 NEWS_AGGREGATE_COLUMN = "news_aggregate"
 
@@ -232,12 +235,16 @@ def fetch_event_headlines(
     query = text(
         f"""
         SELECT {mysql_identifier(HEADLINES_COLUMN)}
-        FROM {mysql_identifier(symbol.lower())}
-        WHERE DATE({mysql_identifier(DATE_COLUMN)}) = :event_date
+        FROM {mysql_identifier(NEWS_TABLE)}
+        WHERE {mysql_identifier(NEWS_SYMBOL_COLUMN)} = :symbol
+          AND DATE({mysql_identifier(NEWS_DATE_COLUMN)}) = :event_date
         """
     )
     with news_engine.connect() as conn:
-        result = conn.execute(query, {"event_date": event_date})
+        result = conn.execute(
+            query,
+            {"symbol": symbol, "event_date": event_date},
+        )
         return [
             str(row[0]).strip()
             for row in result

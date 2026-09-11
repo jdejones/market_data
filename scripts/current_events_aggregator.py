@@ -16,11 +16,14 @@ MYSQL_PORT = 3306
 MYSQL_USER = "gptdb"
 STOCKS_DB = "stocks"
 NEWS_DB = "news"
+NEWS_TABLE = "stock_news"
 ELEVATED_RVOL_TABLE = "elevated_rvol"
 CURRENT_EVENTS_TABLE = "current_events"
 SYMBOL_COLUMN = "symbol"
 DATE_COLUMN = "date"
 RVOL_COLUMN = "rvol"
+NEWS_SYMBOL_COLUMN = "Ticker"
+NEWS_DATE_COLUMN = "Date"
 HEADLINES_COLUMN = "Title"
 NEWS_AGGREGATE_COLUMN = "news_aggregate"
 EASTERN = ZoneInfo("US/Eastern")
@@ -81,14 +84,18 @@ def fetch_event_headlines(
     query = text(
         f"""
         SELECT {mysql_identifier(HEADLINES_COLUMN)}
-        FROM {mysql_identifier(symbol.lower())}
-        WHERE DATE({mysql_identifier(DATE_COLUMN)}) = :event_date
+        FROM {mysql_identifier(NEWS_TABLE)}
+        WHERE {mysql_identifier(NEWS_SYMBOL_COLUMN)} = :symbol
+          AND DATE({mysql_identifier(NEWS_DATE_COLUMN)}) = :event_date
         """
     )
     with news_engine.connect() as conn:
         return [
             str(row[0]).strip()
-            for row in conn.execute(query, {"event_date": event_date})
+            for row in conn.execute(
+                query,
+                {"symbol": symbol, "event_date": event_date},
+            )
             if row[0] is not None and str(row[0]).strip()
         ]
 

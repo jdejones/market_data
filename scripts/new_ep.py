@@ -30,6 +30,7 @@ GPTDB_MYSQL_USER = "gptdb"
 STREAM_MYSQL_USER = "price_data_streamer"
 STOCKS_DB = "stocks"
 NEWS_DB = "news"
+NEWS_TABLE = "stock_news"
 STREAM_DB = "intraday_price_stream"
 ELEVATED_RVOL_TABLE = "elevated_rvol"
 SUMMARY_TABLE = "summary"
@@ -39,6 +40,8 @@ STREAM_TABLE = "ohlcv_1m"
 DATE_COLUMN = "date"
 SYMBOL_COLUMN = "symbol"
 NEWS_AGGREGATE_COLUMN = "news_aggregate"
+NEWS_SYMBOL_COLUMN = "Ticker"
+NEWS_DATE_COLUMN = "Date"
 HEADLINES_COLUMN = "Title"
 EASTERN = ZoneInfo("US/Eastern")
 CENTRAL = ZoneInfo("America/Chicago")
@@ -431,12 +434,16 @@ def fetch_event_headlines(news_engine: Engine, symbol: str, event_date: dt.date)
     query = text(
         f"""
         SELECT {mysql_identifier(HEADLINES_COLUMN)}
-        FROM {mysql_identifier(symbol.lower())}
-        WHERE DATE({mysql_identifier(DATE_COLUMN)}) = :event_date
+        FROM {mysql_identifier(NEWS_TABLE)}
+        WHERE {mysql_identifier(NEWS_SYMBOL_COLUMN)} = :symbol
+          AND DATE({mysql_identifier(NEWS_DATE_COLUMN)}) = :event_date
         """
     )
     with news_engine.connect() as conn:
-        result = conn.execute(query, {"event_date": event_date})
+        result = conn.execute(
+            query,
+            {"symbol": symbol, "event_date": event_date},
+        )
         return [
             str(row[0]).strip()
             for row in result
