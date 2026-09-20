@@ -82,6 +82,75 @@ seeking_alpha_api_key = "YOUR_RAPIDAPI_KEY_FOR_SEEKING_ALPHA"
 ## Usage examples
 Below are representative tasks using the public APIs in this repo.
 
+- **Intermittent correlation network (desktop GUI)**
+
+  From the `market_data` repository directory, run:
+
+  ```bash
+  python scripts/network_analysis_gui.py --symbol PANW
+  ```
+
+  Select **Analyze** to load daily closes and explore a stock's qualifying
+  neighbors. Defaults follow `workbooks/pairs_trading.ipynb`: 252 daily percentage
+  returns, base correlation 0.65, high correlation 0.8, a 20-observation rolling
+  window, and a minimum high-correlation duration of 5 shared observations.
+  An edge must meet both correlation thresholds and the minimum duration.
+  Thresholds are inclusive. Self-pairs are excluded by symbol identity; distinct
+  symbols with perfect correlation remain eligible.
+
+  Drag nodes, scroll to zoom, click nodes or edges to inspect rolling correlation
+  and episode dates, and double-click a node or table row to recenter. The graph
+  includes qualifying connections among displayed neighbors. Its neighbor limit
+  defaults to 40, ranked by baseline correlation; the table retains all matches.
+  Pairwise missing observations are dropped before rolling, as in the notebook,
+  so duration counts shared trading observations rather than calendar days.
+
+  **Back** and **Forward** revisit the last 10 successfully viewed symbols;
+  **Alt+Left** and **Alt+Right** are keyboard shortcuts. Navigation uses the
+  current analysis settings and cached prices. A new visit after going back
+  replaces the forward history; failed or cancelled requests do not enter it.
+
+  Progress shows a percentage for the current calculation phase and an
+  approximate remaining time once enough work has completed to estimate it.
+  MySQL queries and saved-file loading show elapsed time without a moving bar,
+  because those operations do not report a reliable completion total.
+
+  The **Return spreads** panel on the right lists every qualifying neighbor,
+  including those outside the graph's display limit. Spread is the focal stock's
+  daily return minus the neighbor's daily return, displayed in percentage points
+  (pp). **Current** is the latest shared return difference within the selected
+  period, with its **As of** date; **Sum** is the arithmetic sum of daily spreads.
+  The default period uses the complete loaded return lookback. Check **Use custom
+  dates**, enter inclusive `YYYY-MM-DD` bounds, and select **Apply** to narrow it.
+  Blank bounds use the loaded limits; dates do not fetch additional price history.
+  Uncheck custom dates to restore the full lookback.
+
+  Selecting a spread row charts its daily spread, mean, and mean ± one and two
+  sample standard deviations over that period. Missing shared returns remain chart gaps;
+  rows with no observations show unavailable values. A single observation has
+  no standard-deviation lines. Pair selection also stays synchronized with the
+  correlation inspector for pairs involving the focal stock.
+
+  **Auto** reads only symbol/date/close from MySQL's
+  `daily_ohlcv.daily_symbol_bars`, using the existing `DATABASE_PASSWORD`
+  environment variable. It falls back to
+  `scripts/load_daily_variables.py`'s `load_all(["symbols"])` (the
+  `--objects symbols` selection). MySQL avoids unpickling the multi-gigabyte
+  saved technical objects; the initial query can still take a few minutes on an
+  unindexed table. Subsequent analyses reuse prices in memory. **Reload prices**
+  refreshes them; changing the source or lookback also reloads. Loading and
+  analysis run in the background. Cancellation takes effect between database
+  chunks or calculations; an in-progress read must finish or time out first.
+
+  Rolling-correlation workloads with at least 2,048 candidate pairs use up to
+  eight worker processes, in bounded batches with shared read-only return data.
+  Smaller workloads stay serial to avoid process startup overhead. The UI,
+  neighborhood scope, thresholds, and results are the same on both paths.
+
+  Requires the repository's pandas, NumPy, Matplotlib, SQLAlchemy, PyMySQL, joblib, and
+  Tkinter environment. No graph library or web server is required. Run the
+  focused regression checks with `python -m unittest scripts.test_network_analysis_gui`.
+
 - **1) Import daily OHLCV from Polygon and add daily technicals**
 ```python
 from market_data.price_data_import import api_import
