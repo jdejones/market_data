@@ -18,7 +18,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Callable
+from typing import Callable, Iterable
 
 import matplotlib.dates as mdates
 import numpy as np
@@ -575,6 +575,92 @@ def analyze_neighborhood(
     return NeighborhoodResult(symbol, settings, tuple(pairs), tuple(edges), neighbors, len(candidates))
 
 
+@dataclass(frozen=True)
+class SpreadData:
+    symbol: str
+    focal_symbol: str
+    spread: pd.Series
+    current: float
+    current_date: pd.Timestamp | None
+    cumulative: float
+    mean: float
+    std: float
+    count: int
+
+
+def parse_spread_dates(
+    start_date: str | None = None, end_date: str | None = None,
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """Validate optional, inclusive calendar dates without expanding loaded data."""
+    from datetime import date
+
+    bounds = []
+    for label, value in (("Start", start_date), ("End", end_date)):
+        value = value.strip() if value is not None else ""
+        if not value:
+            bounds.append(None)
+            continue
+        try:
+            parsed = date.fromisoformat(value)
+            if parsed.isoformat() != value:
+                raise ValueError
+            bounds.append(pd.Timestamp(parsed))
+        except ValueError as exc:
+            raise ValueError(f"{label} date must be a valid date in YYYY-MM-DD format.") from exc
+    start, end = bounds
+    if start is not None and end is not None and start > end:
+        raise ValueError("Start date must be on or before end date.")
+    return start, end
+
+
+def calculate_spreads(
+    returns: pd.DataFrame, focal_symbol: str, neighbors: Iterable[str],
+    start_date: str | None = None, end_date: str | None = None,
+) -> tuple[SpreadData, ...]:
+    """Subtract each neighbor's daily return from the focal stock's daily return.
+
+    The input already reflects Return lookback. Calendar bounds only select
+    from those observations, and missing returns remain gaps in the chart.
+    Cumulative spread is the arithmetic sum, not a compounded return. Range
+    statistics use shared finite observations; current uses the latest shared
+    finite observation inside the selected date range.
+    """
+    start, end = parse_spread_dates(start_date, end_date)
+    focal_symbol = focal_symbol.strip().upper()
+    if focal_symbol not in returns.columns:
+        raise ValueError(f"{focal_symbol or 'The selected symbol'} is not in the loaded price universe.")
+    symbols = tuple(dict.fromkeys(
+        symbol.strip().upper() for symbol in neighbors
+        if symbol.strip().upper() != focal_symbol
+    ))
+    for symbol in symbols:
+        if symbol not in returns.columns:
+            raise ValueError(f"{symbol or 'A correlated symbol'} is not in the loaded price universe.")
+    clean = returns.loc[:, [focal_symbol, *symbols]].sort_index().replace([np.inf, -np.inf], np.nan)
+    dates = pd.DatetimeIndex(clean.index).normalize()
+    selected = np.ones(len(clean), dtype=bool)
+    if start is not None:
+        selected &= dates >= (start.tz_localize(dates.tz) if dates.tz is not None else start)
+    if end is not None:
+        selected &= dates <= (end.tz_localize(dates.tz) if dates.tz is not None else end)
+    results = []
+    for symbol in symbols:
+        full = (clean[focal_symbol] - clean[symbol]).replace([np.inf, -np.inf], np.nan).rename(symbol)
+        spread = full.loc[selected]
+        finite = spread.dropna()
+        count = len(finite)
+        results.append(SpreadData(
+            symbol=symbol, focal_symbol=focal_symbol, spread=spread,
+            current=float(finite.iloc[-1]) if count else float("nan"),
+            current_date=pd.Timestamp(finite.index[-1]) if count else None,
+            cumulative=float(finite.sum()) if count else float("nan"),
+            mean=float(finite.mean()) if count else float("nan"),
+            std=float(finite.std(ddof=1)) if count > 1 else float("nan"),
+            count=count,
+        ))
+    return tuple(results)
+
+
 class NetworkAnalysisApp:
     POLL_MS = 100
     BLUE = "#247b9e"
@@ -583,8 +669,8 @@ class NetworkAnalysisApp:
     def __init__(self, root: tk.Tk, initial_symbol: str = "PANW") -> None:
         self.root = root
         self.root.title("Intermittent Correlation Network")
-        self.root.geometry("1480x940")
-        self.root.minsize(1100, 850)
+        self.root.geometry(f"{min(1840, max(1300, root.winfo_screenwidth() - 80))}x940")
+        self.root.minsize(1300, 850)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="correlation")
         self.future = None
@@ -597,6 +683,7 @@ class NetworkAnalysisApp:
         self.progress_state = ProgressState()
         self.data = None
         self.data_key = None
+        self.displayed_data = None
         self.result = None
         self.selected_pair = None
         self.positions = {}
@@ -606,6 +693,10 @@ class NetworkAnalysisApp:
         self.hover_text = ""
         self.row_pairs = {}
         self.sort_descending = {}
+        self.spread_rows = {}
+        self.spread_selected_symbol = None
+        self.spread_range = (None, None)
+        self.spread_sort_descending = {}
         self.source_var = tk.StringVar(value="Auto")
         self.symbol_var = tk.StringVar(value=initial_symbol.upper())
         self.base_var = tk.StringVar(value="0.65")
@@ -620,6 +711,13 @@ class NetworkAnalysisApp:
         self.graph_var = tk.StringVar(value="Stock neighborhood")
         self.pair_var = tk.StringVar(value="Select a node, edge, or table row to inspect a pair.")
         self.neighbor_var = tk.StringVar(value="Qualifying neighbors")
+        self.spread_heading_var = tk.StringVar(value="Return spreads")
+        self.spread_direction_var = tk.StringVar(value="Focal return − neighbor return • percentage points (pp)")
+        self.spread_custom_var = tk.BooleanVar(value=False)
+        self.spread_start_var = tk.StringVar()
+        self.spread_end_var = tk.StringVar()
+        self.spread_period_var = tk.StringVar(value="Full return lookback • dates use YYYY-MM-DD")
+        self.spread_summary_var = tk.StringVar(value="Select a spread row to inspect its daily history.")
         self._build_widgets()
         self.root.bind("<Alt-Left>", lambda event: self.navigate_history(-1) or "break")
         self.root.bind("<Alt-Right>", lambda event: self.navigate_history(1) or "break")
@@ -682,12 +780,14 @@ class NetworkAnalysisApp:
         split.grid(row=3, column=0, sticky="nsew", pady=8)
         graph = ttk.Frame(split, padding=5)
         inspector = ttk.Frame(split, padding=5)
+        spread_panel = ttk.Frame(split, padding=5)
         graph.columnconfigure(0, weight=1)
         graph.rowconfigure(2, weight=1)
         inspector.columnconfigure(0, weight=1)
         inspector.rowconfigure(4, weight=1)
         split.add(graph, weight=3)
         split.add(inspector, weight=2)
+        split.add(spread_panel, weight=2)
         ttk.Label(graph, textvariable=self.graph_var, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(graph, text="Drag nodes • scroll to zoom • click to inspect\nDouble-click a node to recenter").grid(row=1, column=0, sticky="w", pady=4)
         self.graph_figure = Figure(figsize=(7.4, 6.5), dpi=100, facecolor="#f7f9fc")
@@ -742,6 +842,11 @@ class NetworkAnalysisApp:
         )
         self.episode_tree.bind("<<TreeviewSelect>>", self._on_episode)
         ttk.Label(inspector, text="Select an episode to zoom; use Home to restore.").grid(row=8, column=0, sticky="w", pady=3)
+        self._build_spread_panel(spread_panel)
+        # The three panes can be resized independently; wrap explanatory labels
+        # to each pane instead of letting fixed-width text clip adjacent content.
+        for pane in (graph, inspector, spread_panel):
+            pane.bind("<Configure>", self._wrap_panel_labels)
         progress_frame = ttk.Frame(frame)
         progress_frame.grid(row=4, column=0, sticky="ew")
         self.progressbar = ttk.Progressbar(progress_frame, mode="determinate", maximum=100, length=200)
@@ -749,6 +854,182 @@ class NetworkAnalysisApp:
         self.progressbar.grid_remove()
         ttk.Label(progress_frame, textvariable=self.progress_var).grid(row=0, column=1, sticky="w")
         ttk.Label(frame, textvariable=self.status_var, wraplength=1060).grid(row=5, column=0, sticky="w", pady=(4, 0))
+
+    @staticmethod
+    def _wrap_panel_labels(event):
+        for child in event.widget.winfo_children():
+            if isinstance(child, ttk.Label):
+                child.configure(wraplength=max(180, event.width - 16))
+
+    def _build_spread_panel(self, panel):
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(6, weight=1)
+        ttk.Label(panel, textvariable=self.spread_heading_var, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(panel, textvariable=self.spread_direction_var, wraplength=390).grid(row=1, column=0, sticky="w", pady=(3, 6))
+        controls = ttk.Frame(panel)
+        controls.grid(row=2, column=0, sticky="ew")
+        controls.columnconfigure(1, weight=1)
+        controls.columnconfigure(3, weight=1)
+        self.spread_custom_check = ttk.Checkbutton(
+            controls, text="Use custom dates", variable=self.spread_custom_var,
+            command=self._change_spread_date_mode,
+        )
+        self.spread_custom_check.grid(row=0, column=0, columnspan=3, sticky="w")
+        self.spread_apply_button = ttk.Button(controls, text="Apply", command=self.apply_spread_range, state=tk.DISABLED)
+        self.spread_apply_button.grid(row=0, column=3, sticky="e", pady=(0, 4))
+        ttk.Label(controls, text="From").grid(row=1, column=0, sticky="w", padx=(0, 4))
+        self.spread_start_entry = ttk.Entry(controls, textvariable=self.spread_start_var, width=12, state=tk.DISABLED)
+        self.spread_start_entry.grid(row=1, column=1, sticky="ew", padx=(0, 8))
+        ttk.Label(controls, text="To").grid(row=1, column=2, sticky="w", padx=(0, 4))
+        self.spread_end_entry = ttk.Entry(controls, textvariable=self.spread_end_var, width=12, state=tk.DISABLED)
+        self.spread_end_entry.grid(row=1, column=3, sticky="ew")
+        for entry in (self.spread_start_entry, self.spread_end_entry):
+            entry.bind("<Return>", lambda event: self.apply_spread_range())
+        ttk.Label(panel, textvariable=self.spread_period_var, wraplength=390).grid(row=3, column=0, sticky="w", pady=6)
+        self.spread_tree = self._make_tree(
+            panel,
+            (("symbol", "Neighbor", 70), ("current", "Current (pp)", 90),
+             ("cumulative", "Sum (pp)", 90), ("date", "As of", 100)),
+            height=5, row=4,
+        )
+        for column in self.spread_tree["columns"]:
+            self.spread_tree.heading(column, command=lambda col=column: self._sort_spreads(col))
+        self.spread_tree.bind("<<TreeviewSelect>>", self._on_spread_row)
+        ttk.Label(panel, textvariable=self.spread_summary_var, wraplength=390).grid(row=5, column=0, sticky="w", pady=6)
+        self.spread_figure = Figure(figsize=(4.6, 3.2), dpi=100, constrained_layout=True)
+        self.spread_axes = self.spread_figure.add_subplot(111)
+        self.spread_canvas = FigureCanvasTkAgg(self.spread_figure, master=panel)
+        self.spread_canvas.get_tk_widget().grid(row=6, column=0, sticky="nsew")
+        toolbar = ttk.Frame(panel)
+        toolbar.grid(row=7, column=0, sticky="ew")
+        self.spread_toolbar = NavigationToolbar2Tk(self.spread_canvas, toolbar)
+        self.spread_toolbar.update()
+        self._empty_spread_chart("Analyze a stock to inspect its return spreads.")
+
+    def _set_spread_controls(self):
+        self.spread_custom_check.configure(state=tk.DISABLED if self.busy else tk.NORMAL)
+        self.spread_apply_button.configure(state=tk.NORMAL if not self.busy and self.result is not None else tk.DISABLED)
+        entry_state = tk.NORMAL if not self.busy and self.spread_custom_var.get() else tk.DISABLED
+        self.spread_start_entry.configure(state=entry_state)
+        self.spread_end_entry.configure(state=entry_state)
+
+    def _change_spread_date_mode(self):
+        self._set_spread_controls()
+        self.apply_spread_range()
+
+    def apply_spread_range(self):
+        if self.busy:
+            return
+        start = self.spread_start_var.get().strip() if self.spread_custom_var.get() else None
+        end = self.spread_end_var.get().strip() if self.spread_custom_var.get() else None
+        try:
+            parse_spread_dates(start, end)
+        except ValueError as exc:
+            messagebox.showerror("Invalid spread date range", str(exc), parent=self.root)
+            return
+        self.spread_range = (start or None, end or None)
+        self._refresh_spreads()
+
+    @staticmethod
+    def _format_spread(value):
+        return f"{value * 100:+.3f}" if np.isfinite(value) else "—"
+
+    def _refresh_spreads(self):
+        self.spread_tree.delete(*self.spread_tree.get_children())
+        self.spread_rows.clear()
+        if self.result is None or self.displayed_data is None:
+            self._empty_spread_chart("Analyze a stock to inspect its return spreads.")
+            return
+        focal = self.result.symbol
+        returns = self.displayed_data.returns
+        rows = calculate_spreads(
+            returns, focal, (pair.other(focal) for pair in self.result.pairs), *self.spread_range,
+        )
+        self.spread_heading_var.set(f"{focal} return spreads ({len(rows):,})")
+        self.spread_direction_var.set(f"{focal} return − neighbor return • percentage points (pp)")
+        start, end = self.spread_range
+        period = f"{start or 'loaded start'} to {end or 'loaded end'}" if start or end else "Full return lookback"
+        self.spread_period_var.set(f"{period} • within {self.result.settings.lookback} loaded returns/symbol\nDates: YYYY-MM-DD; blank bounds use loaded limits.")
+        for row in rows:
+            self.spread_rows[row.symbol] = row
+            self.spread_tree.insert("", tk.END, iid=row.symbol, values=(
+                row.symbol, self._format_spread(row.current), self._format_spread(row.cumulative),
+                f"{row.current_date:%Y-%m-%d}" if row.current_date is not None else "—",
+            ))
+        if rows:
+            selected = self.spread_selected_symbol if self.spread_selected_symbol in self.spread_rows else rows[0].symbol
+            self._select_spread_symbol(selected)
+        else:
+            self.spread_selected_symbol = None
+            self.spread_summary_var.set("No qualifying neighbors for this stock.")
+            self._empty_spread_chart("No qualifying neighbors.")
+
+    def _select_spread_symbol(self, symbol):
+        if symbol not in self.spread_rows:
+            return
+        self.spread_selected_symbol = symbol
+        if self.spread_tree.selection() != (symbol,):
+            self.spread_tree.selection_set(symbol)
+            self.spread_tree.see(symbol)
+        self._draw_spread(self.spread_rows[symbol])
+
+    def _on_spread_row(self, event):
+        selected = self.spread_tree.selection()
+        if not selected or selected[0] not in self.spread_rows:
+            return
+        symbol = selected[0]
+        self.spread_selected_symbol = symbol
+        self._draw_spread(self.spread_rows[symbol])
+        pair = next((pair for pair in self.result.pairs if pair.other(self.result.symbol) == symbol), None)
+        if pair is not None and self.selected_pair is not pair:
+            self.select_pair(pair)
+
+    def _sort_spreads(self, column):
+        reverse = self.spread_sort_descending.get(column, column != "symbol")
+        def key(symbol):
+            row = self.spread_rows[symbol]
+            return {"symbol": symbol, "current": row.current, "cumulative": row.cumulative, "date": row.current_date}[column]
+        available = [symbol for symbol in self.spread_rows if pd.notna(key(symbol))]
+        unavailable = [symbol for symbol in self.spread_rows if pd.isna(key(symbol))]
+        for position, symbol in enumerate(sorted(available, key=key, reverse=reverse) + unavailable):
+            self.spread_tree.move(symbol, "", position)
+        self.spread_sort_descending[column] = not reverse
+
+    def _empty_spread_chart(self, message):
+        self.spread_axes.clear()
+        self.spread_axes.text(0.5, 0.5, message, ha="center", va="center", wrap=True, transform=self.spread_axes.transAxes)
+        self.spread_axes.set_axis_off()
+        self.spread_canvas.draw_idle()
+
+    def _draw_spread(self, row):
+        if not row.count:
+            self.spread_summary_var.set(f"{row.focal_symbol} − {row.symbol}: no shared returns in this period.")
+            self._empty_spread_chart("No shared returns in the selected period.\nWiden the dates or increase Return lookback.")
+            return
+        self.spread_summary_var.set(
+            f"{row.count:,} shared observations • arithmetic sum {self._format_spread(row.cumulative)} pp\n"
+            f"Mean {self._format_spread(row.mean)} pp • sample SD {self._format_spread(row.std)} pp"
+        )
+        axes = self.spread_axes
+        axes.clear()
+        series = row.spread.loc[row.spread.first_valid_index():row.spread.last_valid_index()]
+        axes.plot(series.index, series * 100, color=self.BLUE, linewidth=1.2, marker="." if row.count == 1 else None, label="Daily spread")
+        axes.axhline(row.mean * 100, color="#677486", linestyle=":", linewidth=1.2, label="Mean")
+        if np.isfinite(row.std):
+            axes.axhline((row.mean + row.std) * 100, color=self.ORANGE, linestyle="--", linewidth=1, label="Mean ± 1 SD")
+            axes.axhline((row.mean - row.std) * 100, color=self.ORANGE, linestyle="--", linewidth=1)
+            axes.axhline((row.mean + 2 * row.std) * 100, color="#8b5fbf", linestyle="-.", linewidth=1, label="Mean ± 2 SD")
+            axes.axhline((row.mean - 2 * row.std) * 100, color="#8b5fbf", linestyle="-.", linewidth=1)
+        axes.set_title(f"{row.focal_symbol} − {row.symbol}", fontsize=10)
+        axes.set_ylabel("Daily spread (pp)", fontsize=9)
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=5)
+        axes.xaxis.set_major_locator(locator)
+        axes.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+        axes.tick_params(labelsize=8)
+        axes.grid(axis="y", alpha=0.15)
+        axes.legend(loc="best", fontsize=8)
+        self.spread_toolbar.update()
+        self.spread_canvas.draw_idle()
 
     @staticmethod
     def _make_tree(parent, columns, height, row):
@@ -838,6 +1119,7 @@ class NetworkAnalysisApp:
         self.source_box.configure(state=tk.DISABLED if busy else "readonly")
         self.cancel_button.configure(state=tk.NORMAL if busy else tk.DISABLED)
         self._update_navigation_buttons()
+        self._set_spread_controls()
 
     @staticmethod
     def _duration_text(seconds):
@@ -936,6 +1218,7 @@ class NetworkAnalysisApp:
             messagebox.showerror("Network analysis failed", str(exc), parent=self.root)
             return
         self.result = result
+        self.displayed_data = data
         valid_dates = data.returns.dropna(how="all").index
         self.data_var.set(
             f"{data.source} • {len(data.returns.columns):,} symbols • "
@@ -974,6 +1257,7 @@ class NetworkAnalysisApp:
             f"{result.symbol} · {len(result.neighbors)} of {len(result.pairs)} qualifying neighbors"
         )
         self.neighbor_var.set(f"{result.symbol} qualifying neighbors ({len(result.pairs):,})")
+        self._refresh_spreads()
         self.reset_layout()
         if result.pairs:
             self.neighbor_tree.selection_set("0")
@@ -1196,6 +1480,8 @@ class NetworkAnalysisApp:
                 f"{episode.start:%Y-%m-%d}", f"{episode.end:%Y-%m-%d}", episode.duration, f"{episode.peak:.3f}",
             ))
         self._highlight_pair()
+        if self.result.symbol in (pair.symbol_a, pair.symbol_b):
+            self._select_spread_symbol(pair.other(self.result.symbol))
 
     def _on_episode(self, event):
         selection = self.episode_tree.selection()
