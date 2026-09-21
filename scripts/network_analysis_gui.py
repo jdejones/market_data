@@ -20,12 +20,12 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Callable, Iterable
 
-import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, parallel_config
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+from matplotlib.ticker import Formatter, Locator
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 
@@ -38,6 +38,78 @@ if str(PACKAGE_PARENT) not in sys.path:
 PAIR_PROCESS_THRESHOLD = 2048
 PAIR_BATCH_SIZE = 64
 MAX_PAIR_PROCESSES = 8
+
+
+class TradingDateLocator(Locator):
+    """Place ticks only at observations on a compressed trading-date axis."""
+
+    def __init__(self, observation_count: int, max_ticks: int = 5):
+        self.observation_count = observation_count
+        self.max_ticks = max_ticks
+
+    def __call__(self):
+        return self.tick_values(*self.axis.get_view_interval())
+
+    def tick_values(self, view_min, view_max):
+        low, high = sorted((view_min, view_max))
+        first = max(0, int(np.ceil(low)))
+        last = min(self.observation_count - 1, int(np.floor(high)))
+        if first > last:
+            return np.array([], dtype=int)
+        available = np.arange(first, last + 1)
+        if len(available) <= self.max_ticks:
+            return available
+        selected = np.linspace(0, len(available) - 1, self.max_ticks)
+        return available[np.unique(np.rint(selected).astype(int))]
+
+
+class TradingDateFormatter(Formatter):
+    """Render observation positions as concise dates from their source index."""
+
+    def __init__(self, dates):
+        self.dates = pd.DatetimeIndex(dates)
+        same_year = len(self.dates) and self.dates.year.nunique() == 1
+        self.same_month = same_year and self.dates.month.nunique() == 1
+        self.same_year = same_year
+
+    def _nearest_date(self, value):
+        observation = int(np.floor(value + 0.5))
+        if not 0 <= observation < len(self.dates):
+            return None
+        return self.dates[observation]
+
+    def __call__(self, value, position=None):
+        observation = int(round(value))
+        if not np.isclose(value, observation) or not 0 <= observation < len(self.dates):
+            return ""
+        date = self.dates[observation]
+        if self.same_month:
+            return f"{date.day}"
+        if self.same_year:
+            return date.strftime("%b %d")
+        return date.strftime("%Y-%m-%d")
+
+    def format_data_short(self, value):
+        """Show the nearest actual trading date in the navigation toolbar."""
+        date = self._nearest_date(value)
+        return date.strftime("%Y-%m-%d") if date is not None else ""
+
+    def get_offset(self):
+        if not len(self.dates):
+            return ""
+        if self.same_month:
+            return self.dates[0].strftime("%Y-%b")
+        if self.same_year:
+            return str(self.dates[0].year)
+        return ""
+
+
+def _configure_trading_date_axis(axes, dates, max_ticks=5):
+    """Return compressed x positions and label them with actual observations."""
+    dates = pd.DatetimeIndex(dates)
+    axes.xaxis.set_major_locator(TradingDateLocator(len(dates), max_ticks))
+    axes.xaxis.set_major_formatter(TradingDateFormatter(dates))
+    return np.arange(len(dates))
 
 
 @dataclass(frozen=True)
@@ -1013,7 +1085,8 @@ class NetworkAnalysisApp:
         axes = self.spread_axes
         axes.clear()
         series = row.spread.loc[row.spread.first_valid_index():row.spread.last_valid_index()]
-        axes.plot(series.index, series * 100, color=self.BLUE, linewidth=1.2, marker="." if row.count == 1 else None, label="Daily spread")
+        positions = _configure_trading_date_axis(axes, series.index)
+        axes.plot(positions, series * 100, color=self.BLUE, linewidth=1.2, marker="." if row.count == 1 else None, label="Daily spread")
         axes.axhline(row.mean * 100, color="#677486", linestyle=":", linewidth=1.2, label="Mean")
         if np.isfinite(row.std):
             axes.axhline((row.mean + row.std) * 100, color=self.ORANGE, linestyle="--", linewidth=1, label="Mean ± 1 SD")
@@ -1022,9 +1095,6 @@ class NetworkAnalysisApp:
             axes.axhline((row.mean - 2 * row.std) * 100, color="#8b5fbf", linestyle="-.", linewidth=1)
         axes.set_title(f"{row.focal_symbol} − {row.symbol}", fontsize=10)
         axes.set_ylabel("Daily spread (pp)", fontsize=9)
-        locator = mdates.AutoDateLocator(minticks=3, maxticks=5)
-        axes.xaxis.set_major_locator(locator)
-        axes.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
         axes.tick_params(labelsize=8)
         axes.grid(axis="y", alpha=0.15)
         axes.legend(loc="best", fontsize=8)
@@ -1457,18 +1527,17 @@ class NetworkAnalysisApp:
         )
         axes = self.detail_axes
         axes.clear()
-        axes.plot(pair.rolling.index, pair.rolling, color=self.BLUE, linewidth=1.5, label="Rolling")
+        positions = _configure_trading_date_axis(axes, pair.rolling.index)
+        axes.plot(positions, pair.rolling, color=self.BLUE, linewidth=1.5, label="Rolling")
         axes.axhline(settings.high_corr, color=self.ORANGE, linestyle="--", linewidth=1, label="High threshold")
         axes.axhline(pair.baseline, color="#798391", linestyle=":", linewidth=1, label="Pair baseline")
+        date_positions = {date: position for position, date in enumerate(pair.rolling.index)}
         for episode in pair.episodes:
-            axes.axvspan(episode.start - pd.Timedelta(hours=12), episode.end + pd.Timedelta(hours=12),
+            axes.axvspan(date_positions[episode.start] - 0.5, date_positions[episode.end] + 0.5,
                          color=self.ORANGE, alpha=0.16)
         axes.set_ylim(-1.05, 1.05)
         axes.set_ylabel("Correlation", fontsize=9)
         axes.set_title(f"{settings.rolling_window}-observation rolling correlation", fontsize=10)
-        locator = mdates.AutoDateLocator(minticks=3, maxticks=5)
-        axes.xaxis.set_major_locator(locator)
-        axes.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
         axes.tick_params(labelsize=8)
         axes.grid(axis="y", alpha=0.15)
         axes.legend(loc="lower left", fontsize=8, ncol=3)
@@ -1488,9 +1557,12 @@ class NetworkAnalysisApp:
         if not selection or self.selected_pair is None:
             return
         episode = self.selected_pair.episodes[int(selection[0])]
+        dates = self.selected_pair.rolling.index
+        start = dates.get_loc(episode.start)
+        end = dates.get_loc(episode.end)
         self.detail_canvas.toolbar.push_current()
-        padding = max(pd.Timedelta(days=3), (episode.end - episode.start) / 4)
-        self.detail_axes.set_xlim(episode.start - padding, episode.end + padding)
+        padding = max(3, (end - start) / 4)
+        self.detail_axes.set_xlim(start - padding, end + padding)
         self.detail_canvas.toolbar.push_current()
         self.detail_canvas.draw_idle()
 
