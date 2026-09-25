@@ -72,6 +72,15 @@ def current_rvol_arguments(config: DashboardConfig) -> list[str]:
     ]
 
 
+def extended_hours_breaking_news_arguments(
+    config: DashboardConfig,
+) -> list[str]:
+    return [
+        "--symbols-file",
+        str(config.symbols_files[0]),
+    ]
+
+
 SCRIPT_SPECS = (
     ScriptSpec(
         key="intraday_price_stream",
@@ -90,6 +99,13 @@ SCRIPT_SPECS = (
         selectable=True,
         window_title="Current RVol",
         window_slot=WindowSlot(0.00, 0.00, 0.43, 0.28),
+    ),
+    ScriptSpec(
+        key="extended_hours_breaking_news",
+        label="Extended-Hours Breaking News",
+        filename="extended_hours_breaking_news.py",
+        arguments=extended_hours_breaking_news_arguments,
+        window_title="Extended-Hours Breaking News",
     ),
     ScriptSpec(
         key="high_beta_pattern_matching",

@@ -404,6 +404,84 @@ def calculate_symbol_rvol(symbol_data_tuple, target_date=None, lookback_days=20)
         print(f"Error calculating RVol for {symbol}: {e}")
         return symbol, None
 
+def calculate_symbol_rvol_orth(symbol_data_tuple, target_date=None, lookback_days=20):
+    """
+    Calculate intraday RVol using only volume outside regular trading hours.
+
+    Regular trading hours are 09:30 through 16:00 US/Eastern. Premarket and
+    postmarket volume are combined into one cumulative total for each calendar
+    day, so the cumulative total pauses during regular hours and resumes at
+    16:00.
+    """
+    symbol, df = symbol_data_tuple
+
+    if df is None or df.empty or 'Volume' not in df.columns:
+        return symbol, None
+
+    try:
+        data = df.copy()
+        if not isinstance(data.index, pd.DatetimeIndex):
+            data.index = pd.to_datetime(data.index)
+
+        if data.index.tz is not None:
+            data.index = data.index.tz_convert('US/Eastern')
+
+        data = data.sort_index()
+        if target_date is None:
+            target_date = data.index.date[-1]
+        elif isinstance(target_date, str):
+            target_date = pd.to_datetime(target_date).date()
+        elif hasattr(target_date, 'date'):
+            target_date = target_date.date()
+
+        times = data.index.time
+        regular_hours = (
+            (times >= datetime.time(9, 30))
+            & (times < datetime.time(16, 0))
+        )
+        data = data.loc[~regular_hours].copy()
+
+        if data.empty:
+            return symbol, None
+
+        data['date'] = data.index.date
+        data['time'] = data.index.time
+        data['cumulative_volume'] = data['Volume'].groupby(data['date']).cumsum()
+
+        historical_dates = sorted(
+            day for day in data['date'].unique() if day < target_date
+        )[-lookback_days:]
+        if len(historical_dates) < lookback_days:
+            return symbol, None
+
+        target_date_data = data.loc[
+            data['date'] == target_date,
+            ['time', 'cumulative_volume'],
+        ].copy()
+        if target_date_data.empty:
+            return symbol, None
+
+        historical_data = data[data['date'].isin(historical_dates)]
+        avg_cumulative_by_time = (
+            historical_data.groupby('time')['cumulative_volume'].mean()
+        )
+
+        target_date_data['avg_historical_volume'] = (
+            target_date_data['time'].map(avg_cumulative_by_time)
+        )
+        target_date_data['intraday_rvol'] = (
+            target_date_data['cumulative_volume']
+            / target_date_data['avg_historical_volume']
+        ).replace([np.inf, -np.inf], np.nan).fillna(0)
+
+        return symbol, target_date_data[
+            ['cumulative_volume', 'avg_historical_volume', 'intraday_rvol']
+        ].copy()
+
+    except Exception as e:
+        print(f"Error calculating outside-RTH RVol for {symbol}: {e}")
+        return symbol, None
+
 @dataclass(slots=True)
 class IntradaySignalProcessing:
     """
@@ -2373,7 +2451,95 @@ def intraday_rvol(symbols_list, date=None, lookback_days=20,
     print(f"Completed intraday RVol calculation for {len(results)} symbols")
     return results
 
+def rvol_orth(symbols_list, date=None, lookback_days=20,
+              timespan='second', multiplier=30):
+    """
+    Calculate intraday RVol using only premarket and postmarket volume.
 
+    Volume from timestamps before 09:30 or at/after 16:00 US/Eastern is
+    accumulated together for each calendar day. The target day's cumulative
+    outside-RTH volume is compared with the average cumulative outside-RTH
+    volume at the same clock time over the previous ``lookback_days``.
+
+    Parameters
+    ----------
+    symbols_list : list[str]
+        List of stock symbols to analyze.
+    date : str or datetime, optional
+        Target date. If None, inferred from the most recent imported data.
+    lookback_days : int, default 20
+        Number of prior trading days used for the historical volume profile.
+    timespan : str, default 'second'
+        Base timespan for intraday imports.
+    multiplier : int, default 30
+        Timespan multiplier for intraday imports.
+
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        Mapping from symbol to cumulative outside-RTH volume, average
+        historical outside-RTH volume, and intraday RVol for the target date.
+    """
+    if date is None:
+        target_date = datetime.datetime.now().date()
+    elif isinstance(date, str):
+        target_date = pd.to_datetime(date).date()
+    else:
+        target_date = date.date() if hasattr(date, 'date') else date
+
+    start_date = target_date - timedelta(days=lookback_days + 10)
+    end_date = target_date
+
+    print(
+        f"Importing extended-hours intraday data for "
+        f"{len(symbols_list)} symbols..."
+    )
+    intraday_data = intraday_import(
+        wl=symbols_list,
+        from_date=start_date.strftime('%Y-%m-%d'),
+        to_date=end_date.strftime('%Y-%m-%d'),
+        timespan=timespan,
+        multiplier=multiplier,
+        market_open_only=False,
+    )
+
+    if date is None:
+        sample = next(
+            (
+                df for df in intraday_data.values()
+                if df is not None and not df.empty
+            ),
+            None,
+        )
+        if sample is None:
+            raise ValueError("No intraday data found for any symbol")
+        target_date = sample.index.date[-1]
+
+    symbol_data_tuples = [
+        (symbol, intraday_data.get(symbol)) for symbol in symbols_list
+    ]
+    calculate_rvol_partial = partial(
+        calculate_symbol_rvol_orth,
+        target_date=target_date,
+        lookback_days=lookback_days,
+    )
+
+    print("Calculating outside-RTH intraday RVol...")
+    results = {}
+    with ProcessPoolExecutor() as executor:
+        for symbol, rvol_data in tqdm(
+            executor.map(calculate_rvol_partial, symbol_data_tuples),
+            total=len(symbol_data_tuples),
+            desc="Calculating outside-RTH RVol",
+        ):
+            if rvol_data is not None:
+                results[symbol] = rvol_data
+
+    print(
+        f"Completed outside-RTH RVol calculation for "
+        f"{len(results)} symbols"
+    )
+    return results
 
 #Seasonality/Cyclicality objects
 def compute_cycle_strength(price: pd.Series,
