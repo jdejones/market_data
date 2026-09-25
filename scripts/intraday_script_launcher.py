@@ -179,6 +179,13 @@ SCRIPT_SPECS = (
         window_title="News Tracker — Post a Headline",
     ),
     ScriptSpec(
+        key="news_filter",
+        label="News Filter",
+        filename=r"C:\Users\jdejo\News_Tracker\scripts\news_filter.py",
+        arguments=no_arguments,
+        window_title="News Tracker — Search news.stock_news",
+    ),
+    ScriptSpec(
         key="dilution_data_gui",
         label="Company Dilution Data",
         filename="dilution_data_gui.py",
