@@ -1,4 +1,4 @@
-#! This script will be scheduled to run Mon-Fri at 7:05p.m. It's possible there are weekend filings though theses would be 
+#! This script will be scheduled to run Mon-Fri at 7:05p.m. It's possible there are weekend filings though these would be 
 #! extremely rare. If it appears as a problem check the run rechedule in task scheduler.
 """Update stocks.latest_earnings_filings from the SEC filing stream JSONL log."""
 
