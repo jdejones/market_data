@@ -538,8 +538,8 @@ if __name__ == "__main__":
     from market_data.episodic_pivots import Episodic_Pivots
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading, argparse
     from market_data.stats_objects import IntradaySignalProcessing as isp
-    from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time
-    from market_data.api_keys import database_password, seeking_alpha_api_key, seeking_alpha_access_token, polygon_api_key
+    from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time, StringIO, requests
+    from market_data.api_keys import database_password, seeking_alpha_api_key, seeking_alpha_access_token, polygon_api_key, finviz_api_key
     from market_data.interest_list import InterestList as il
 
     parser = argparse.ArgumentParser(description="Run the daily after close study pipeline.")
@@ -749,29 +749,21 @@ if __name__ == "__main__":
                 days_range_expansion[sym] = n
         except Exception as e:
             print(sym, e, sep=': ')
-                        
-    from finvizfinance.screener.custom import Custom
-    from finvizfinance.constants import CUSTOM_SCREENER_COLUMNS
-    custom = Custom()
-    cols = list(CUSTOM_SCREENER_COLUMNS.keys())
-    try:
-        results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
-    except ConnectionError:
-        results_finvizsearch = custom.screener_view(limit=-1, select_page=None, verbose=1, ascend=True, columns=cols, sleep_sec=1)
-    #! There is an error in the finviz library. Lines 762-767 are a workaround until it's fixed.
-    tickers = results_finvizsearch["Ticker"].astype("string")
-    duplicated_prefix = tickers.str[0].eq(tickers.str[1])
 
-    # Guard against corrupting valid values after Finviz/library fixes the issue.
-    if duplicated_prefix.mean() > 0.95:
-        results_finvizsearch["Ticker"] = tickers.str[1:]
-    results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Previous Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
-    results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
-    results_finvizsearch['Market Cap.'] = results_finvizsearch['Market Cap.'].replace(0, np.nan)
-    results_finvizsearch['DV_Cap'] = results_finvizsearch['DV'] / results_finvizsearch['Market Cap.']
+    # from finvizfinance.screener.custom import Custom
+    from finvizfinance.constants import CUSTOM_SCREENER_COLUMNS
+    cols = list(CUSTOM_SCREENER_COLUMNS.keys())
+    url = f"https://elite.finviz.com/export/screener?v=152&c={','.join([str(col) for col in cols])}&auth={finviz_api_key}"
+    response = requests.get(url)
+    results_finvizsearch = pd.read_csv(StringIO(response.text))
+    results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Prev Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
+    # results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
+    # results_finvizsearch['Market Cap.'] = results_finvizsearch['Market Cap.'].replace(0, np.nan)
+    results_finvizsearch['Market Cap'] = results_finvizsearch['Market Cap'].astype(float) * (10**6)
+    results_finvizsearch['DV_Cap'] = results_finvizsearch['DV'] / results_finvizsearch['Market Cap']
     dv_cap = results_finvizsearch[['Ticker', 'DV_Cap']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3).sort_values('DV_Cap')
-    results_finvizsearch['Performance (YearToDate)'] = pd.to_numeric(results_finvizsearch['Performance (YearToDate)'].str.replace('.', '').str.replace('%', ''), errors='coerce').astype(float) / 100
-    results_finvizsearch['perf_dvcap_dist'] = results_finvizsearch.apply(lambda x: np.linalg.norm(np.array([x['Performance (YearToDate)'], x['DV_Cap']])), axis=1)
+    results_finvizsearch['Performance (YTD)'] = pd.to_numeric(results_finvizsearch['Performance (YTD)'].str.replace('.', '').str.replace('%', ''), errors='coerce').astype(float) / 100
+    results_finvizsearch['perf_dvcap_dist'] = results_finvizsearch.apply(lambda x: np.linalg.norm(np.array([x['Performance (YTD)'], x['DV_Cap']])), axis=1)
     perf_dvcap_dist = results_finvizsearch[['Ticker', 'perf_dvcap_dist']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3)
     columns_with_percent = [col for col in results_finvizsearch.columns if (results_finvizsearch[col].astype(str).str.contains('%').any()) and (col != 'Company')]
     results_finvizsearch = results_finvizsearch.rename({col: f'{col}(%)' for col in columns_with_percent}, axis=1)
@@ -788,8 +780,8 @@ if __name__ == "__main__":
                                     index=False,
                                     method="multi",
                                     chunksize=200)
-        
-    
+
+
     top_rstren = [item[0] for item in rel_stren if (item[1] > 70) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     top_prevperfearn = [item[0] for item in prev_perf_since_earnings if (item[1] > 50) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]
     top_perfearn = [item[0] for item in perf_since_earnings if (item[1] > 30) and (symbols[item[0]].df['Relative_ATR'].iloc[-1] > 4)]

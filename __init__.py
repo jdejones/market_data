@@ -37,6 +37,7 @@ import gzip
 import argparse
 import sklearn
 from tqdm import tqdm as _tqdm
+from io import StringIO
 
 
 def tqdm(*args, **kwargs):
