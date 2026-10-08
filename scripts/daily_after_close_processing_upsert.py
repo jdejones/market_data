@@ -759,6 +759,7 @@ if __name__ == "__main__":
     results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Prev Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
     # results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
     # results_finvizsearch['Market Cap.'] = results_finvizsearch['Market Cap.'].replace(0, np.nan)
+    results_finvizsearch['Income'] = results_finvizsearch['Income'].astype(float) * (10**6)
     results_finvizsearch['Market Cap'] = results_finvizsearch['Market Cap'].astype(float) * (10**6)
     results_finvizsearch['DV_Cap'] = results_finvizsearch['DV'] / results_finvizsearch['Market Cap']
     dv_cap = results_finvizsearch[['Ticker', 'DV_Cap']].dropna().loc[results_finvizsearch.DV > 5_000_000].round(3).sort_values('DV_Cap')
