@@ -1,0 +1,270 @@
+theme,theme_value,subtheme,subtheme_value,subtheme_full_label
+Aging Population & Longevity,agingpopulationlongevity,Age-Related Pharmaceuticals & Biotech,longevityagingpharma,Longevity - Age-Related Pharmaceuticals & Biotech
+Aging Population & Longevity,agingpopulationlongevity,Healthcare & Medical Devices,longevityhealthcare,Longevity - Healthcare & Medical Devices
+Aging Population & Longevity,agingpopulationlongevity,Healthy Aging & Nutrition,longevityhealthyaging,Longevity - Healthy Aging & Nutrition
+Aging Population & Longevity,agingpopulationlongevity,Senior Living & Assisted Care,longevityseniorliving,Longevity - Senior Living & Assisted Care
+Agriculture & FoodTech,agriculturefoodtech,Agri-Food Processing & Distribution,agricultureprocessing,Agriculture - Agri-Food Processing & Distribution
+Agriculture & FoodTech,agriculturefoodtech,Agricultural Inputs & Crop Science,agriculturecropinputs,Agriculture - Agricultural Inputs & Crop Science
+Agriculture & FoodTech,agriculturefoodtech,Alternative Proteins,agriculturealtprotein,Agriculture - Alternative Proteins
+Agriculture & FoodTech,agriculturefoodtech,Controlled Environment Agriculture,agricultureindoorfarming,Agriculture - Controlled Environment Agriculture
+Agriculture & FoodTech,agriculturefoodtech,Precision Agriculture & Farm Automation,agriculturesmartfarming,Agriculture - Precision Agriculture & Farm Automation
+Artificial Intelligence,artificialintelligence,"AGI, general intelligence",aiagi,"AI - AGI, general intelligence"
+Artificial Intelligence,artificialintelligence,"Ads, Search & Recommendations",aiadssearch,"AI - Ads, Search & Recommendations"
+Artificial Intelligence,artificialintelligence,"Apps, Domain-Specific AI",aiapplications,"AI - Apps, Domain-Specific AI"
+Artificial Intelligence,artificialintelligence,Cloud & Infrastructure,aicloud,AI - Cloud & Infrastructure
+Artificial Intelligence,artificialintelligence,Compute & Acceleration,aicompute,AI - Compute & Acceleration
+Artificial Intelligence,artificialintelligence,Cybersecurity,aisecurity,AI - Cybersecurity
+Artificial Intelligence,artificialintelligence,Data Infrastructure & Enablement,aidata,AI - Data Infrastructure & Enablement
+Artificial Intelligence,artificialintelligence,Edge & Embedded Systems,aiedge,AI - Edge & Embedded Systems
+Artificial Intelligence,artificialintelligence,Enterprise Productivity & Software Integration,aienterprise,AI - Enterprise Productivity & Software Integration
+Artificial Intelligence,artificialintelligence,Foundation Models & Platforms,aimodels,AI - Foundation Models & Platforms
+Artificial Intelligence,artificialintelligence,Networking & Systems Optimization,ainetworking,AI - Networking & Systems Optimization
+Artificial Intelligence,artificialintelligence,Power & Energy Solutions,aienergy,AI - Power & Energy Solutions
+Artificial Intelligence,artificialintelligence,Robotics & Automation,airobotics,AI - Robotics & Automation
+Autonomous Systems,autonomoussystems,"Aerospace, Defense & Drones",autonomousdefense,"Autonomous  - Aerospace, Defense & Drones"
+Autonomous Systems,autonomoussystems,Industrial & Logistics Automation,autonomousindustrial,Autonomous  - Industrial & Logistics Automation
+Autonomous Systems,autonomoussystems,"Maritime, Agriculture & Specialized Autonomy",autonomousspecialized,"Autonomous  - Maritime, Agriculture & Specialized Autonomy"
+Autonomous Systems,autonomoussystems,Sensors & Perception Systems,autonomousmachinevision,Autonomous  - Sensors & Perception Systems
+Autonomous Systems,autonomoussystems,Software & Cloud Infrastructure,autonomoussoftware,Autonomous  - Software & Cloud Infrastructure
+Autonomous Systems,autonomoussystems,Vehicles & Mobility,autonomousavmobility,Autonomous  - Vehicles & Mobility
+Big Data,bigdata,AI Platforms & Predictive Analytics,bigdataaiplatforms,Big Data - AI Platforms & Predictive Analytics
+Big Data,bigdata,Analytics & Business Intelligence,bigdataanalyticsbi,Big Data - Analytics & Business Intelligence
+Big Data,bigdata,"Data Generation, Sourcing & Providers",bigdataproviders,"Big Data - Data Generation, Sourcing & Providers"
+Big Data,bigdata,Infrastructure & Storage,bigdatainfrastructure,Big Data - Infrastructure & Storage
+Biometrics,biometrics,Biometric Sensors & Hardware,biometricshardware,Biometrics - Biometric Sensors & Hardware
+Biometrics,biometrics,"Government, Defense & Public Security",biometricsgovdefense,"Biometrics - Government, Defense & Public Security"
+Biometrics,biometrics,Identity Verification & Security,biometricsidentity,Biometrics - Identity Verification & Security
+Biometrics,biometrics,Recognition & Analytics,biometricssoftware,Biometrics - Recognition & Analytics
+Cloud Computing,cloudcomputing,Data Centers,clouddatacenters,Cloud - Data Centers
+Cloud Computing,cloudcomputing,Data Platforms & Databases,clouddatabases,Cloud - Data Platforms & Databases
+Cloud Computing,cloudcomputing,"DevOps, Observability",clouddevops,"Cloud - DevOps, Observability"
+Cloud Computing,cloudcomputing,"Edge, CDN, Zero-Trust Networking",cloudedge,"Cloud - Edge, CDN, Zero-Trust Networking"
+Cloud Computing,cloudcomputing,"Hardware, Networking & OEM",cloudhardware,"Cloud - Hardware, Networking & OEM"
+Cloud Computing,cloudcomputing,Horizontal SaaS & Cloud Applications,cloudhsaas,Cloud - Horizontal SaaS & Cloud Applications
+Cloud Computing,cloudcomputing,Hybrid Cloud,cloudhybridcloud,Cloud - Hybrid Cloud
+Cloud Computing,cloudcomputing,Hyperscalers,cloudhyperscalers,Cloud - Hyperscalers
+Cloud Computing,cloudcomputing,Multi-Cloud Management,cloudmulticloud,Cloud - Multi-Cloud Management
+Cloud Computing,cloudcomputing,"Platforms & Services, PaaS",cloudpaas,"Cloud - Platforms & Services, PaaS"
+Cloud Computing,cloudcomputing,Security,cloudsecurity,Cloud - Security
+Cloud Computing,cloudcomputing,Serverless Computing,cloudserverless,Cloud - Serverless Computing
+Commodities - Agriculture,commoditiesagriculture,"Fertilizers, Crop Inputs & Seeds",commagrifertilizers,"Comm Agri - Fertilizers, Crop Inputs & Seeds"
+Commodities - Agriculture,commoditiesagriculture,Grains & Oilseeds,commagrigrains,Comm Agri - Grains & Oilseeds
+Commodities - Agriculture,commoditiesagriculture,Livestock & Animal Protein,commagrilivestock,Comm Agri - Livestock & Animal Protein
+Commodities - Agriculture,commoditiesagriculture,Renewable Fuels & Biofuels,commagribiofuels,Comm Agri - Renewable Fuels & Biofuels
+Commodities - Agriculture,commoditiesagriculture,Softs & Plantation Crops,commagrisofts,Comm Agri - Softs & Plantation Crops
+Commodities - Energy,commoditiesenergy,Biofuels & Renewable Fuels,commenergybiofuels,Comm Energy - Biofuels & Renewable Fuels
+Commodities - Energy,commoditiesenergy,Crude Oil,commenergyoil,Comm Energy - Crude Oil
+Commodities - Energy,commoditiesenergy,Natural Gas & LNG,commenergygaslng,Comm Energy - Natural Gas & LNG
+Commodities - Energy,commoditiesenergy,Uranium & Nuclear Fuels,commenergyuranium,Comm Energy - Uranium & Nuclear Fuels
+Commodities - Metals,commoditiesmetals,Battery & Energy Transition Metals,commmetalsbattery,Comm Metals - Battery & Energy Transition Metals
+Commodities - Metals,commoditiesmetals,Gold,commmetalsgold,Comm Metals - Gold
+Commodities - Metals,commoditiesmetals,Industrial & Base Metals,commmetalsindustrial,Comm Metals - Industrial & Base Metals
+Commodities - Metals,commoditiesmetals,Precious Metals,commmetalsprecious,Comm Metals - Precious Metals
+Commodities - Metals,commoditiesmetals,Rare Earth & Strategic Materials,commmetalsrareearth,Comm Metals - Rare Earth & Strategic Materials
+Commodities - Metals,commoditiesmetals,Recycling & Circular Materials,commmetalsrecycling,Comm Metals - Recycling & Circular Materials
+Commodities - Metals,commoditiesmetals,Silver,commmetalssilver,Comm Metals - Silver
+Consumer Goods,consumergoods,Apparel & E-Commerce Retail,consumerapparel,Consumer - Apparel & E-Commerce Retail
+Consumer Goods,consumergoods,Farming & Direct Marketplaces,consumerfarmdirect,Consumer - Farming & Direct Marketplaces
+Consumer Goods,consumergoods,"Health, Food & Beverages",consumerfood,"Consumer - Health, Food & Beverages"
+Consumer Goods,consumergoods,Modern Luxury & Lifestyle,consumerluxury,Consumer - Modern Luxury & Lifestyle
+Consumer Goods,consumergoods,Resale & Sharing Platforms,consumersecondhand,Consumer - Resale & Sharing Platforms
+Consumer Goods,consumergoods,Smart Homes & Household Products,consumerhousehold,Consumer - Smart Homes & Household Products
+Crypto & Blockchain,cryptoblockchain,Blockchain Infrastructure,blockchaininfrastructure,Blockchain - Blockchain Infrastructure
+Crypto & Blockchain,cryptoblockchain,Cryptocurrency Mining & Staking,blockchainmining,Blockchain - Cryptocurrency Mining & Staking
+Crypto & Blockchain,cryptoblockchain,Cryptocurrency Platforms,blockchainplatforms,Blockchain - Cryptocurrency Platforms
+Crypto & Blockchain,cryptoblockchain,Enterprise Blockchain Solutions,blockchainenterprise,Blockchain - Enterprise Blockchain Solutions
+Crypto & Blockchain,cryptoblockchain,Financial Services & Payments,blockchainpayments,Blockchain - Financial Services & Payments
+Crypto & Blockchain,cryptoblockchain,Tokenization & Digital Assets,blockchaintokenization,Blockchain - Tokenization & Digital Assets
+Custom (Elite only),,Custom (Elite only),,Custom (Elite only)
+Cybersecurity,cybersecurity,Application Security,cybersecurityappsecurity,Cybersecurity - Application Security
+Cybersecurity,cybersecurity,Cloud Security,cybersecuritycloud,Cybersecurity - Cloud Security
+Cybersecurity,cybersecurity,Endpoint Security,cybersecurityendpoint,Cybersecurity - Endpoint Security
+Cybersecurity,cybersecurity,Identity & Access Management,cybersecurityidentityiam,Cybersecurity - Identity & Access Management
+Cybersecurity,cybersecurity,Network Security,cybersecuritynetwork,Cybersecurity - Network Security
+Cybersecurity,cybersecurity,Security Information & Event Management,cybersecuritysiem,Cybersecurity - Security Information & Event Management
+Cybersecurity,cybersecurity,Threat Intelligence,cybersecuritythreatops,Cybersecurity - Threat Intelligence
+Cybersecurity,cybersecurity,Zero Trust,cybersecurityzerotrust,Cybersecurity - Zero Trust
+Defense & Aerospace,defenseaerospace,Cyber Defense & Electronic Warfare,defensecyberdefense,Defense - Cyber Defense & Electronic Warfare
+Defense & Aerospace,defenseaerospace,Drones & Anti-Drone Systems,defensedrones,Defense - Drones & Anti-Drone Systems
+Defense & Aerospace,defenseaerospace,Missile Defense & Long-Range Weapons,defensemissiles,Defense - Missile Defense & Long-Range Weapons
+Defense & Aerospace,defenseaerospace,Next-Generation Aircraft & Maintenance,defenseaviation,Defense - Next-Generation Aircraft & Maintenance
+Defense & Aerospace,defenseaerospace,Precision Weapons & Ammunition Resupply,defenseweapons,Defense - Precision Weapons & Ammunition Resupply
+Defense & Aerospace,defenseaerospace,Secure Defense Supply Chains,defensemanufacturing,Defense - Secure Defense Supply Chains
+Defense & Aerospace,defenseaerospace,Space Technology & Satellite Services,defensespacetech,Defense - Space Technology & Satellite Services
+Digital Entertainment,digitalentertainment,Game Publishers & Developers,entertainmentgaming,Entertainment - Game Publishers & Developers
+Digital Entertainment,digitalentertainment,Music & Audio Streaming,entertainmentmusic,Entertainment - Music & Audio Streaming
+Digital Entertainment,digitalentertainment,"Sports Betting, Wagering & Prediction Markets",entertainmentbetting,"Entertainment - Sports Betting, Wagering & Prediction Markets"
+Digital Entertainment,digitalentertainment,Streaming & Gaming Infrastructure,entertainmentinfrastructure,Entertainment - Streaming & Gaming Infrastructure
+Digital Entertainment,digitalentertainment,Video Streaming,entertainmentvideo,Entertainment - Video Streaming
+Digital Entertainment,digitalentertainment,iGaming & Online Gambling,entertainmentgambling,Entertainment - iGaming & Online Gambling
+E-commerce,ecommerce,Direct-to-Consumer,ecommercedtc,E-commerce - Direct-to-Consumer
+E-commerce,ecommerce,Grocery & Local Commerce Platforms,ecommercegrocery,E-commerce - Grocery & Local Commerce Platforms
+E-commerce,ecommerce,Logistics & Delivery,ecommercelogistics,E-commerce - Logistics & Delivery
+E-commerce,ecommerce,"Omnichannel Retailers, Online & Physical Stores",ecommerceomnichannel,"E-commerce - Omnichannel Retailers, Online & Physical Stores"
+E-commerce,ecommerce,Online Marketplaces,ecommercemarketplaces,E-commerce - Online Marketplaces
+E-commerce,ecommerce,Platforms,ecommerceplatforms,E-commerce - Platforms
+E-commerce,ecommerce,"Recommerce, Secondhand Marketplaces",ecommercesecondhand,"E-commerce - Recommerce, Secondhand Marketplaces"
+E-commerce,ecommerce,Retail Media & Advertising,ecommerceadsmedia,E-commerce - Retail Media & Advertising
+E-commerce,ecommerce,Social & Influencer Commerce,ecommercesocial,E-commerce - Social & Influencer Commerce
+Education Technology,educationtechnology,Digital Curriculum,educationcurriculum,Education - Digital Curriculum
+Education Technology,educationtechnology,Infrastructure,educationinfrastructure,Education - Infrastructure
+Education Technology,educationtechnology,Online Learning Platforms,educationplatforms,Education - Online Learning Platforms
+Education Technology,educationtechnology,Workforce Training,educationworkforce,Education - Workforce Training
+Electric Vehicles,electricvehicles,Auto Semiconductors & Power Electronics,evschips,EVs - Auto Semiconductors & Power Electronics
+Electric Vehicles,electricvehicles,Autonomous Driving,evsselfdriving,EVs - Autonomous Driving
+Electric Vehicles,electricvehicles,Batteries & Materials,evsbatteries,EVs - Batteries & Materials
+Electric Vehicles,electricvehicles,Charging & Infrastructure,evscharging,EVs - Charging & Infrastructure
+Electric Vehicles,electricvehicles,Fleet Management & Telematics,evsfleets,EVs - Fleet Management & Telematics
+Electric Vehicles,electricvehicles,Key Suppliers & Autonomy Tech,evssuppliers,EVs - Key Suppliers & Autonomy Tech
+Electric Vehicles,electricvehicles,Manufacturers,evsmanufacturers,EVs - Manufacturers
+Energy - Renewable,energyrenewable,Batteries & Storage,energycleanbatteries,Energy Clean - Batteries & Storage
+Energy - Renewable,energyrenewable,Fuels & Bioenergy,energycleanbiofuels,Energy Clean - Fuels & Bioenergy
+Energy - Renewable,energyrenewable,Geothermal,energycleangeothermal,Energy Clean - Geothermal
+Energy - Renewable,energyrenewable,Hydrogen & Fuel Cells,energycleanhydrogen,Energy Clean - Hydrogen & Fuel Cells
+Energy - Renewable,energyrenewable,Materials & Critical Metals,energycleanmaterials,Energy Clean - Materials & Critical Metals
+Energy - Renewable,energyrenewable,Smart Grid & Electrification,energycleansmartgrid,Energy Clean - Smart Grid & Electrification
+Energy - Renewable,energyrenewable,Solar,energycleansolar,Energy Clean - Solar
+Energy - Renewable,energyrenewable,Utilities & Clean Power Operators,energycleanutilities,Energy Clean - Utilities & Clean Power Operators
+Energy - Renewable,energyrenewable,Wind,energycleanwind,Energy Clean - Wind
+Energy - Traditional,energytraditional,Coal & Thermal Power Generation,energybasethermal,Energy Base - Coal & Thermal Power Generation
+Energy - Traditional,energytraditional,Integrated Energy Majors,energybasemajors,Energy Base - Integrated Energy Majors
+Energy - Traditional,energytraditional,Nuclear Power & Advanced Reactors,energybasenuclear,Energy Base - Nuclear Power & Advanced Reactors
+Energy - Traditional,energytraditional,Oil & Gas Exploration & Production,energybaseoilproduction,Energy Base - Oil & Gas Exploration & Production
+Energy - Traditional,energytraditional,Oilfield Services & Equipment,energybaseoilservices,Energy Base - Oilfield Services & Equipment
+Energy - Traditional,energytraditional,Refining & Midstream Infrastructure,energybaseoilrefining,Energy Base - Refining & Midstream Infrastructure
+Energy - Traditional,energytraditional,Utilities & Conventional Power Operators,energybaseutilities,Energy Base - Utilities & Conventional Power Operators
+Environmental Sustainability,environmentalsustainability,Clean Technologies & Pollution Control,environmentalairquality,Environmental - Clean Technologies & Pollution Control
+Environmental Sustainability,environmentalsustainability,Climate Technologies & Carbon Solutions,environmentalclimate,Environmental - Climate Technologies & Carbon Solutions
+Environmental Sustainability,environmentalsustainability,Sustainable Agriculture & Resource Management,environmentalagriculture,Environmental - Sustainable Agriculture & Resource Management
+Environmental Sustainability,environmentalsustainability,Waste Management & Recycling,environmentalwaste,Environmental - Waste Management & Recycling
+Environmental Sustainability,environmentalsustainability,Water Infrastructure & Treatment,environmentalwater,Environmental - Water Infrastructure & Treatment
+FinTech,fintech,"Crypto, Blockchain & Tokenization",fintechblockchain,"FinTech - Crypto, Blockchain & Tokenization"
+FinTech,fintech,Digital Banking & Neobanks,fintechneobanks,FinTech - Digital Banking & Neobanks
+FinTech,fintech,Digital Payments & Merchant Infrastructure,fintechpayments,FinTech - Digital Payments & Merchant Infrastructure
+FinTech,fintech,Exchanges & Market Infrastructure,fintechexchanges,FinTech - Exchanges & Market Infrastructure
+FinTech,fintech,InsurTech & Embedded Insurance,fintechinsurance,FinTech - InsurTech & Embedded Insurance
+FinTech,fintech,"Lending, Credit & BNPL",fintechlending,"FinTech - Lending, Credit & BNPL"
+FinTech,fintech,Trading Platforms & WealthTech,fintechtrading,FinTech - Trading Platforms & WealthTech
+Hardware,hardware,Communications & Telecom,hardwaretelecom,Hardware - Communications & Telecom
+Hardware,hardware,"Consumer Electronics, Gaming PCs & Consoles",hardwareelectronics,"Hardware - Consumer Electronics, Gaming PCs & Consoles"
+Hardware,hardware,Data Center Infrastructure,hardwaredatacenters,Hardware - Data Center Infrastructure
+Hardware,hardware,Gaming & Immersive Pheriperals,hardwaregaming,Hardware - Gaming & Immersive Pheriperals
+Hardware,hardware,Industrial & IoT,hardwareindustrialiot,Hardware - Industrial & IoT
+Hardware,hardware,Networking Equipment,hardwarenetworking,Hardware - Networking Equipment
+Hardware,hardware,Next-Gen & Specialty,hardwarenextgen,Hardware - Next-Gen & Specialty
+Hardware,hardware,Personal Computing & Devices,hardwarepcsdevices,Hardware - Personal Computing & Devices
+Hardware,hardware,Printing & Imaging,hardwareprinting,Hardware - Printing & Imaging
+Hardware,hardware,"Servers, OEMs & Enterprise Systems",hardwareservers,"Hardware - Servers, OEMs & Enterprise Systems"
+Hardware,hardware,Storage,hardwarestorage,Hardware - Storage
+Healthcare & Biotech,healthcarebiotech,"Diagnostics, Biomarkers & Liquid Biopsy",healthcarediagnostics,"Healthcare - Diagnostics, Biomarkers & Liquid Biopsy"
+Healthcare & Biotech,healthcarebiotech,"Digital Health, Telemedicine & Remote Care",healthcaretelemedicine,"Healthcare - Digital Health, Telemedicine & Remote Care"
+Healthcare & Biotech,healthcarebiotech,Genomics & Personalized Medicine,healthcaregenomics,Healthcare - Genomics & Personalized Medicine
+Healthcare & Biotech,healthcarebiotech,"IT, Services & Data Infrastructure",healthcareitdata,"Healthcare - IT, Services & Data Infrastructure"
+Healthcare & Biotech,healthcarebiotech,Medical Devices & HealthTech Hardware,healthcaredevices,Healthcare - Medical Devices & HealthTech Hardware
+Healthcare & Biotech,healthcarebiotech,Metabolic & Cardiometabolic,healthcaremetabolic,Healthcare - Metabolic & Cardiometabolic
+Healthcare & Biotech,healthcarebiotech,Next-Gen Biotech Platforms,healthcarenextgen,Healthcare - Next-Gen Biotech Platforms
+Healthcare & Biotech,healthcarebiotech,Oncology & Precision Cancer Therapeutics,healthcareoncology,Healthcare - Oncology & Precision Cancer Therapeutics
+Healthcare & Biotech,healthcarebiotech,"Regenerative Medicine, Psychedelics, Cannabis",healthcaretherapeutics,"Healthcare - Regenerative Medicine, Psychedelics, Cannabis"
+Healthy Food & Nutrition,healthyfoodnutrition,Food Delivery & Meal Kits,nutritionmealdelivery,Nutrition - Food Delivery & Meal Kits
+Healthy Food & Nutrition,healthyfoodnutrition,Functional & Nutritional Supplements,nutritionsupplements,Nutrition - Functional & Nutritional Supplements
+Healthy Food & Nutrition,healthyfoodnutrition,Organic & Natural Food Retailers,nutritionretailers,Nutrition - Organic & Natural Food Retailers
+Healthy Food & Nutrition,healthyfoodnutrition,Plant-Based Foods & Meat Alternatives,nutritionaltprotein,Nutrition - Plant-Based Foods & Meat Alternatives
+Industrial Automation,industrialautomation,"Additive Manufacturing, 3D Printing",automationdprinting,"Automation - Additive Manufacturing, 3D Printing"
+Industrial Automation,industrialautomation,Factory & Process Automation Systems,automationautomation,Automation - Factory & Process Automation Systems
+Industrial Automation,industrialautomation,"Industrial IoT, Connectivity",automationiot,"Automation - Industrial IoT, Connectivity"
+Industrial Automation,industrialautomation,Industrial Robotics & Autonomous Systems,automationrobotics,Automation - Industrial Robotics & Autonomous Systems
+Industrial Automation,industrialautomation,Industrial Sensors & Machine Vision,automationmachinevision,Automation - Industrial Sensors & Machine Vision
+Industrial Automation,industrialautomation,Industrial Software & Digital Twin,automationsoftware,Automation - Industrial Software & Digital Twin
+Industrial Automation,industrialautomation,Smart Logistics & Warehouse Automation,automationlogistics,Automation - Smart Logistics & Warehouse Automation
+Internet of Things,internetofthings,Connected Devices & Sensors,iotedgedevices,IoT - Connected Devices & Sensors
+Internet of Things,internetofthings,Connectivity & Networks,iotnetworking,IoT - Connectivity & Networks
+Internet of Things,internetofthings,Edge Computing & Hardware Infrastructure,iothardware,IoT - Edge Computing & Hardware Infrastructure
+Internet of Things,internetofthings,Industrial & Enterprise IoT,iotenterprise,IoT - Industrial & Enterprise IoT
+Internet of Things,internetofthings,"Platforms, Software & Analytics",iotsoftware,"IoT - Platforms, Software & Analytics"
+Internet of Things,internetofthings,Security & Data Management,iotsecurity,IoT - Security & Data Management
+Nanotechnology,nanotechnology,Consumer & Industrial Products,nanotechproducts,NanoTech - Consumer & Industrial Products
+Nanotechnology,nanotechnology,Energy & Environment,nanotechenergy,NanoTech - Energy & Environment
+Nanotechnology,nanotechnology,Nanoelectronics & Semiconductors,nanotechelectronics,NanoTech - Nanoelectronics & Semiconductors
+Nanotechnology,nanotechnology,Nanomaterials & Manufacturing,nanotechmaterials,NanoTech - Nanomaterials & Manufacturing
+Nanotechnology,nanotechnology,Nanomedicine & Drug Delivery,nanotechmedicine,NanoTech - Nanomedicine & Drug Delivery
+Nanotechnology,nanotechnology,Research Tools & Advanced Instruments,nanotechresearchtools,NanoTech - Research Tools & Advanced Instruments
+Quantum Computing,quantumcomputing,Applications,quantumapplications,Quantum  - Applications
+Quantum Computing,quantumcomputing,Cloud Ecosystems,quantumcloud,Quantum  - Cloud Ecosystems
+Quantum Computing,quantumcomputing,Enabling Technologies,quantumenablingtech,Quantum  - Enabling Technologies
+Quantum Computing,quantumcomputing,Hardware Platforms,quantumhardware,Quantum  - Hardware Platforms
+Quantum Computing,quantumcomputing,Networking & Security,quantumnetworking,Quantum  - Networking & Security
+Quantum Computing,quantumcomputing,Software & Tools,quantumsoftware,Quantum  - Software & Tools
+Real Estate & REITs,realestatereits,Digital Infrastructure,realestateittelecom,Real Estate - Digital Infrastructure
+Real Estate & REITs,realestatereits,"E-Commerce, Warehousing & Logistics",realestatewarehousing,"Real Estate - E-Commerce, Warehousing & Logistics"
+Real Estate & REITs,realestatereits,Healthcare & Senior Living,realestatehealthcare,Real Estate - Healthcare & Senior Living
+Real Estate & REITs,realestatereits,"Housing, Urban Living & Demographics",realestatehousing,"Real Estate - Housing, Urban Living & Demographics"
+Real Estate & REITs,realestatereits,Office & Commercial Workspaces,realestateoffice,Real Estate - Office & Commercial Workspaces
+Real Estate & REITs,realestatereits,Retail & Consumer Real Estate,realestateretail,Real Estate - Retail & Consumer Real Estate
+Real Estate & REITs,realestatereits,"Travel, Leisure & Entertainment Properties",realestatetourism,"Real Estate - Travel, Leisure & Entertainment Properties"
+Robotics,robotics,Autonomous Vehicles & Mobility,roboticsavmobility,Robotics - Autonomous Vehicles & Mobility
+Robotics,robotics,Industrial Automation,roboticsautomation,Robotics - Industrial Automation
+Robotics,robotics,Logistics & Warehouse Robotics,roboticslogistics,Robotics - Logistics & Warehouse Robotics
+Robotics,robotics,Medical & Surgical Robotics,roboticsmedical,Robotics - Medical & Surgical Robotics
+Robotics,robotics,Sensors & Vision Systems,roboticsmachinevision,Robotics - Sensors & Vision Systems
+Robotics,robotics,Service & Consumer Robotics,roboticsconsumer,Robotics - Service & Consumer Robotics
+Semiconductors,semiconductors,"Analog, Mixed-Signal & Power Management",semisanalog,"Semis - Analog, Mixed-Signal & Power Management"
+Semiconductors,semiconductors,EDA Tools & Design Software,semisdesigntools,Semis - EDA Tools & Design Software
+Semiconductors,semiconductors,Emerging Technologies,semisnextgen,Semis - Emerging Technologies
+Semiconductors,semiconductors,"Equipment, Lithography & Deposition",semislithography,"Semis - Equipment, Lithography & Deposition"
+Semiconductors,semiconductors,Foundries & Manufacturing,semisfoundries,Semis - Foundries & Manufacturing
+Semiconductors,semiconductors,"Logic & CPUs, GPUs, Accelerators",semiscompute,"Semis - Logic & CPUs, GPUs, Accelerators"
+Semiconductors,semiconductors,Memory & Storage,semismemory,Semis - Memory & Storage
+Semiconductors,semiconductors,"Testing, Packaging & Assembly",semispackaging,"Semis - Testing, Packaging & Assembly"
+Semiconductors,semiconductors,Wireless & Connectivity,semiswireless,Semis - Wireless & Connectivity
+Smart Home,smarthome,Automation & Control Systems,smarthomeautomation,Smart Home - Automation & Control Systems
+Smart Home,smarthome,Connected Devices & Appliances,smarthomedevices,Smart Home - Connected Devices & Appliances
+Smart Home,smarthome,Connectivity & Networking,smarthomenetworking,Smart Home - Connectivity & Networking
+Smart Home,smarthome,Energy & Utilities,smarthomeenergy,Smart Home - Energy & Utilities
+Smart Home,smarthome,Security & Monitoring,smarthomesecurity,Smart Home - Security & Monitoring
+Smart Home,smarthome,Voice Assistants & AI Integration,smarthomevoiceai,Smart Home - Voice Assistants & AI Integration
+Social Media,socialmedia,Advertising Platforms,socialadvertising,Social - Advertising Platforms
+Social Media,socialmedia,Gaming Platforms,socialgaming,Social - Gaming Platforms
+Social Media,socialmedia,Image & Video Content Platforms,socialvisualcontent,Social - Image & Video Content Platforms
+Social Media,socialmedia,Networks & Communication Platforms,socialnetworks,Social - Networks & Communication Platforms
+Social Media,socialmedia,Niche Platforms,socialniche,Social - Niche Platforms
+Software,software,Collaboration & Communications,softwarecollaboration,Software - Collaboration & Communications
+Software,software,Customer Relationship Management & Marketing,softwarecrm,Software - Customer Relationship Management & Marketing
+Software,software,Cybersecurity,softwaresecurity,Software - Cybersecurity
+Software,software,Data & Analytics,softwaredataanalytics,Software - Data & Analytics
+Software,software,"Design, Creativity & Engineering",softwaredesign,"Software - Design, Creativity & Engineering"
+Software,software,"DevOps, Management & Observability",softwaredevops,"Software - DevOps, Management & Observability"
+Software,software,E-Commerce & Digital Platforms,softwareecommerce,Software - E-Commerce & Digital Platforms
+Software,software,Enterprise Resource Planning & Management,softwareenterprise,Software - Enterprise Resource Planning & Management
+Software,software,Gaming & Platforms,softwaregaming,Software - Gaming & Platforms
+Software,software,Horizontal SaaS Platforms,softwarehsaas,Software - Horizontal SaaS Platforms
+Software,software,Operating Systems,softwareos,Software - Operating Systems
+Software,software,Vertical SaaS Platforms,softwarevsaas,Software - Vertical SaaS Platforms
+Space Tech,spacetech,Data Analytics & Earth Observation,spacedataanalytics,Space - Data Analytics & Earth Observation
+Space Tech,spacetech,Defense & Cybersecurity,spacedefense,Space - Defense & Cybersecurity
+Space Tech,spacetech,Infrastructure & Exploration,spaceinfrastructure,Space - Infrastructure & Exploration
+Space Tech,spacetech,Logistics & Launch Services,spacelaunch,Space - Logistics & Launch Services
+Space Tech,spacetech,Satellite Networks & Connectivity,spacesatellites,Space - Satellite Networks & Connectivity
+Telecommunications,telecommunications,5G Technology & Semiconductors,telecomg,Telecom - 5G Technology & Semiconductors
+Telecommunications,telecommunications,Cloud & Edge Connectivity,telecomcloudedge,Telecom - Cloud & Edge Connectivity
+Telecommunications,telecommunications,Enterprise & Unified Communications,telecomenterprise,Telecom - Enterprise & Unified Communications
+Telecommunications,telecommunications,Infrastructure & Equipment,telecominfrastructure,Telecom - Infrastructure & Equipment
+Telecommunications,telecommunications,Satellite & Space Communication,telecomsatcom,Telecom - Satellite & Space Communication
+Telecommunications,telecommunications,Wireless Networks & Carriers,telecomwireless,Telecom - Wireless Networks & Carriers
+Transportation & Logistics,transportationlogistics,Air Freight & Express Delivery,transportationaircargo,Transportation - Air Freight & Express Delivery
+Transportation & Logistics,transportationlogistics,Air Travel & Passenger Transportation,transportationairtravel,Transportation - Air Travel & Passenger Transportation
+Transportation & Logistics,transportationlogistics,Freight Rail & Infrastructure,transportationrail,Transportation - Freight Rail & Infrastructure
+Transportation & Logistics,transportationlogistics,Infrastructure & Equipment,transportationinfrastructure,Transportation - Infrastructure & Equipment
+Transportation & Logistics,transportationlogistics,"Logistics, Warehousing & Supply Chain Solutions",transportationwarehousing,"Transportation - Logistics, Warehousing & Supply Chain Solutions"
+Transportation & Logistics,transportationlogistics,Marine Shipping & Ports,transportationmaritime,Transportation - Marine Shipping & Ports
+Transportation & Logistics,transportationlogistics,"Trucking, LTL & Ground Freight",transportationtrucking,"Transportation - Trucking, LTL & Ground Freight"
+Transportation & Logistics,transportationlogistics,Urban Mobility & Emerging Transport Tech,transportationnextgen,Transportation - Urban Mobility & Emerging Transport Tech
+Virtual & Augmented Reality,virtualaugmentedreality,Content & Applications,varealityapplications,V/A Reality - Content & Applications
+Virtual & Augmented Reality,virtualaugmentedreality,Enterprise & Industrial Solutions,varealityenterprise,V/A Reality - Enterprise & Industrial Solutions
+Virtual & Augmented Reality,virtualaugmentedreality,Headsets & Hardware,varealityhardware,V/A Reality - Headsets & Hardware
+Virtual & Augmented Reality,virtualaugmentedreality,Infrastructure & Cloud Rendering,varealityinfrastructure,V/A Reality - Infrastructure & Cloud Rendering
+Virtual & Augmented Reality,virtualaugmentedreality,Software Platforms & Operating Systems,varealitysoftware,V/A Reality - Software Platforms & Operating Systems
+Wearables,wearables,Audio-Visual Immersive Devices,wearablesimmersive,Wearables - Audio-Visual Immersive Devices
+Wearables,wearables,Health Monitoring & Medical Devices,wearablesmedical,Wearables - Health Monitoring & Medical Devices
+Wearables,wearables,Smartwatches & Fitness Devices,wearablessmartwatches,Wearables - Smartwatches & Fitness Devices
+Wearables,wearables,Software & Ecosystems,wearablessoftware,Wearables - Software & Ecosystems
+Wearables,wearables,"Sports, Fitness & Lifestyle Applications",wearablessport,"Wearables - Sports, Fitness & Lifestyle Applications"

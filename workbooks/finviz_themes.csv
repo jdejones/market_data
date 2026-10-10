@@ -1,0 +1,42 @@
+theme,theme_value,finviz_filter
+Aging Population & Longevity,agingpopulationlongevity,theme_agingpopulationlongevity
+Agriculture & FoodTech,agriculturefoodtech,theme_agriculturefoodtech
+Artificial Intelligence,artificialintelligence,theme_artificialintelligence
+Autonomous Systems,autonomoussystems,theme_autonomoussystems
+Big Data,bigdata,theme_bigdata
+Biometrics,biometrics,theme_biometrics
+Cloud Computing,cloudcomputing,theme_cloudcomputing
+Commodities - Agriculture,commoditiesagriculture,theme_commoditiesagriculture
+Commodities - Energy,commoditiesenergy,theme_commoditiesenergy
+Commodities - Metals,commoditiesmetals,theme_commoditiesmetals
+Consumer Goods,consumergoods,theme_consumergoods
+Crypto & Blockchain,cryptoblockchain,theme_cryptoblockchain
+Custom (Elite only),,theme_
+Cybersecurity,cybersecurity,theme_cybersecurity
+Defense & Aerospace,defenseaerospace,theme_defenseaerospace
+Digital Entertainment,digitalentertainment,theme_digitalentertainment
+E-commerce,ecommerce,theme_ecommerce
+Education Technology,educationtechnology,theme_educationtechnology
+Electric Vehicles,electricvehicles,theme_electricvehicles
+Energy - Renewable,energyrenewable,theme_energyrenewable
+Energy - Traditional,energytraditional,theme_energytraditional
+Environmental Sustainability,environmentalsustainability,theme_environmentalsustainability
+FinTech,fintech,theme_fintech
+Hardware,hardware,theme_hardware
+Healthcare & Biotech,healthcarebiotech,theme_healthcarebiotech
+Healthy Food & Nutrition,healthyfoodnutrition,theme_healthyfoodnutrition
+Industrial Automation,industrialautomation,theme_industrialautomation
+Internet of Things,internetofthings,theme_internetofthings
+Nanotechnology,nanotechnology,theme_nanotechnology
+Quantum Computing,quantumcomputing,theme_quantumcomputing
+Real Estate & REITs,realestatereits,theme_realestatereits
+Robotics,robotics,theme_robotics
+Semiconductors,semiconductors,theme_semiconductors
+Smart Home,smarthome,theme_smarthome
+Social Media,socialmedia,theme_socialmedia
+Software,software,theme_software
+Space Tech,spacetech,theme_spacetech
+Telecommunications,telecommunications,theme_telecommunications
+Transportation & Logistics,transportationlogistics,theme_transportationlogistics
+Virtual & Augmented Reality,virtualaugmentedreality,theme_virtualaugmentedreality
+Wearables,wearables,theme_wearables
