@@ -2,10 +2,9 @@
 .env
 api_keys.py
 working_notebook.ipynb
+workbooks/working_notebook_2.ipynb
 __pycache__/
 
 db_exports/
 scripts/script_error_logs.txt
 scripts/scripts_error_logs_detailed.txt
-
-workbooks/
