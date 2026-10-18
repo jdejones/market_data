@@ -31,6 +31,11 @@ from typing import Any, Protocol
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
+try:
+    import winsound
+except ImportError:  # pragma: no cover - only used on non-Windows systems
+    winsound = None  # type: ignore[assignment]
+
 from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
@@ -51,10 +56,27 @@ STOCKS_DB = "stocks"
 DEFINITION_TABLE = "definition"
 PASSED_TABLE = "passed"
 ELEVATED_RVOL_TABLE = "elevated_rvol"
+BREAKING_NEWS_TABLE = "extended_hours_breaking_news"
 EASTERN = ZoneInfo("US/Eastern")
 PASSED_RETENTION = dt.timedelta(days=30)
 DEFAULT_POLL_INTERVAL = 5.0
 SCHEMA_VERSION = 1
+DEFAULT_ALERT_SOUND = "Default beep"
+ALERT_SOUND_OPTIONS = (
+    DEFAULT_ALERT_SOUND,
+    "Information",
+    "Warning",
+    "Critical",
+    "Question",
+    "No sound",
+)
+WINDOWS_SOUND_FLAGS = {
+    DEFAULT_ALERT_SOUND: 0x00000000,
+    "Information": 0x00000040,
+    "Warning": 0x00000030,
+    "Critical": 0x00000010,
+    "Question": 0x00000020,
+}
 
 
 def make_engine(database: str, user: str, password_value: str) -> Engine:
@@ -256,6 +278,12 @@ class PassedAlert:
     data: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PassedNotification:
+    passed: PassedAlert
+    sound: str
+
+
 @dataclass
 class EvaluationResult:
     passed: list[PassedAlert]
@@ -272,6 +300,7 @@ class AlertType(Protocol):
     type_id: str
     display_name: str
     uses_cooldown: bool
+    forces_repeat: bool
 
     def build_editor(self, parent: ttk.Frame) -> AlertSpecificEditor:
         ...
@@ -292,10 +321,17 @@ class AlertType(Protocol):
     def symbols(self, definition: AlertDefinition) -> set[str]:
         ...
 
+    def load_observations(
+        self,
+        repository: AlertRepository,
+        definitions: list[AlertDefinition],
+    ) -> dict[str, Any]:
+        ...
+
     def evaluate(
         self,
         definition: AlertDefinition,
-        observations: dict[str, float],
+        observations: dict[str, Any],
         now: dt.datetime,
     ) -> EvaluationResult:
         ...
@@ -334,6 +370,7 @@ class RelativeVolumeAlertType:
     type_id = "relative_volume"
     display_name = "Relative Volume"
     uses_cooldown = True
+    forces_repeat = False
 
     def build_editor(self, parent: ttk.Frame) -> AlertSpecificEditor:
         return RelativeVolumeEditor(parent)
@@ -377,10 +414,20 @@ class RelativeVolumeAlertType:
         state = definition.data.get("state", {}).get("symbols", {})
         return {str(symbol).upper() for symbol in state}
 
+    def load_observations(
+        self,
+        repository: AlertRepository,
+        definitions: list[AlertDefinition],
+    ) -> dict[str, Any]:
+        symbols: set[str] = set()
+        for definition in definitions:
+            symbols.update(self.symbols(definition))
+        return repository.load_rvol(symbols)
+
     def evaluate(
         self,
         definition: AlertDefinition,
-        observations: dict[str, float],
+        observations: dict[str, Any],
         now: dt.datetime,
     ) -> EvaluationResult:
         data = copy.deepcopy(definition.data)
@@ -397,7 +444,8 @@ class RelativeVolumeAlertType:
         changed = False
 
         for symbol in list(state):
-            observed = observations.get(symbol.upper())
+            raw_observed = observations.get(symbol.upper())
+            observed = float(raw_observed) if raw_observed is not None else None
             if observed is None or observed < threshold:
                 continue
             next_eligible = parse_iso_datetime(state[symbol].get("next_eligible_at"))
@@ -612,6 +660,7 @@ class ReminderAlertType:
     type_id = "reminder"
     display_name = "Reminder"
     uses_cooldown = False
+    forces_repeat = False
 
     def build_editor(self, parent: ttk.Frame) -> AlertSpecificEditor:
         return ReminderEditor(parent)
@@ -655,10 +704,18 @@ class ReminderAlertType:
         _ = definition
         return set()
 
+    def load_observations(
+        self,
+        repository: AlertRepository,
+        definitions: list[AlertDefinition],
+    ) -> dict[str, Any]:
+        _ = (repository, definitions)
+        return {}
+
     def evaluate(
         self,
         definition: AlertDefinition,
-        observations: dict[str, float],
+        observations: dict[str, Any],
         now: dt.datetime,
     ) -> EvaluationResult:
         _ = observations
@@ -699,6 +756,149 @@ class ReminderAlertType:
             return EvaluationResult([passed], None, delete_definition=True)
         data.setdefault("state", {})["next_trigger_at"] = next_trigger.isoformat()
         return EvaluationResult([passed], data)
+
+
+class BreakingNewsEditor:
+    def __init__(self, parent: ttk.Frame) -> None:
+        ttk.Label(
+            parent,
+            text=(
+                "Monitors symbols displayed by Extended-Hours Breaking News and "
+                "passes once per symbol per Eastern date when headlines are present."
+            ),
+            wraplength=500,
+            justify=tk.LEFT,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            parent,
+            text=(
+                "This alert is always repeating. Its expiration controls how long "
+                "it remains active."
+            ),
+            wraplength=500,
+            justify=tk.LEFT,
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        parent.columnconfigure(0, weight=1)
+
+    def values(self) -> dict[str, Any]:
+        return {}
+
+
+class BreakingNewsAlertType:
+    type_id = "extended_hours_news"
+    display_name = "Extended-Hours News"
+    uses_cooldown = False
+    forces_repeat = True
+
+    def build_editor(self, parent: ttk.Frame) -> AlertSpecificEditor:
+        return BreakingNewsEditor(parent)
+
+    def build_definition_data(
+        self,
+        specific_values: dict[str, Any],
+        *,
+        comment: str,
+        repeat: bool,
+        cooldown_mode: str,
+        cooldown_value_seconds: float,
+        expiration: dt.datetime | None,
+        created_at: dt.datetime,
+    ) -> dict[str, Any]:
+        _ = (
+            specific_values,
+            repeat,
+            cooldown_mode,
+            cooldown_value_seconds,
+            created_at,
+        )
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "alert_type": self.type_id,
+            "comment": comment,
+            "config": {
+                "repeat": True,
+                "trigger_frequency": "once_per_symbol_per_eastern_date",
+                "expiration": expiration.isoformat() if expiration else None,
+            },
+            "state": {
+                "observation_date": None,
+                "passed_symbols": [],
+            },
+        }
+
+    def symbols(self, definition: AlertDefinition) -> set[str]:
+        _ = definition
+        return set()
+
+    def load_observations(
+        self,
+        repository: AlertRepository,
+        definitions: list[AlertDefinition],
+    ) -> dict[str, Any]:
+        _ = definitions
+        return repository.load_breaking_news()
+
+    def evaluate(
+        self,
+        definition: AlertDefinition,
+        observations: dict[str, Any],
+        now: dt.datetime,
+    ) -> EvaluationResult:
+        data = copy.deepcopy(definition.data)
+        config = data.get("config", {})
+        expiration = parse_iso_datetime(config.get("expiration"))
+        if expiration is not None and now >= expiration:
+            return EvaluationResult([], None, delete_definition=True)
+
+        observation_date = now.astimezone(EASTERN).date().isoformat()
+        state = data.setdefault("state", {})
+        changed = False
+        if state.get("observation_date") != observation_date:
+            state["observation_date"] = observation_date
+            state["passed_symbols"] = []
+            changed = True
+
+        passed_symbols = {
+            str(symbol).upper()
+            for symbol in state.get("passed_symbols", [])
+        }
+        passed: list[PassedAlert] = []
+        for symbol in sorted(observations):
+            normalized_symbol = str(symbol).strip().upper()
+            if not normalized_symbol or normalized_symbol in passed_symbols:
+                continue
+            observation = observations[symbol]
+            if not isinstance(observation, dict):
+                continue
+            headlines = str(observation.get("headlines", "")).strip()
+            if not headlines:
+                continue
+
+            pass_time = now + dt.timedelta(microseconds=len(passed))
+            passed.append(
+                PassedAlert(
+                    name=definition.name,
+                    passed_at=pass_time,
+                    data={
+                        "schema_version": SCHEMA_VERSION,
+                        "alert_type": self.type_id,
+                        "alert_name": definition.name,
+                        "symbol": normalized_symbol,
+                        "observed_rvol": observation.get("rvol"),
+                        "headlines": headlines,
+                        "observation_date": observation_date,
+                        "observation_time": pass_time.astimezone(EASTERN).isoformat(),
+                        "comment": data.get("comment", ""),
+                        "definition_created_at": definition.created_at.isoformat(),
+                    },
+                )
+            )
+            passed_symbols.add(normalized_symbol)
+            changed = True
+
+        if changed:
+            state["passed_symbols"] = sorted(passed_symbols)
+        return EvaluationResult(passed, data if changed else None)
 
 
 class AlertRegistry:
@@ -813,6 +1013,24 @@ class AlertRepository:
                         result[str(row.symbol).upper()] = float(row.rvol)
         return result
 
+    def load_breaking_news(self) -> dict[str, dict[str, Any]]:
+        query = text(
+            f"SELECT symbol, rvol, headlines FROM `{BREAKING_NEWS_TABLE}` "
+            "WHERE symbol IS NOT NULL AND TRIM(symbol) <> '' "
+            "AND headlines IS NOT NULL AND TRIM(headlines) <> ''"
+        )
+        observations: dict[str, dict[str, Any]] = {}
+        with self.stocks_engine.connect() as connection:
+            for row in connection.execute(query):
+                symbol = str(row.symbol).strip().upper()
+                if not symbol:
+                    continue
+                observations[symbol] = {
+                    "rvol": float(row.rvol) if row.rvol is not None else None,
+                    "headlines": str(row.headlines).strip(),
+                }
+        return observations
+
     def apply_evaluation(
         self,
         definition: AlertDefinition,
@@ -919,21 +1137,35 @@ class AlertScanner:
     def scan_once(self, now: dt.datetime | None = None) -> int:
         now = now or eastern_now()
         definitions = self.repository.load_definitions()
-        targets: set[str] = set()
+        definitions_by_type: dict[str, list[AlertDefinition]] = {}
         for definition in definitions:
-            handler = self.registry.by_id(str(definition.data.get("alert_type", "")))
+            type_id = str(definition.data.get("alert_type", ""))
+            handler = self.registry.by_id(type_id)
             if handler is not None:
-                targets.update(handler.symbols(definition))
-        observations = self.repository.load_rvol(targets)
+                definitions_by_type.setdefault(type_id, []).append(definition)
+
+        observations_by_type: dict[str, dict[str, Any]] = {}
+        for type_id, type_definitions in definitions_by_type.items():
+            handler = self.registry.by_id(type_id)
+            if handler is not None:
+                observations_by_type[type_id] = handler.load_observations(
+                    self.repository,
+                    type_definitions,
+                )
 
         total_passes = 0
         changed = False
         for definition in definitions:
-            handler = self.registry.by_id(str(definition.data.get("alert_type", "")))
+            type_id = str(definition.data.get("alert_type", ""))
+            handler = self.registry.by_id(type_id)
             if handler is None:
                 continue
             evaluation_time = now + dt.timedelta(microseconds=total_passes)
-            result = handler.evaluate(definition, observations, evaluation_time)
+            result = handler.evaluate(
+                definition,
+                observations_by_type.get(type_id, {}),
+                evaluation_time,
+            )
             if (
                 result.passed
                 or result.updated_data is not None
@@ -943,8 +1175,19 @@ class AlertScanner:
                 if applied:
                     total_passes += len(result.passed)
                     changed = True
+                    sound = str(
+                        definition.data.get("config", {}).get(
+                            "sound",
+                            DEFAULT_ALERT_SOUND,
+                        )
+                    )
                     for passed in result.passed:
-                        self.messages.put(("passed", passed))
+                        self.messages.put(
+                            (
+                                "passed",
+                                PassedNotification(passed, sound),
+                            )
+                        )
         if changed:
             self.messages.put(("changed", None))
         return total_passes
@@ -975,6 +1218,7 @@ class CreateAlertDialog:
         self.cooldown_amount_var = tk.StringVar(value="1")
         self.cooldown_unit_var = tk.StringVar(value="Hours")
         self.expiration_var = tk.StringVar(value="Week")
+        self.sound_var = tk.StringVar(value=DEFAULT_ALERT_SOUND)
         self.custom_expiration_var = tk.StringVar(
             value=(dt.date.today() + dt.timedelta(days=7)).isoformat()
         )
@@ -1010,12 +1254,13 @@ class CreateAlertDialog:
         lifecycle = ttk.LabelFrame(outer, text="Lifecycle", padding=10)
         lifecycle.grid(row=5, column=0, sticky="ew", pady=(0, 8))
         lifecycle.columnconfigure(1, weight=1)
-        ttk.Checkbutton(
+        self.repeat_check = ttk.Checkbutton(
             lifecycle,
             text="Repeat",
             variable=self.repeat_var,
             command=self._sync_repeat_controls,
-        ).grid(row=0, column=0, sticky="w")
+        )
+        self.repeat_check.grid(row=0, column=0, sticky="w")
         self.cooldown_label = ttk.Label(lifecycle, text="Cooldown")
         self.cooldown_label.grid(row=1, column=0, sticky="w")
         self.cooldown_box = ttk.Combobox(
@@ -1069,12 +1314,24 @@ class CreateAlertDialog:
             row=4, column=1, sticky="w", padx=(8, 0), pady=(4, 0)
         )
 
-        ttk.Label(outer, text="Comment").grid(row=6, column=0, sticky="w")
+        notification = ttk.LabelFrame(outer, text="Notification", padding=10)
+        notification.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        notification.columnconfigure(1, weight=1)
+        ttk.Label(notification, text="Sound").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(
+            notification,
+            textvariable=self.sound_var,
+            values=ALERT_SOUND_OPTIONS,
+            state="readonly",
+            width=18,
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        ttk.Label(outer, text="Comment").grid(row=7, column=0, sticky="w")
         self.comment_text = tk.Text(outer, height=5, wrap=tk.WORD)
-        self.comment_text.grid(row=7, column=0, sticky="ew", pady=(2, 8))
+        self.comment_text.grid(row=8, column=0, sticky="ew", pady=(2, 8))
 
         buttons = ttk.Frame(outer)
-        buttons.grid(row=8, column=0, sticky="e")
+        buttons.grid(row=9, column=0, sticky="e")
         ttk.Button(buttons, text="Cancel", command=self.window.destroy).pack(
             side=tk.LEFT, padx=(0, 8)
         )
@@ -1089,6 +1346,11 @@ class CreateAlertDialog:
 
     def _sync_repeat_controls(self) -> None:
         handler = self.registry.by_display_name(self.type_var.get())
+        if handler.forces_repeat:
+            self.repeat_var.set(True)
+            self.repeat_check.configure(state=tk.DISABLED)
+        else:
+            self.repeat_check.configure(state=tk.NORMAL)
         if not handler.uses_cooldown:
             self.cooldown_label.grid_remove()
             self.cooldown_box.grid_remove()
@@ -1164,6 +1426,7 @@ class CreateAlertDialog:
                 expiration=expiration,
                 created_at=created_at,
             )
+            data.setdefault("config", {})["sound"] = self.sound_var.get()
             self.on_create(AlertDefinition(name, created_at, data))
         except Exception as exc:
             messagebox.showerror("Cannot Create Alert", str(exc), parent=self.window)
@@ -1497,7 +1760,7 @@ class AlertsApp:
         if self.closing:
             return
         should_refresh = False
-        passed_count = 0
+        notifications: list[PassedNotification] = []
         while True:
             try:
                 kind, payload = self.messages.get_nowait()
@@ -1510,14 +1773,36 @@ class AlertsApp:
             elif kind == "changed":
                 should_refresh = True
             elif kind == "passed":
-                passed_count += 1
+                if isinstance(payload, PassedNotification):
+                    notifications.append(payload)
         if should_refresh:
             self.refresh_all()
-        if passed_count:
-            self.root.bell()
+        if notifications:
+            played_alerts: set[tuple[str, str]] = set()
+            for notification in notifications:
+                alert_key = (
+                    notification.passed.name,
+                    str(notification.passed.data.get("definition_created_at", "")),
+                )
+                if alert_key in played_alerts:
+                    continue
+                played_alerts.add(alert_key)
+                self._play_alert_sound(notification.sound)
             self.root.deiconify()
             self.root.lift()
         self.after_id = self.root.after(250, self._process_messages)
+
+    def _play_alert_sound(self, sound: str) -> None:
+        if sound == "No sound":
+            return
+        sound_flag = WINDOWS_SOUND_FLAGS.get(sound)
+        if winsound is not None and sound_flag is not None:
+            try:
+                winsound.MessageBeep(sound_flag)
+                return
+            except RuntimeError:
+                pass
+        self.root.bell()
 
     def close(self) -> None:
         if self.closing:
@@ -1549,7 +1834,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    registry = AlertRegistry([RelativeVolumeAlertType(), ReminderAlertType()])
+    registry = AlertRegistry(
+        [
+            BreakingNewsAlertType(),
+            RelativeVolumeAlertType(),
+            ReminderAlertType(),
+        ]
+    )
     repository = AlertRepository(
         alerts_engine=make_engine(ALERTS_DB, ALERTS_MYSQL_USER, database_password),
         stocks_engine=make_engine(STOCKS_DB, STOCKS_MYSQL_USER, gptdb),
