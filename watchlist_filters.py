@@ -8,13 +8,13 @@ from market_data.watchlists_locations import *
 import market_data.fundamentals as fu
 import matplotlib.pyplot as plt
 import requests
-from finvizfinance.screener.overview import Overview
 import math
 import plotly.express as px
 import market_data.seeking_alpha as sa
 import logging
 import market_data.support_functions as sf
 import market_data.watchlists_locations as wl
+from market_data.finviz_api import screener_export
 import inspect
 import importlib
 import sys
@@ -650,38 +650,42 @@ def high_short_interest(symbols, short_int=10, length=100, avgv_min=5000000):
         for item in high_short_interest_results:
             f.write(item + '\n')
 
+def _finviz_stock_symbols(*, filters=None, signal=None):
+    results = screener_export(filters=filters, signal=signal)
+    return results.loc[
+        results["Industry"] != "Exchange Traded Fund",
+        "Ticker",
+    ].to_list()
+
+
 def finviz_horizontal_support_resistance():
-    screener = Overview()
-    screener.set_filter(signal='Horizontal S/R')
-    results = screener.screener_view(order='Market Cap.')
-    finviz_horizontal_support_resistance_results = results.Ticker.loc[results.Industry != 'Exchange Traded Fund'].to_list()
+    finviz_horizontal_support_resistance_results = _finviz_stock_symbols(
+        signal="ta_p_horizontal",
+    )
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\finviz_horizontal_s_r.txt", "w") as f:
         for item in finviz_horizontal_support_resistance_results:
             f.write(item + '\n')
 
 def finviz_tl_support():
-    screener = Overview()
-    screener.set_filter(signal='TL Support')
-    results = screener.screener_view(order='Market Cap.')
-    finviz_tl_support_results = results.Ticker.loc[results.Industry != 'Exchange Traded Fund'].to_list()
+    finviz_tl_support_results = _finviz_stock_symbols(
+        signal="ta_p_tlsupport",
+    )
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\finviz_tl_support.txt", "w") as f:
         for item in finviz_tl_support_results:
             f.write(item + '\n')
 
 def finviz_tl_resistance():
-    screener = Overview()
-    screener.set_filter(signal='TL Resistance')
-    results = screener.screener_view(order='Market Cap.')
-    finviz_tl_resistance_results = results.Ticker.loc[results.Industry != 'Exchange Traded Fund'].to_list()
+    finviz_tl_resistance_results = _finviz_stock_symbols(
+        signal="ta_p_tlresistance",
+    )
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\finviz_tl_resistance.txt", "w") as f:
         for item in finviz_tl_resistance_results:
             f.write(item + '\n')
 
 def finviz_high_short_interest():
-    screener = Overview()
-    screener.set_filter(filters_dict={'Float Short': 'Over 20%'})
-    results = screener.screener_view(order='Market Cap.')
-    finviz_high_short_interest_results = results.Ticker.loc[results.Industry != 'Exchange Traded Fund'].to_list()
+    finviz_high_short_interest_results = _finviz_stock_symbols(
+        filters="sh_short_o20",
+    )
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\finviz_high_short_interest.txt", "w") as f:
         for item in finviz_high_short_interest_results:
             f.write(item + '\n')
@@ -1318,11 +1322,13 @@ def downtrend_retracement(symbols):
         for sym in downtrend_retracement_results:
             f.write(sym + '\n')
 
-def finviz_high_p_e(value=40):
-    overview = Overview()
-    overview.set_filter(filters_dict={'P/E': f'Over {value}'})
-    results = overview.screener_view().Ticker.to_list()
-    finviz_high_p_e_results = [sym for sym in results if sym in symbols]
+def finviz_high_p_e(value=40, symbols=None):
+    results = screener_export(filters=f"fa_pe_o{value}")["Ticker"].to_list()
+    finviz_high_p_e_results = (
+        results
+        if symbols is None
+        else [sym for sym in results if sym in symbols]
+    )
     with open(r"C:\Users\jdejo\OneDrive\Documents\Python_Folders\Systematic Watchlists\finviz_high_p_e.txt", "w") as f:
         for sym in finviz_high_p_e_results:
             f.write(sym + '\n')

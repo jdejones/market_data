@@ -40,7 +40,7 @@ source .venv/bin/activate
 pip install \
   pandas numpy matplotlib tqdm requests ratelimit \
   scipy scikit-posthocs plotly sec-api beautifulsoup4 \
-  polygon-api-client SQLAlchemy mysql-connector-python finvizfinance \
+  polygon-api-client SQLAlchemy mysql-connector-python \
   backtesting
 ```
 
@@ -60,6 +60,7 @@ Create a `market_data/api_keys.py` file to supply API keys used by the integrati
 polygon_api_key = "YOUR_POLYGON_API_KEY"
 sec_api_key = "YOUR_SEC_API_KEY"  # from sec-api.io
 seeking_alpha_api_key = "YOUR_RAPIDAPI_KEY_FOR_SEEKING_ALPHA"
+finviz_api_key = "YOUR_FINVIZ_ELITE_EXPORT_KEY"
 ```
 - Keep keys out of version control.
 - Some modules expect local data caches and file paths. Update those paths for your environment (see Data & caching, Troubleshooting & caveats).
@@ -75,8 +76,8 @@ seeking_alpha_api_key = "YOUR_RAPIDAPI_KEY_FOR_SEEKING_ALPHA"
 - **Seeking Alpha via RapidAPI**: meta-data, summary, ratings, earnings, transcripts, analyst targets
   - Hub: [RapidAPI – Seeking Alpha](https://rapidapi.com/)
   - Access: `X-RapidAPI-Key` header with `seeking_alpha_api_key`
-- **Finviz** via `finvizfinance` for screening helpers
-  - Docs: [`finvizfinance` project page](https://pypi.org/project/finvizfinance/)
+- **Finviz Elite** via authenticated CSV screener exports
+  - Access: `finviz_api_key` in `api_keys.py`
 
 
 ## Usage examples
@@ -249,7 +250,7 @@ print(stats[["Return [%]", "Sharpe Ratio", "# Trades"]])
 - Additional modules
   - `anchored_vwap.py`: Utilities for anchored VWAP calculations.
   - `backtesting_module.py`: Helpers for running strategy backtests using the `backtesting` library.
-  - `watchlist_filters.py`: Plotting and screening utilities (uses `finvizfinance`, `plotly`, and `matplotlib`).
+  - `watchlist_filters.py`: Plotting and screening utilities (uses the Finviz Elite export API, `plotly`, and `matplotlib`).
   - `regimes.py`, `episodic_pivots.py`, `intraday_study.py`, etc.: Exploratory studies and specialized analytics.
 
 

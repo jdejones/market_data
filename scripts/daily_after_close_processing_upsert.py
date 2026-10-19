@@ -533,13 +533,14 @@ if __name__ == "__main__":
     import market_data.regimes as rg
     import market_data.support_functions as sf
     import market_data.fundamentals as fu
+    from market_data.finviz_api import all_screener_data
     import market_data.stats_objects as so
     import market_data.anchored_vwap as av
     from market_data.episodic_pivots import Episodic_Pivots
     from market_data import operator, np, ProcessPoolExecutor, as_completed, pickle, threading, argparse
     from market_data.stats_objects import IntradaySignalProcessing as isp
-    from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time, StringIO, requests
-    from market_data.api_keys import database_password, seeking_alpha_api_key, seeking_alpha_access_token, polygon_api_key, finviz_api_key
+    from market_data import create_engine, text, DateTime, pymysql, redis, json, gzip, time, requests
+    from market_data.api_keys import database_password, seeking_alpha_api_key, seeking_alpha_access_token, polygon_api_key
     from market_data.interest_list import InterestList as il
 
     parser = argparse.ArgumentParser(description="Run the daily after close study pipeline.")
@@ -750,15 +751,8 @@ if __name__ == "__main__":
         except Exception as e:
             print(sym, e, sep=': ')
 
-    # from finvizfinance.screener.custom import Custom
-    from finvizfinance.constants import CUSTOM_SCREENER_COLUMNS
-    cols = list(CUSTOM_SCREENER_COLUMNS.keys())
-    url = f"https://elite.finviz.com/export/screener?v=152&c={','.join([str(col) for col in cols])}&auth={finviz_api_key}"
-    response = requests.get(url)
-    results_finvizsearch = pd.read_csv(StringIO(response.text))
+    results_finvizsearch = all_screener_data()
     results_finvizsearch['DV'] = pd.to_numeric(results_finvizsearch['Prev Close'], errors='coerce').astype(float) * results_finvizsearch.Volume
-    # results_finvizsearch['Market Cap.'] = pd.to_numeric(results_finvizsearch['Market Cap.'].str.replace('.', '').str.replace('B', '0000000').str.replace('M', '0000'), errors='coerce').astype(float)
-    # results_finvizsearch['Market Cap.'] = results_finvizsearch['Market Cap.'].replace(0, np.nan)
     results_finvizsearch['Income'] = results_finvizsearch['Income'].astype(float) * (10**6)
     results_finvizsearch['Market Cap'] = results_finvizsearch['Market Cap'].astype(float) * (10**6)
     results_finvizsearch['DV_Cap'] = results_finvizsearch['DV'] / results_finvizsearch['Market Cap']
