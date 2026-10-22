@@ -190,6 +190,8 @@ def relative_macd(df, base):
 def add_avwap_by_offset(df, offset: int|str):
     # if len(df) > offset:
     if isinstance(offset, int):
+        if len(df) < offset:
+            return df        
         date_idx = df.index[-offset]
     elif isinstance(offset, str):
         date_idx = offset
@@ -205,6 +207,8 @@ def atrs_from(df, base: str|int):
     if isinstance(base, str):
         df[f'ATRs_from_{base}'] = (df['Close'] - df[base]) / df['ATR_14']
     elif isinstance(base, int):#I added this to try and handle the AVWAPs in the second pipeline.append().
+        if len(df) < base:
+            return df
         date_idx = df.index[-base]
         df[f'ATRs_from_AVWAP_{date_idx}'] = (df['Close'] - df[f'VWAP {date_idx}']) / df['ATR_14']
     
