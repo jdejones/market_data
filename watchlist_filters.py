@@ -243,18 +243,14 @@ class Technical_Score_Calculator:
 #Run the trend_fanned script
 def fanned_up(symbols, save=True):
     #from Fundamental_Analysis import Fundamentals_Analyzer
-    def symbol_removal():
-        try:
-            for sym in symbols:
-                if len(symbols[sym].df) < 4:
-                    del symbols[sym].df
-                else:
-                    continue
-        except:
-            symbol_removal()
-    symbol_removal()
+    too_short = {
+        sym for sym, sd in symbols.items()
+        if len(sd.df) < 200
+    }
     fanned=[]
     for a,b in symbols.items():
+        if a in too_short:
+            continue
         b = b.df
         if (b.iloc[-1]['10DMA'] > b.iloc[-1]['20DMA'] > b.iloc[-1]['50DMA'] > b.iloc[-1]['200DMA']):
             fanned.append(a)
@@ -354,18 +350,14 @@ def fanned_up(symbols, save=True):
                 f.writelines(item + "\n")
 
 def mid_to_long_term_fanned_up(symbols):
-    def symbol_removal():
-        try:
-            for sym in symbols:
-                if len(symbols[sym].df) < 4:
-                    del symbols[sym].df
-                else:
-                    continue
-        except:
-            symbol_removal()
-    symbol_removal()
+    too_short = {
+        sym for sym, sd in symbols.items()
+        if len(sd.df) < 200
+    }
     fanned=[]
     for a,b in symbols.items():
+        if a in too_short:
+            continue
         b = b.df
         if (b.iloc[-1]['20DMA'] > b.iloc[-1]['50DMA'] > b.iloc[-1]['200DMA']):
             fanned.append(a)
